@@ -25,11 +25,13 @@ import {
   CheckCircle2,
   Filter,
   Bike,
+  FileText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -59,6 +61,8 @@ import {
   DELIVERY_SLOTS,
 } from "@/lib/mock-data";
 import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
+import { toast } from "sonner";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { BookingFlow } from "./booking-flow";
 import { OrderTracking } from "./order-tracking";
 
@@ -117,7 +121,7 @@ export function CustomerApp() {
     >
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
-          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} />
+          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} />
         )}
         {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} />}
         {view === "orders" && (
@@ -180,13 +184,18 @@ function pageSubtitle(view: string) {
 function CustomerDashboard({
   onTrack,
   onBook,
+  onNavigate,
 }: {
   onTrack: (id: string) => void;
   onBook: () => void;
+  onNavigate: (view: string) => void;
 }) {
   const { userName, walletBalance, loyaltyPoints } = useAppStore();
   const firstName = userName.split(" ")[0];
   const activeOrders = ORDERS.filter((o) => !["completed", "cancelled"].includes(o.status));
+  const [addresses, setAddresses] = useState(ADDRESSES);
+  const [showAddAddr, setShowAddAddr] = useState(false);
+  const [newAddr, setNewAddr] = useState({ label: "", line: "", area: "", city: "", pincode: "" });
 
   return (
     <div className="space-y-6">
@@ -232,8 +241,8 @@ function CustomerDashboard({
         {[
           { label: "Book Pickup", icon: Plus, color: "from-teal-500 to-cyan-600", onClick: onBook },
           { label: "Track Order", icon: Navigation, color: "from-emerald-500 to-green-600", onClick: () => onTrack("o1") },
-          { label: "Find Vendors", icon: MapPin, color: "from-violet-500 to-purple-600", onClick: () => {} },
-          { label: "Offers", icon: Ticket, color: "from-amber-500 to-orange-600", onClick: () => {} },
+          { label: "Find Vendors", icon: MapPin, color: "from-violet-500 to-purple-600", onClick: () => onNavigate("discover") },
+          { label: "Offers", icon: Ticket, color: "from-amber-500 to-orange-600", onClick: () => onNavigate("coupons") },
         ].map((a) => (
           <motion.button
             key={a.label}
@@ -259,7 +268,7 @@ function CustomerDashboard({
             <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             Active Orders
           </h3>
-          <Button variant="ghost" size="sm" className="text-xs">View all</Button>
+          <Button variant="ghost" size="sm" className="text-xs" onClick={() => onNavigate("orders")}>View all</Button>
         </div>
         <div className="grid md:grid-cols-2 gap-4">
           {activeOrders.slice(0, 2).map((order) => (
@@ -340,13 +349,13 @@ function CustomerDashboard({
       <Card className="p-5 shadow-soft">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold">Saved Addresses</h3>
-          <Button variant="ghost" size="sm" className="text-xs gap-1">
+          <Button variant="ghost" size="sm" className="text-xs gap-1" onClick={() => setShowAddAddr(true)}>
             <Plus className="h-3.5 w-3.5" />
             Add new
           </Button>
         </div>
         <div className="grid md:grid-cols-3 gap-3">
-          {ADDRESSES.map((addr) => (
+          {addresses.map((addr) => (
             <div key={addr.id} className="rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
               <div className="flex items-center gap-2 mb-1">
                 <MapPin className="h-3.5 w-3.5 text-primary" />
@@ -359,6 +368,56 @@ function CustomerDashboard({
           ))}
         </div>
       </Card>
+
+      {/* Add Address Dialog */}
+      <Dialog open={showAddAddr} onOpenChange={setShowAddAddr}>
+        <DialogContent className="max-w-md">
+          <div>
+            <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add New Address</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Save a new pickup/delivery address</p>
+          </div>
+          <div className="space-y-3 pt-2">
+            <div>
+              <Label className="text-xs">Label (e.g. Home, Work)</Label>
+              <Input value={newAddr.label} onChange={(e) => setNewAddr({ ...newAddr, label: e.target.value })} placeholder="Home" className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Address Line</Label>
+              <Input value={newAddr.line} onChange={(e) => setNewAddr({ ...newAddr, line: e.target.value })} placeholder="Flat / House no, Street" className="mt-1" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Area</Label>
+                <Input value={newAddr.area} onChange={(e) => setNewAddr({ ...newAddr, area: e.target.value })} placeholder="Indiranagar" className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-xs">City</Label>
+                <Input value={newAddr.city} onChange={(e) => setNewAddr({ ...newAddr, city: e.target.value })} placeholder="Bengaluru" className="mt-1" />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Pincode</Label>
+              <Input value={newAddr.pincode} onChange={(e) => setNewAddr({ ...newAddr, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} placeholder="560038" className="mt-1" />
+            </div>
+          </div>
+          <div className="flex gap-2 pt-4">
+            <Button variant="outline" className="flex-1" onClick={() => setShowAddAddr(false)}>Cancel</Button>
+            <Button
+              className="flex-1"
+              disabled={!newAddr.label || !newAddr.line || !newAddr.area || !newAddr.city || newAddr.pincode.length < 6}
+              onClick={() => {
+                const id = `a${Date.now()}`;
+                setAddresses([...addresses, { ...newAddr, id, isDefault: false, lat: 12.97, lng: 77.64 }]);
+                setNewAddr({ label: "", line: "", area: "", city: "", pincode: "" });
+                setShowAddAddr(false);
+                toast.success("Address added", { description: "New address saved successfully." });
+              }}
+            >
+              Save Address
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -370,6 +429,9 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [sortBy, setSortBy] = useState("distance");
+  const [selectedVendor, setSelectedVendor] = useState<typeof VENDORS[0] | null>(null);
+  const [showLocationChange, setShowLocationChange] = useState(false);
+  const [location, setLocation] = useState({ area: "Indiranagar", city: "Bengaluru", pincode: "560038" });
 
   let vendors = VENDORS.filter((v) =>
     v.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -379,24 +441,30 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
   if (filter === "open") vendors = vendors.filter((v) => v.isOpen);
   if (filter === "express") vendors = vendors.filter((v) => v.estimatedDeliveryHrs <= 12);
   if (filter === "top") vendors = vendors.filter((v) => v.rating >= 4.7);
+  if (filter === "premium") vendors = vendors.filter((v) => v.priceLevel >= 3);
 
-  if (sortBy === "distance") vendors.sort((a, b) => a.distanceKm - b.distanceKm);
-  if (sortBy === "rating") vendors.sort((a, b) => b.rating - a.rating);
-  if (sortBy === "delivery") vendors.sort((a, b) => a.estimatedDeliveryHrs - b.estimatedDeliveryHrs);
+  const sortedVendors = [...vendors];
+  if (sortBy === "distance") sortedVendors.sort((a, b) => a.distanceKm - b.distanceKm);
+  if (sortBy === "rating") sortedVendors.sort((a, b) => b.rating - a.rating);
+  if (sortBy === "delivery") sortedVendors.sort((a, b) => a.estimatedDeliveryHrs - b.estimatedDeliveryHrs);
+  if (sortBy === "price") sortedVendors.sort((a, b) => a.priceLevel - b.priceLevel);
 
   return (
     <div className="space-y-6">
       {/* Location + Search */}
       <Card className="p-5 shadow-soft">
         <div className="flex flex-col md:flex-row gap-3">
-          <div className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 md:min-w-[200px]">
+          <button
+            onClick={() => setShowLocationChange(true)}
+            className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 md:min-w-[200px] hover:bg-muted transition-colors text-left"
+          >
             <Navigation className="h-4 w-4 text-primary" />
             <div className="text-sm">
-              <p className="font-medium leading-tight">Indiranagar</p>
-              <p className="text-[10px] text-muted-foreground">Bengaluru, 560038</p>
+              <p className="font-medium leading-tight">{location.area}</p>
+              <p className="text-[10px] text-muted-foreground">{location.city}, {location.pincode}</p>
             </div>
-            <button className="ml-auto text-[10px] text-primary hover:underline">Change</button>
-          </div>
+            <span className="ml-auto text-[10px] text-primary hover:underline">Change</span>
+          </button>
           <div className="flex-1 flex items-center rounded-lg border border-input bg-background px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
             <input
@@ -406,10 +474,6 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
               className="flex-1 bg-transparent px-2 py-2 outline-none text-sm"
             />
           </div>
-          <Button variant="outline" className="gap-2">
-            <Filter className="h-4 w-4" />
-            Filters
-          </Button>
         </div>
 
         {/* Quick filters */}
@@ -419,6 +483,7 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
             { id: "open", label: "Open now" },
             { id: "express", label: "Express delivery" },
             { id: "top", label: "Top rated" },
+            { id: "premium", label: "Premium" },
           ].map((f) => (
             <button
               key={f.id}
@@ -439,7 +504,15 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
       {/* Sort + count */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          <strong className="text-foreground">{vendors.length}</strong> vendors found near you
+          <strong className="text-foreground">{sortedVendors.length}</strong> vendors found near you
+          {(search || filter !== "all") && (
+            <button
+              onClick={() => { setSearch(""); setFilter("all"); }}
+              className="ml-2 text-primary hover:underline"
+            >
+              Clear filters
+            </button>
+          )}
         </p>
         <Select value={sortBy} onValueChange={setSortBy}>
           <SelectTrigger className="w-[180px] h-9 text-sm">
@@ -449,40 +522,155 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
             <SelectItem value="distance">Sort: Distance</SelectItem>
             <SelectItem value="rating">Sort: Rating</SelectItem>
             <SelectItem value="delivery">Sort: Delivery time</SelectItem>
+            <SelectItem value="price">Sort: Price</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
       {/* Vendor grid */}
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {vendors.map((v) => (
-          <VendorCard key={v.id} vendor={v} onBook={onBook} />
-        ))}
-      </div>
-
-      {/* Services catalog */}
-      <div>
-        <h3 className="text-lg font-semibold mb-3">Browse by Service</h3>
-        <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          {SERVICES.map((s) => (
-            <motion.div key={s.key} whileHover={{ y: -2 }}>
-              <Card className="p-4 shadow-soft hover:shadow-lift transition-shadow cursor-pointer" onClick={onBook}>
-                <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", s.gradient)}>
-                  <ServiceIcon serviceKey={s.key} className="h-5 w-5" />
-                </div>
-                <p className="text-sm font-semibold">{s.name}</p>
-                <p className="text-[11px] text-muted-foreground line-clamp-2 mt-0.5">{s.description}</p>
-                <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-border/60">
-                  <span className="text-xs font-semibold text-primary">
-                    ₹{s.basePrice}{s.pricingType === "per_kg" ? "/kg" : "/pc"}
-                  </span>
-                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-                </div>
-              </Card>
-            </motion.div>
+      {sortedVendors.length === 0 ? (
+        <Card className="p-8 text-center text-muted-foreground shadow-soft">
+          No vendors match your filters. Try clearing them.
+        </Card>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {sortedVendors.map((v) => (
+            <VendorCard
+              key={v.id}
+              vendor={v}
+              onBook={onBook}
+              onView={() => setSelectedVendor(v)}
+            />
           ))}
         </div>
-      </div>
+      )}
+
+      {/* Vendor Detail Dialog — shows services and prices */}
+      <Dialog open={!!selectedVendor} onOpenChange={(o) => !o && setSelectedVendor(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          {selectedVendor && (
+            <div className="space-y-4">
+              {/* Vendor header */}
+              <div className="flex items-start gap-4">
+                <div className={cn("flex h-14 w-14 items-center justify-center rounded-xl bg-primary-surface text-primary-foreground font-semibold text-lg", selectedVendor.logoColor)}>
+                  {selectedVendor.logoInitials}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-semibold" style={{ fontFamily: "var(--font-display)" }}>{selectedVendor.name}</h2>
+                    {selectedVendor.verified && (
+                      <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30">
+                        ✓ Verified
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-0.5">{selectedVendor.area}, {selectedVendor.city} · {selectedVendor.distanceKm} km away</p>
+                  <div className="flex items-center gap-3 mt-2 text-xs">
+                    <span className="flex items-center gap-1 font-semibold">
+                      <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                      {selectedVendor.rating} ({selectedVendor.reviewCount} reviews)
+                    </span>
+                    <span className="text-muted-foreground">·</span>
+                    <span className="text-muted-foreground">{selectedVendor.estimatedDeliveryHrs}h delivery</span>
+                    <span className="text-muted-foreground">·</span>
+                    <span className="text-muted-foreground">{"₹".repeat(selectedVendor.priceLevel)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tags */}
+              <div className="flex flex-wrap gap-1.5">
+                {selectedVendor.tags.map((tag) => (
+                  <Badge key={tag} variant="secondary" className="text-[10px]">{tag}</Badge>
+                ))}
+              </div>
+
+              {/* Services with prices */}
+              <div>
+                <h3 className="text-sm font-semibold mb-2">Services & Pricing</h3>
+                <div className="space-y-1.5">
+                  {SERVICES.filter((s) => selectedVendor.servicesOffered.includes(s.key)).map((s) => (
+                    <div key={s.key} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
+                      <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg bg-tonal-accent text-primary")}>
+                        <ServiceIcon serviceKey={s.key} className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium">{s.name}</p>
+                        <p className="text-[11px] text-muted-foreground line-clamp-1">{s.description}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold">₹{s.basePrice}<span className="text-[10px] text-muted-foreground">/{s.pricingType === "per_kg" ? "kg" : "piece"}</span></p>
+                        <p className="text-[10px] text-amber-600">Express: ₹{Math.round(s.basePrice * s.expressMultiplier)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div className="grid grid-cols-3 gap-2 pt-2">
+                <div className="rounded-lg bg-muted/40 p-3 text-center">
+                  <p className="text-[10px] text-muted-foreground">Capacity</p>
+                  <p className="text-sm font-semibold">{selectedVendor.capacityUsedPct}% used</p>
+                </div>
+                <div className="rounded-lg bg-muted/40 p-3 text-center">
+                  <p className="text-[10px] text-muted-foreground">Repeat customers</p>
+                  <p className="text-sm font-semibold">{selectedVendor.repeatCustomerRate}%</p>
+                </div>
+                <div className="rounded-lg bg-muted/40 p-3 text-center">
+                  <p className="text-[10px] text-muted-foreground">Total orders</p>
+                  <p className="text-sm font-semibold">{selectedVendor.totalOrders.toLocaleString()}</p>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => setSelectedVendor(null)}>Close</Button>
+                <Button
+                  className="flex-1 bg-primary hover:bg-primary/90"
+                  disabled={!selectedVendor.isOpen}
+                  onClick={() => { setSelectedVendor(null); onBook(); }}
+                >
+                  {selectedVendor.isOpen ? "Book Pickup" : "Vendor Closed"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Change Location Dialog */}
+      <Dialog open={showLocationChange} onOpenChange={setShowLocationChange}>
+        <DialogContent className="max-w-md">
+          <div>
+            <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Change Location</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Set your area to find nearby vendors</p>
+          </div>
+          <div className="space-y-3 pt-2">
+            <div>
+              <Label className="text-xs">Area / Locality</Label>
+              <Input value={location.area} onChange={(e) => setLocation({ ...location, area: e.target.value })} className="mt-1" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">City</Label>
+                <Input value={location.city} onChange={(e) => setLocation({ ...location, city: e.target.value })} className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-xs">Pincode</Label>
+                <Input value={location.pincode} onChange={(e) => setLocation({ ...location, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} className="mt-1" />
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground">Popular areas: Indiranagar, Koramangala, HSR Layout, Whitefield, Jayanagar</p>
+          </div>
+          <div className="flex gap-2 pt-4">
+            <Button variant="outline" className="flex-1" onClick={() => setShowLocationChange(false)}>Cancel</Button>
+            <Button className="flex-1" onClick={() => { setShowLocationChange(false); toast.success("Location updated", { description: `Showing vendors near ${location.area}` }); }}>
+              Update Location
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -531,6 +719,11 @@ function CustomerOrders({
 // Customer Payments
 // ============================================================================
 function CustomerPayments({ walletBalance }: { walletBalance: number }) {
+  const [activeTab, setActiveTab] = useState("overview");
+  const [showTopUp, setShowTopUp] = useState(false);
+  const [topUpAmount, setTopUpAmount] = useState("");
+  const [balance, setBalance] = useState(walletBalance);
+
   const transactions = [
     { id: "t1", desc: "Order LH-2847 payment", amount: -525.2, method: "UPI", date: "Today, 12:30 PM", status: "success" },
     { id: "t2", desc: "Wallet top-up", amount: 1000, method: "UPI", date: "Yesterday", status: "success" },
@@ -538,6 +731,8 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
     { id: "t4", desc: "Refund — LH-2812", amount: 220, method: "Wallet", date: "3 days ago", status: "success" },
     { id: "t5", desc: "Order LH-2821 payment", amount: -795.4, method: "UPI", date: "5 days ago", status: "success" },
     { id: "t6", desc: "Order LH-2810 payment", amount: -1197.8, method: "Credit Card", date: "1 week ago", status: "success" },
+    { id: "t7", desc: "Wallet top-up", amount: 500, method: "UPI", date: "1 week ago", status: "success" },
+    { id: "t8", desc: "Subscription — Premium", amount: -1499, method: "UPI", date: "2 weeks ago", status: "success" },
   ];
 
   const paymentMethods = [
@@ -546,90 +741,211 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
     { id: "pm3", type: "Mastercard", label: "•••• 5555", icon: "💳", isDefault: false },
   ];
 
+  const invoices = [
+    { id: "inv1", code: "LH-2847", vendor: "FreshFold Laundry Co.", date: "Today", amount: 525.2, gst: "29AABCL1234M1Z5" },
+    { id: "inv2", code: "LH-2848", vendor: "Pristine Wash Hub", date: "Yesterday", amount: 1069.2, gst: "29AABCP5678N1Z2" },
+    { id: "inv3", code: "LH-2821", vendor: "FreshFold Laundry Co.", date: "5 days ago", amount: 795.4, gst: "29AABCL1234M1Z5" },
+    { id: "inv4", code: "LH-2810", vendor: "Royal Garment Care", date: "1 week ago", amount: 1197.8, gst: "29AABCR9012K1Z9" },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="grid md:grid-cols-3 gap-4">
-        <StatCard label="Wallet Balance" value={formatINR(walletBalance)} icon={Wallet} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="Wallet Balance" value={formatINR(balance)} icon={Wallet} accent="from-teal-500 to-cyan-600" />
         <StatCard label="Total Spent (6mo)" value={formatINR(28450)} change={8.2} trend="up" icon={TrendingUp} accent="from-emerald-500 to-green-600" />
         <StatCard label="Money Saved" value={formatINR(3240)} change={15.8} trend="up" icon={Ticket} accent="from-amber-500 to-orange-600" />
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-4">
-        {/* Wallet card */}
-        <Card className="lg:col-span-1 p-5 shadow-soft bg-primary-surface text-primary-foreground border-0">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-sm text-white/80">Laundry Home Wallet</p>
-            <Wallet className="h-5 w-5 text-white/80" />
-          </div>
-          <p className="text-3xl font-bold tracking-tight">{formatINR(walletBalance)}</p>
-          <p className="text-xs text-white/70 mt-1">Available balance</p>
-          <div className="flex gap-2 mt-5">
-            <Button size="sm" className="flex-1 bg-white/20 hover:bg-white/30 text-white border-0">
-              Add Money
-            </Button>
-            <Button size="sm" variant="outline" className="flex-1 bg-transparent border-white/30 text-white hover:bg-white/10">
-              History
-            </Button>
-          </div>
-        </Card>
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="flex-wrap h-auto">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="transactions">Transactions <Badge variant="secondary" className="ml-1.5 text-[10px]">{transactions.length}</Badge></TabsTrigger>
+          <TabsTrigger value="methods">Payment Methods</TabsTrigger>
+          <TabsTrigger value="invoices">GST Invoices <Badge variant="secondary" className="ml-1.5 text-[10px]">{invoices.length}</Badge></TabsTrigger>
+        </TabsList>
 
-        {/* Payment methods */}
-        <Card className="lg:col-span-2 p-5 shadow-soft">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold">Saved Payment Methods</h3>
-            <Button variant="ghost" size="sm" className="text-xs gap-1">
-              <Plus className="h-3.5 w-3.5" />
-              Add new
-            </Button>
-          </div>
-          <div className="space-y-2">
-            {paymentMethods.map((pm) => (
-              <div key={pm.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">
-                  {pm.icon}
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold">{pm.type}</p>
-                  <p className="text-xs text-muted-foreground">{pm.label}</p>
-                </div>
-                {pm.isDefault && <Badge variant="secondary" className="text-[10px]">Default</Badge>}
+        {/* Overview tab */}
+        <TabsContent value="overview" className="mt-4">
+          <div className="grid lg:grid-cols-3 gap-4">
+            {/* Wallet card */}
+            <Card className="lg:col-span-1 p-5 shadow-soft bg-primary-surface text-primary-foreground border-0">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-sm text-white/80">Laundry Home Wallet</p>
+                <Wallet className="h-5 w-5 text-white/80" />
               </div>
-            ))}
-          </div>
-        </Card>
-      </div>
+              <p className="text-3xl font-bold tracking-tight">{formatINR(balance)}</p>
+              <p className="text-xs text-white/70 mt-1">Available balance</p>
+              <div className="flex gap-2 mt-5">
+                <Button size="sm" className="flex-1 bg-white/20 hover:bg-white/30 text-white border-0" onClick={() => setShowTopUp(true)}>
+                  Add Money
+                </Button>
+                <Button size="sm" variant="outline" className="flex-1 bg-transparent border-white/30 text-white hover:bg-white/10" onClick={() => setActiveTab("transactions")}>
+                  History
+                </Button>
+              </div>
+            </Card>
 
-      {/* Transactions */}
-      <Card className="p-5 shadow-soft">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold">Transaction History</h3>
-          <Button variant="ghost" size="sm" className="text-xs">Download statement</Button>
-        </div>
-        <div className="space-y-1">
-          {transactions.map((t) => (
-            <div key={t.id} className="flex items-center gap-3 rounded-lg p-2.5 hover:bg-muted/30 transition-colors">
-              <div className={cn(
-                "flex h-9 w-9 items-center justify-center rounded-lg",
-                t.amount > 0 ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30" : "bg-rose-50 text-rose-600 dark:bg-rose-950/30"
-              )}>
-                {t.amount > 0 ? <Plus className="h-4 w-4" /> : <ArrowRight className="h-4 w-4" />}
+            {/* Payment methods preview */}
+            <Card className="lg:col-span-2 p-5 shadow-soft">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-semibold">Saved Payment Methods</h3>
+                <Button variant="ghost" size="sm" className="text-xs" onClick={() => setActiveTab("methods")}>View all</Button>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{t.desc}</p>
-                <p className="text-[11px] text-muted-foreground">{t.method} · {t.date}</p>
+              <div className="space-y-2">
+                {paymentMethods.map((pm) => (
+                  <div key={pm.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">
+                      {pm.icon}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold">{pm.type}</p>
+                      <p className="text-xs text-muted-foreground">{pm.label}</p>
+                    </div>
+                    {pm.isDefault && <Badge variant="secondary" className="text-[10px]">Default</Badge>}
+                  </div>
+                ))}
               </div>
-              <div className="text-right">
-                <p className={cn("text-sm font-semibold", t.amount > 0 ? "text-emerald-600" : "text-foreground")}>
-                  {t.amount > 0 ? "+" : ""}{formatINRDecimal(t.amount)}
-                </p>
-                <Badge variant="outline" className="text-[9px] py-0 h-4 mt-0.5 border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30">
-                  {t.status}
-                </Badge>
-              </div>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* Transactions tab */}
+        <TabsContent value="transactions" className="mt-4">
+          <Card className="p-5 shadow-soft">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">Transaction History</h3>
+              <Button variant="ghost" size="sm" className="text-xs" onClick={() => toast.success("Statement downloaded", { description: "Your transaction statement has been exported." })}>Download statement</Button>
             </div>
-          ))}
-        </div>
-      </Card>
+            <div className="space-y-1">
+              {transactions.map((t) => (
+                <div key={t.id} className="flex items-center gap-3 rounded-lg p-2.5 hover:bg-muted/30 transition-colors">
+                  <div className={cn(
+                    "flex h-9 w-9 items-center justify-center rounded-lg",
+                    t.amount > 0 ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30" : "bg-rose-50 text-rose-600 dark:bg-rose-950/30"
+                  )}>
+                    {t.amount > 0 ? <Plus className="h-4 w-4" /> : <ArrowRight className="h-4 w-4" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{t.desc}</p>
+                    <p className="text-[11px] text-muted-foreground">{t.method} · {t.date}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className={cn("text-sm font-semibold", t.amount > 0 ? "text-emerald-600" : "text-foreground")}>
+                      {t.amount > 0 ? "+" : ""}{formatINRDecimal(t.amount)}
+                    </p>
+                    <Badge variant="outline" className="text-[9px] py-0 h-4 mt-0.5 border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30">
+                      {t.status}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* Payment Methods tab */}
+        <TabsContent value="methods" className="mt-4">
+          <Card className="p-5 shadow-soft">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">Saved Payment Methods</h3>
+              <Button variant="ghost" size="sm" className="text-xs gap-1" onClick={() => toast.success("Add payment method", { description: "Payment method form opened." })}>
+                <Plus className="h-3.5 w-3.5" />
+                Add new
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {paymentMethods.map((pm) => (
+                <div key={pm.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-4 hover:bg-muted/30 transition-colors">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-muted text-2xl">
+                    {pm.icon}
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold">{pm.type}</p>
+                      {pm.isDefault && <Badge variant="secondary" className="text-[10px]">Default</Badge>}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{pm.label}</p>
+                  </div>
+                  <div className="flex gap-1">
+                    {!pm.isDefault && (
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => toast.success(`${pm.type} set as default`)}>Set default</Button>
+                    )}
+                    <Button variant="ghost" size="sm" className="h-7 text-xs text-rose-600" onClick={() => toast.info(`${pm.type} removed`)}>Remove</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </TabsContent>
+
+        {/* Invoices tab */}
+        <TabsContent value="invoices" className="mt-4">
+          <Card className="p-5 shadow-soft">
+            <h3 className="font-semibold mb-3">GST Invoices</h3>
+            <div className="space-y-2">
+              {invoices.map((inv) => (
+                <div key={inv.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{inv.code} · {inv.vendor}</p>
+                    <p className="text-[11px] text-muted-foreground">GSTIN: {inv.gst} · {inv.date}</p>
+                  </div>
+                  <p className="text-sm font-semibold">{formatINRDecimal(inv.amount)}</p>
+                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => toast.success(`Invoice ${inv.code} downloaded`, { description: "GST invoice exported as PDF." })}>
+                    Download
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      {/* Top-up dialog */}
+      <Dialog open={showTopUp} onOpenChange={setShowTopUp}>
+        <DialogContent className="max-w-md">
+          <div>
+            <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add Money to Wallet</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Current balance: {formatINR(balance)}</p>
+          </div>
+          <div className="space-y-3 pt-2">
+            <div>
+              <Label className="text-xs">Amount (₹)</Label>
+              <Input type="number" value={topUpAmount} onChange={(e) => setTopUpAmount(e.target.value)} placeholder="500" className="mt-1" />
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {[200, 500, 1000, 2000].map((amt) => (
+                <button
+                  key={amt}
+                  onClick={() => setTopUpAmount(amt.toString())}
+                  className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted hover:border-primary/30 transition-colors"
+                >
+                  ₹{amt}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2 pt-4">
+            <Button variant="outline" className="flex-1" onClick={() => setShowTopUp(false)}>Cancel</Button>
+            <Button
+              className="flex-1"
+              disabled={!topUpAmount || Number(topUpAmount) <= 0}
+              onClick={() => {
+                const amt = Number(topUpAmount);
+                setBalance(balance + amt);
+                setTopUpAmount("");
+                setShowTopUp(false);
+                toast.success("Wallet topped up", { description: `${formatINR(amt)} added to your wallet.` });
+              }}
+            >
+              Add {topUpAmount ? formatINR(Number(topUpAmount)) : "Money"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -803,6 +1119,9 @@ function CustomerReviews() {
 // ============================================================================
 function CustomerSubscriptions() {
   const [billing, setBilling] = useState<"monthly" | "yearly">("monthly");
+  const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
+  const [subscribed, setSubscribed] = useState<string | null>(null);
+
   const plans = [
     {
       name: "Essentials",
@@ -856,8 +1175,29 @@ function CustomerSubscriptions() {
     },
   ];
 
+  const handleSubscribe = (planName: string) => {
+    setSubscribed(planName);
+    toast.success(`Subscribed to ${planName}!`, {
+      description: `Your ${billing} plan is now active. Welcome to hassle-free laundry.`,
+    });
+  };
+
   return (
     <div className="space-y-6">
+      {/* Subscribed banner */}
+      {subscribed && (
+        <Card className="p-4 shadow-soft bg-tonal-accent border-primary/30">
+          <div className="flex items-center gap-3">
+            <CheckCircle2 className="h-5 w-5 text-primary shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold">You&apos;re subscribed to {subscribed}</p>
+              <p className="text-xs text-muted-foreground">Your plan is active. Manage or cancel anytime from Payments.</p>
+            </div>
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => setSubscribed(null)}>Cancel plan</Button>
+          </div>
+        </Card>
+      )}
+
       {/* Billing toggle */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
@@ -891,46 +1231,64 @@ function CustomerSubscriptions() {
 
       {/* Plans grid */}
       <div className="grid md:grid-cols-3 gap-4">
-        {plans.map((plan) => (
-          <motion.div key={plan.name} whileHover={{ y: -4 }} className={cn(plan.popular && "md:-mt-4")}>
-            <Card className={cn(
-              "relative overflow-hidden p-6 shadow-soft transition-shadow",
-              plan.popular ? "shadow-lift ring-2 ring-primary" : "hover:shadow-lift"
-            )}>
-              {plan.popular && (
-                <div className="absolute top-0 right-0 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-lg">
-                  ★ MOST POPULAR
+        {plans.map((plan) => {
+          const isSelected = selectedPlan === plan.name;
+          const isSubscribed = subscribed === plan.name;
+          return (
+            <motion.div
+              key={plan.name}
+              whileHover={{ y: -4 }}
+              className={cn(plan.popular && "md:-mt-4")}
+              onClick={() => setSelectedPlan(plan.name)}
+            >
+              <Card className={cn(
+                "relative overflow-hidden p-6 shadow-soft transition-all cursor-pointer",
+                plan.popular && !isSelected && "shadow-lift ring-2 ring-primary",
+                isSelected && "ring-2 ring-primary shadow-lift",
+                isSubscribed && "ring-2 ring-emerald-400"
+              )}>
+                {plan.popular && (
+                  <div className="absolute top-0 right-0 bg-primary text-primary-foreground text-[10px] font-bold px-3 py-1 rounded-bl-lg">
+                    ★ MOST POPULAR
+                  </div>
+                )}
+                {isSubscribed && (
+                  <div className="absolute top-0 left-0 bg-emerald-500 text-white text-[10px] font-bold px-3 py-1 rounded-br-lg">
+                    ✓ ACTIVE
+                  </div>
+                )}
+                <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", plan.color)}>
+                  <Sparkles className="h-5 w-5" />
                 </div>
-              )}
-              <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", plan.color)}>
-                <Sparkles className="h-5 w-5" />
-              </div>
-              <h4 className="text-lg font-bold">{plan.name}</h4>
-              <p className="text-xs text-muted-foreground">{plan.tagline}</p>
-              <div className="mt-4 mb-4">
-                <span className="text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-                  ₹{billing === "monthly" ? plan.monthly : plan.yearly}
-                </span>
-                <span className="text-sm text-muted-foreground">/{billing === "monthly" ? "month" : "year"}</span>
-              </div>
-              <Button
-                className={cn("w-full", plan.popular ? "bg-primary hover:bg-primary/90" : "")}
-                variant={plan.popular ? "default" : "outline"}
-              >
-                Choose {plan.name}
-              </Button>
-              <Separator className="my-4" />
-              <ul className="space-y-2">
-                {plan.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2 text-xs">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                    <span>{f}</span>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          </motion.div>
-        ))}
+                <h4 className="text-lg font-bold">{plan.name}</h4>
+                <p className="text-xs text-muted-foreground">{plan.tagline}</p>
+                <div className="mt-4 mb-4">
+                  <span className="text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
+                    ₹{billing === "monthly" ? plan.monthly : plan.yearly}
+                  </span>
+                  <span className="text-sm text-muted-foreground">/{billing === "monthly" ? "month" : "year"}</span>
+                </div>
+                <Button
+                  className={cn("w-full", isSubscribed ? "bg-emerald-500 hover:bg-emerald-600" : plan.popular || isSelected ? "bg-primary hover:bg-primary/90" : "")}
+                  variant={plan.popular || isSelected ? "default" : "outline"}
+                  disabled={isSubscribed}
+                  onClick={(e) => { e.stopPropagation(); handleSubscribe(plan.name); }}
+                >
+                  {isSubscribed ? "✓ Subscribed" : isSelected ? `Subscribe to ${plan.name}` : `Choose ${plan.name}`}
+                </Button>
+                <Separator className="my-4" />
+                <ul className="space-y-2">
+                  {plan.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2 text-xs">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <span>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            </motion.div>
+          );
+        })}
       </div>
 
       {/* Comparison / FAQ */}
