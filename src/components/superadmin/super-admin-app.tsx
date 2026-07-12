@@ -36,7 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -662,6 +662,7 @@ function EditUserDialog({
   return (
     <Dialog open={!!user} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md">
+        <DialogTitle className="sr-only">Edit User</DialogTitle>
         {user && (
           <EditUserForm key={user.id} user={user} onClose={onClose} onSave={onSave} />
         )}

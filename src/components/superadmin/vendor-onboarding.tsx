@@ -31,6 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -169,6 +170,7 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
       <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto p-0">
+        <DialogTitle className="sr-only">Onboard New Vendor</DialogTitle>
         <AnimatePresence mode="wait">
           {step === "submitted" ? (
             <motion.div

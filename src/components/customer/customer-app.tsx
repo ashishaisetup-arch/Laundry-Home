@@ -26,6 +26,7 @@ import {
   Filter,
   Bike,
   FileText,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -62,7 +63,7 @@ import {
 } from "@/lib/mock-data";
 import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { BookingFlow } from "./booking-flow";
 import { OrderTracking } from "./order-tracking";
 
@@ -338,7 +339,7 @@ function CustomerDashboard({
             <p className="text-sm font-bold mt-0.5">Monthly Essentials</p>
             <p className="text-xs text-emerald-600 mt-1">₹1,499/mo · Save ₹350</p>
           </div>
-          <Button size="sm" className="w-full bg-primary hover:bg-primary/90">
+          <Button size="sm" className="w-full bg-primary hover:bg-primary/90" onClick={() => onNavigate("subscriptions")}>
             View Plans
             <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
           </Button>
@@ -356,11 +357,21 @@ function CustomerDashboard({
         </div>
         <div className="grid md:grid-cols-3 gap-3">
           {addresses.map((addr) => (
-            <div key={addr.id} className="rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
+            <div key={addr.id} className="group rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
               <div className="flex items-center gap-2 mb-1">
                 <MapPin className="h-3.5 w-3.5 text-primary" />
                 <span className="text-sm font-semibold">{addr.label}</span>
                 {addr.isDefault && <Badge variant="secondary" className="text-[10px] py-0 h-4">Default</Badge>}
+                <button
+                  onClick={() => {
+                    setAddresses(addresses.filter((a) => a.id !== addr.id));
+                    toast.success("Address deleted", { description: `${addr.label} address removed.` });
+                  }}
+                  className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-rose-600"
+                  title="Delete address"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
               </div>
               <p className="text-xs text-muted-foreground">{addr.line}</p>
               <p className="text-xs text-muted-foreground">{addr.area}, {addr.city} - {addr.pincode}</p>
@@ -372,6 +383,7 @@ function CustomerDashboard({
       {/* Add Address Dialog */}
       <Dialog open={showAddAddr} onOpenChange={setShowAddAddr}>
         <DialogContent className="max-w-md">
+          <DialogTitle className="sr-only">Add New Address</DialogTitle>
           <div>
             <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add New Address</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Save a new pickup/delivery address</p>
@@ -432,22 +444,47 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
   const [selectedVendor, setSelectedVendor] = useState<typeof VENDORS[0] | null>(null);
   const [showLocationChange, setShowLocationChange] = useState(false);
   const [location, setLocation] = useState({ area: "Indiranagar", city: "Bengaluru", pincode: "560038" });
+  const [locationChanged, setLocationChanged] = useState(false);
 
   let vendors = VENDORS.filter((v) =>
     v.name.toLowerCase().includes(search.toLowerCase()) ||
     v.area.toLowerCase().includes(search.toLowerCase())
   );
 
+  // When location has been changed, prioritize vendors in the selected area
+  // If the area matches a vendor's area, show those first. Others still show but sorted further down.
+  if (locationChanged) {
+    // Sort vendors: matching area first, then by distance
+    vendors.sort((a, b) => {
+      const aMatch = a.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
+      const bMatch = b.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
+      if (aMatch !== bMatch) return aMatch - bMatch;
+      return a.distanceKm - b.distanceKm;
+    });
+  }
+
   if (filter === "open") vendors = vendors.filter((v) => v.isOpen);
   if (filter === "express") vendors = vendors.filter((v) => v.estimatedDeliveryHrs <= 12);
   if (filter === "top") vendors = vendors.filter((v) => v.rating >= 4.7);
   if (filter === "premium") vendors = vendors.filter((v) => v.priceLevel >= 3);
+  if (filter === "near") vendors = vendors.filter((v) => v.area.toLowerCase() === location.area.toLowerCase());
 
   const sortedVendors = [...vendors];
-  if (sortBy === "distance") sortedVendors.sort((a, b) => a.distanceKm - b.distanceKm);
+  if (sortBy === "distance") sortedVendors.sort((a, b) => {
+    // If location changed, keep area-matching vendors on top
+    if (locationChanged) {
+      const aMatch = a.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
+      const bMatch = b.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
+      if (aMatch !== bMatch) return aMatch - bMatch;
+    }
+    return a.distanceKm - b.distanceKm;
+  });
   if (sortBy === "rating") sortedVendors.sort((a, b) => b.rating - a.rating);
   if (sortBy === "delivery") sortedVendors.sort((a, b) => a.estimatedDeliveryHrs - b.estimatedDeliveryHrs);
   if (sortBy === "price") sortedVendors.sort((a, b) => a.priceLevel - b.priceLevel);
+
+  // Count how many vendors are in the current area
+  const vendorsInArea = VENDORS.filter((v) => v.area.toLowerCase() === location.area.toLowerCase()).length;
 
   return (
     <div className="space-y-6">
@@ -480,6 +517,7 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
         <div className="flex flex-wrap gap-2 mt-3">
           {[
             { id: "all", label: "All vendors" },
+            { id: "near", label: `Near ${location.area}` },
             { id: "open", label: "Open now" },
             { id: "express", label: "Express delivery" },
             { id: "top", label: "Top rated" },
@@ -504,7 +542,9 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
       {/* Sort + count */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          <strong className="text-foreground">{sortedVendors.length}</strong> vendors found near you
+          <strong className="text-foreground">{sortedVendors.length}</strong> vendors found
+          {locationChanged && <span> near <strong className="text-foreground">{location.area}</strong></span>}
+          {filter === "near" && <span className="ml-1">({vendorsInArea} in your area)</span>}
           {(search || filter !== "all") && (
             <button
               onClick={() => { setSearch(""); setFilter("all"); }}
@@ -548,6 +588,7 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
       {/* Vendor Detail Dialog — shows services and prices */}
       <Dialog open={!!selectedVendor} onOpenChange={(o) => !o && setSelectedVendor(null)}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogTitle className="sr-only">{selectedVendor?.name || "Vendor Details"}</DialogTitle>
           {selectedVendor && (
             <div className="space-y-4">
               {/* Vendor header */}
@@ -642,6 +683,7 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
       {/* Change Location Dialog */}
       <Dialog open={showLocationChange} onOpenChange={setShowLocationChange}>
         <DialogContent className="max-w-md">
+          <DialogTitle className="sr-only">Change Location</DialogTitle>
           <div>
             <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Change Location</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Set your area to find nearby vendors</p>
@@ -662,10 +704,38 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
               </div>
             </div>
             <p className="text-[11px] text-muted-foreground">Popular areas: Indiranagar, Koramangala, HSR Layout, Whitefield, Jayanagar</p>
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {["Indiranagar", "Koramangala", "HSR Layout", "Jayanagar", "Whitefield", "BTM Layout"].map((area) => (
+                <button
+                  key={area}
+                  onClick={() => {
+                    const vendorInArea = VENDORS.find((v) => v.area === area);
+                    setLocation({
+                      area,
+                      city: vendorInArea?.city || "Bengaluru",
+                      pincode: vendorInArea ? "560038" : "560038",
+                    });
+                  }}
+                  className={cn(
+                    "rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors",
+                    location.area === area
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:bg-muted/70"
+                  )}
+                >
+                  {area}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex gap-2 pt-4">
             <Button variant="outline" className="flex-1" onClick={() => setShowLocationChange(false)}>Cancel</Button>
-            <Button className="flex-1" onClick={() => { setShowLocationChange(false); toast.success("Location updated", { description: `Showing vendors near ${location.area}` }); }}>
+            <Button className="flex-1" onClick={() => {
+              setShowLocationChange(false);
+              setLocationChanged(true);
+              setFilter("near");
+              toast.success("Location updated", { description: `Showing vendors near ${location.area}, ${location.pincode}` });
+            }}>
               Update Location
             </Button>
           </div>
@@ -907,6 +977,7 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
       {/* Top-up dialog */}
       <Dialog open={showTopUp} onOpenChange={setShowTopUp}>
         <DialogContent className="max-w-md">
+          <DialogTitle className="sr-only">Add Money to Wallet</DialogTitle>
           <div>
             <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add Money to Wallet</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Current balance: {formatINR(balance)}</p>
