@@ -102,7 +102,7 @@ export function SuperAdminApp() {
       }
     >
       <AnimatePresence mode="wait">
-        {view === "overview" && <SuperAdminOverview key="overview" onOnboard={() => setShowOnboarding(true)} />}
+        {view === "overview" && <SuperAdminOverview key="overview" onOnboard={() => setShowOnboarding(true)} onNavigate={setView} />}
         {view === "rbac" && <RbacMatrix key="rbac" />}
         {view === "users" && <UserManagement key="users" />}
         {view === "audit" && <AuditLogs key="audit" />}
@@ -151,7 +151,7 @@ function Crown({ className }: { className?: string }) {
 // ============================================================================
 // Super Admin Overview
 // ============================================================================
-function SuperAdminOverview({ onOnboard }: { onOnboard?: () => void }) {
+function SuperAdminOverview({ onOnboard, onNavigate }: { onOnboard?: () => void; onNavigate?: (v: string) => void }) {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -218,22 +218,27 @@ function SuperAdminOverview({ onOnboard }: { onOnboard?: () => void }) {
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {[
-          { label: "Roles & Permissions", desc: "Manage RBAC matrix", icon: Shield, color: "from-teal-500 to-cyan-600" },
-          { label: "Audit Logs", desc: "Track every action", icon: ScrollText, color: "from-violet-500 to-purple-600" },
-          { label: "Feature Flags", desc: "Toggle features live", icon: Flag, color: "from-amber-500 to-orange-600" },
-          { label: "API Keys", desc: "Manage integrations", icon: Key, color: "from-emerald-500 to-green-600" },
-          { label: "System Config", desc: "Global settings", icon: Settings, color: "from-rose-500 to-pink-600" },
-          { label: "User Management", desc: "All platform users", icon: UserCog, color: "from-sky-500 to-cyan-600" },
+          { label: "Roles & Permissions", desc: "Manage RBAC matrix", icon: Shield, color: "from-teal-500 to-cyan-600", view: "rbac" },
+          { label: "Audit Logs", desc: "Track every action", icon: ScrollText, color: "from-violet-500 to-purple-600", view: "audit" },
+          { label: "Feature Flags", desc: "Toggle features live", icon: Flag, color: "from-amber-500 to-orange-600", view: "features" },
+          { label: "API Keys", desc: "Manage integrations", icon: Key, color: "from-emerald-500 to-green-600", view: "integrations" },
+          { label: "System Config", desc: "Global settings", icon: Settings, color: "from-rose-500 to-pink-600", view: "system" },
+          { label: "User Management", desc: "All platform users", icon: UserCog, color: "from-sky-500 to-cyan-600", view: "users" },
         ].map((a) => (
-          <motion.div key={a.label} whileHover={{ y: -2 }}>
-            <Card className="p-5 shadow-soft hover:shadow-lift transition-shadow">
+          <motion.button
+            key={a.label}
+            whileHover={{ y: -2 }}
+            onClick={() => onNavigate?.(a.view)}
+            className="text-left"
+          >
+            <Card className="p-5 shadow-soft hover:shadow-lift transition-shadow cursor-pointer h-full">
               <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", a.color)}>
                 <a.icon className="h-5 w-5" />
               </div>
               <p className="font-semibold">{a.label}</p>
               <p className="text-xs text-muted-foreground mt-0.5">{a.desc}</p>
             </Card>
-          </motion.div>
+          </motion.button>
         ))}
       </div>
 
@@ -330,8 +335,8 @@ function RbacMatrix() {
     "System Config",
   ];
 
-  // -1 = no access, 0 = read only, 1 = full access
-  const matrix: Record<string, number[]> = {
+  // Initial permission matrix: -1 = no access, 0 = read only, 1 = full access
+  const initialMatrix: Record<string, number[]> = {
     Customer:      [-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],
     Vendor:        [-1, 1, 1, 1, 1,-1,-1,-1,-1,-1,-1,-1, 1, 0,-1,-1,-1,-1,-1],
     "Vendor Staff":[-1, 0, 1, 1, 1,-1,-1,-1,-1,-1,-1,-1, 0,-1,-1,-1,-1,-1,-1],
@@ -340,17 +345,60 @@ function RbacMatrix() {
     "Super Admin": [ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   };
 
+  const [matrix, setMatrix] = useState(initialMatrix);
+
+  const togglePermission = (role: string, moduleIndex: number) => {
+    setMatrix((prev) => {
+      const current = prev[role][moduleIndex];
+      // Cycle: -1 (none) → 1 (full) → 0 (read) → -1 (none)
+      const next = current === -1 ? 1 : current === 1 ? 0 : -1;
+      const newRolePerms = [...prev[role]];
+      newRolePerms[moduleIndex] = next;
+      return { ...prev, [role]: newRolePerms };
+    });
+  };
+
+  const hasChanges = JSON.stringify(matrix) !== JSON.stringify(initialMatrix);
+
+  const handleSave = () => {
+    toast.success("Permission matrix saved", {
+      description: "Role-based access control changes are now live.",
+    });
+  };
+
+  const handleReset = () => {
+    setMatrix(initialMatrix);
+    toast.info("Matrix reset to defaults");
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           <strong className="text-emerald-600">✓</strong> = full access · <strong className="text-amber-600">R</strong> = read only · <strong className="text-muted-foreground">—</strong> = no access
+          <span className="block md:inline md:ml-3 text-[11px]">Click any cell to cycle permissions</span>
         </p>
-        <Button className="bg-primary hover:bg-primary/90" onClick={() => toast.success("Permission matrix saved")}>
-          <Save className="h-4 w-4 mr-1.5" />
-          Save Matrix
-        </Button>
+        <div className="flex gap-2">
+          {hasChanges && (
+            <Button variant="outline" size="sm" onClick={handleReset}>
+              Reset
+            </Button>
+          )}
+          <Button className="bg-primary hover:bg-primary/90" onClick={handleSave} disabled={!hasChanges}>
+            <Save className="h-4 w-4 mr-1.5" />
+            Save Matrix
+          </Button>
+        </div>
       </div>
+
+      {hasChanges && (
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-3 border-l-2 border-amber-400 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            You have unsaved changes to the permission matrix. Click <strong>Save Matrix</strong> to apply.
+          </p>
+        </div>
+      )}
 
       <Card className="shadow-soft overflow-hidden">
         <div className="overflow-x-auto">
@@ -369,16 +417,26 @@ function RbacMatrix() {
                   <td className="p-3 font-medium sticky left-0 bg-card z-10">{mod}</td>
                   {ROLES.map((role) => {
                     const perm = matrix[role][mi];
+                    const isSuperAdminLocked = role === "Super Admin"; // Super Admin always has full access
                     return (
                       <td key={role} className="p-3 text-center">
                         <button
+                          onClick={() => !isSuperAdminLocked && togglePermission(role, mi)}
+                          disabled={isSuperAdminLocked}
                           className={cn(
-                            "inline-flex h-7 w-7 items-center justify-center rounded-md text-xs font-bold transition-all hover:scale-110",
+                            "inline-flex h-7 w-7 items-center justify-center rounded-md text-xs font-bold transition-all",
+                            !isSuperAdminLocked && "hover:scale-110 cursor-pointer",
+                            isSuperAdminLocked && "cursor-not-allowed opacity-60",
                             perm === 1 && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400",
                             perm === 0 && "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
                             perm === -1 && "bg-muted/40 text-muted-foreground/40"
                           )}
-                          title={perm === 1 ? "Full access" : perm === 0 ? "Read only" : "No access"}
+                          title={
+                            isSuperAdminLocked ? "Super Admin: always full access" :
+                            perm === 1 ? "Full access — click to change to read only" :
+                            perm === 0 ? "Read only — click to remove access" :
+                            "No access — click to grant full access"
+                          }
                         >
                           {perm === 1 ? "✓" : perm === 0 ? "R" : "—"}
                         </button>
