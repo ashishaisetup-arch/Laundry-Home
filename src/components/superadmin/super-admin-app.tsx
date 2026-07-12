@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   BadgeCheck,
   CheckCircle2,
   Database,
@@ -18,6 +19,7 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  Store,
   UserCog,
   Users,
   XCircle,
@@ -45,6 +47,7 @@ import {
 } from "@/components/ui/select";
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { StatCard } from "@/components/shared/stat-card";
+import { VendorOnboarding } from "./vendor-onboarding";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -53,6 +56,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Super Admin",
     items: [
       { id: "overview", label: "Control Center", icon: "LayoutDashboard" },
+      { id: "onboard", label: "Onboard Vendor", icon: "Store", badge: "New" },
       { id: "rbac", label: "Roles & Permissions", icon: "Shield" },
       { id: "users", label: "User Management", icon: "UserCog" },
       { id: "audit", label: "Audit Logs", icon: "ScrollText" },
@@ -65,16 +69,30 @@ const NAV_GROUPS: NavGroup[] = [
 
 export function SuperAdminApp() {
   const [view, setView] = useState("overview");
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  const handleNavigate = (v: string) => {
+    if (v === "onboard") {
+      setShowOnboarding(true);
+      return;
+    }
+    setView(v);
+  };
 
   return (
     <AppShell
       groups={NAV_GROUPS}
       activeView={view}
-      onNavigate={setView}
+      onNavigate={handleNavigate}
       pageTitle={pageTitle(view)}
       pageSubtitle={pageSubtitle(view)}
       actions={
-        view === "system" ? (
+        view === "overview" ? (
+          <Button className="bg-primary hover:bg-primary/90" onClick={() => setShowOnboarding(true)}>
+            <Store className="h-4 w-4 mr-1.5" />
+            Onboard Vendor
+          </Button>
+        ) : view === "system" ? (
           <Button className="bg-primary hover:bg-primary/90" onClick={() => toast.success("Settings saved", { description: "All system configurations updated." })}>
             <Save className="h-4 w-4 mr-1.5" />
             Save Changes
@@ -83,7 +101,7 @@ export function SuperAdminApp() {
       }
     >
       <AnimatePresence mode="wait">
-        {view === "overview" && <SuperAdminOverview key="overview" />}
+        {view === "overview" && <SuperAdminOverview key="overview" onOnboard={() => setShowOnboarding(true)} />}
         {view === "rbac" && <RbacMatrix key="rbac" />}
         {view === "users" && <UserManagement key="users" />}
         {view === "audit" && <AuditLogs key="audit" />}
@@ -91,6 +109,8 @@ export function SuperAdminApp() {
         {view === "integrations" && <Integrations key="integrations" />}
         {view === "system" && <SystemConfig key="system" />}
       </AnimatePresence>
+
+      <VendorOnboarding open={showOnboarding} onClose={() => setShowOnboarding(false)} />
     </AppShell>
   );
 }
@@ -130,7 +150,7 @@ function Crown({ className }: { className?: string }) {
 // ============================================================================
 // Super Admin Overview
 // ============================================================================
-function SuperAdminOverview() {
+function SuperAdminOverview({ onOnboard }: { onOnboard?: () => void }) {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -165,6 +185,35 @@ function SuperAdminOverview() {
           </div>
         </Card>
       </motion.div>
+
+      {/* Onboard Vendor CTA — prominent */}
+      {onOnboard && (
+        <motion.button
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          whileHover={{ y: -2 }}
+          onClick={onOnboard}
+          className="w-full text-left"
+        >
+          <Card className="relative overflow-hidden p-5 shadow-soft hover:shadow-lift transition-shadow bg-tonal-accent">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-surface">
+                <Store className="h-6 w-6 text-primary-foreground" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold">Onboard a New Vendor</p>
+                  <Badge variant="outline" className="text-[10px] border-primary text-primary">Quick action</Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">Add a verified laundry vendor with KYC, services, and commission config</p>
+              </div>
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-background">
+                <ArrowRight className="h-4 w-4 text-primary" />
+              </div>
+            </div>
+          </Card>
+        </motion.button>
+      )}
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {[
