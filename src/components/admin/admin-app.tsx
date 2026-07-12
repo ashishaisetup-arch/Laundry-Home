@@ -110,11 +110,11 @@ export function AdminApp() {
       actions={
         view === "reports" ? (
           <>
-            <Button variant="outline" size="sm" className="gap-1.5">
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => toast.success("Export started", { description: "Your report is being exported as PDF." })}>
               <Download className="h-4 w-4" />
               Export
             </Button>
-            <Button size="sm" className="bg-primary hover:bg-primary/90">
+            <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={() => toast.success("Report generated", { description: "Custom report has been created and saved." })}>
               <FileText className="h-4 w-4 mr-1.5" />
               Generate Report
             </Button>
@@ -391,7 +391,7 @@ function AdminDashboard() {
                   <p className="text-sm font-medium">{a.title}</p>
                   <p className="text-xs text-muted-foreground">{a.desc}</p>
                 </div>
-                <Button variant="ghost" size="sm" className="h-6 text-xs">Resolve</Button>
+                <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => toast.success(`Alert resolved`, { description: a.title })}>Resolve</Button>
               </div>
             ))}
           </div>
@@ -416,14 +416,42 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
 // Admin Vendors
 // ============================================================================
 function AdminVendors() {
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [vendors, setVendors] = useState(VENDORS);
+
+  const filteredVendors = vendors.filter((v) => {
+    const matchesSearch = !search ||
+      v.name.toLowerCase().includes(search.toLowerCase()) ||
+      v.area.toLowerCase().includes(search.toLowerCase()) ||
+      v.city.toLowerCase().includes(search.toLowerCase());
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "verified" && v.kycStatus === "approved") ||
+      (statusFilter === "pending" && v.kycStatus === "pending") ||
+      (statusFilter === "suspended" && v.kycStatus === "rejected");
+    return matchesSearch && matchesStatus;
+  });
+
+  const handleApprove = (vendorId: string) => {
+    const vendor = vendors.find((v) => v.id === vendorId);
+    setVendors((prev) => prev.map((v) => v.id === vendorId ? { ...v, kycStatus: "approved" as const } : v));
+    toast.success(`Vendor ${vendor?.name} approved`, { description: "Welcome email sent." });
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col md:flex-row gap-3">
         <div className="flex-1 flex items-center rounded-lg border border-input bg-background px-3">
           <Search className="h-4 w-4 text-muted-foreground" />
-          <input placeholder="Search vendors by name, area, city…" className="flex-1 bg-transparent px-2 py-2 outline-none text-sm" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search vendors by name, area, city…"
+            className="flex-1 bg-transparent px-2 py-2 outline-none text-sm"
+          />
         </div>
-        <Select defaultValue="all">
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-[180px]"><SelectValue placeholder="Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All vendors</SelectItem>
@@ -432,10 +460,17 @@ function AdminVendors() {
             <SelectItem value="suspended">Suspended</SelectItem>
           </SelectContent>
         </Select>
-        <Button className="bg-primary hover:bg-primary/90">
+        <Button className="bg-primary hover:bg-primary/90" onClick={() => toast.success("Onboarding form opened", { description: "Use the Super Admin panel to onboard new vendors." })}>
           <UserCheck className="h-4 w-4 mr-1.5" />
           Onboard Vendor
         </Button>
+      </div>
+
+      <div className="text-xs text-muted-foreground">
+        Showing <strong className="text-foreground">{filteredVendors.length}</strong> of {vendors.length} vendors
+        {(search || statusFilter !== "all") && (
+          <button onClick={() => { setSearch(""); setStatusFilter("all"); }} className="ml-2 text-primary hover:underline">Clear filters</button>
+        )}
       </div>
 
       <Card className="shadow-soft overflow-hidden">
@@ -453,46 +488,50 @@ function AdminVendors() {
               </tr>
             </thead>
             <tbody>
-              {VENDORS.map((v) => (
-                <tr key={v.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                  <td className="p-3">
-                    <div className="flex items-center gap-2">
-                      <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br text-white text-xs font-bold", v.logoColor)}>
-                        {v.logoInitials}
+              {filteredVendors.length === 0 ? (
+                <tr><td colSpan={7} className="p-8 text-center text-muted-foreground text-sm">No vendors match your filters.</td></tr>
+              ) : (
+                filteredVendors.map((v) => (
+                  <tr key={v.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg bg-primary-surface text-primary-foreground text-xs font-semibold", v.logoColor)}>
+                          {v.logoInitials}
+                        </div>
+                        <div>
+                          <p className="font-medium">{v.name}</p>
+                          <p className="text-[11px] text-muted-foreground">Joined {new Date(v.joinedDate).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium">{v.name}</p>
-                        <p className="text-[11px] text-muted-foreground">Joined {new Date(v.joinedDate).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="p-3 text-muted-foreground">{v.area}, {v.city}</td>
-                  <td className="p-3 text-center">
-                    <span className="font-semibold">{v.rating}★</span>
-                    <p className="text-[10px] text-muted-foreground">{v.reviewCount}</p>
-                  </td>
-                  <td className="p-3 text-center font-medium">{v.totalOrders.toLocaleString()}</td>
-                  <td className="p-3 text-right font-semibold">{formatINR(v.monthlyRevenue)}</td>
-                  <td className="p-3 text-center">
-                    <Badge variant="outline" className={cn(
-                      "text-[10px]",
-                      v.kycStatus === "approved" && "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30",
-                      v.kycStatus === "pending" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
-                      v.kycStatus === "rejected" && "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30",
-                    )}>
-                      {v.kycStatus}
-                    </Badge>
-                  </td>
-                  <td className="p-3 text-right">
-                    <Button variant="ghost" size="sm" className="h-7 text-xs">View</Button>
-                    {v.kycStatus === "pending" && (
-                      <Button size="sm" variant="outline" className="h-7 ml-1 text-xs" onClick={() => toast.success(`Vendor ${v.name} approved`, { description: "Welcome email sent." })}>
-                        Approve
-                      </Button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="p-3 text-muted-foreground">{v.area}, {v.city}</td>
+                    <td className="p-3 text-center">
+                      <span className="font-semibold">{v.rating}★</span>
+                      <p className="text-[10px] text-muted-foreground">{v.reviewCount}</p>
+                    </td>
+                    <td className="p-3 text-center font-medium">{v.totalOrders.toLocaleString()}</td>
+                    <td className="p-3 text-right font-semibold">{formatINR(v.monthlyRevenue)}</td>
+                    <td className="p-3 text-center">
+                      <Badge variant="outline" className={cn(
+                        "text-[10px]",
+                        v.kycStatus === "approved" && "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30",
+                        v.kycStatus === "pending" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
+                        v.kycStatus === "rejected" && "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30",
+                      )}>
+                        {v.kycStatus}
+                      </Badge>
+                    </td>
+                    <td className="p-3 text-right whitespace-nowrap">
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => toast.info(`Viewing ${v.name}`, { description: `${v.area}, ${v.city} · ${v.totalOrders.toLocaleString()} orders · ${v.rating}★` })}>View</Button>
+                      {v.kycStatus === "pending" && (
+                        <Button size="sm" variant="outline" className="h-7 ml-1 text-xs" onClick={() => handleApprove(v.id)}>
+                          Approve
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -508,13 +547,21 @@ function AdminOrders() {
   const [filter, setFilter] = useState("all");
   const allOrders = [...ORDERS];
 
+  const filteredOrders = allOrders.filter((o) => {
+    if (filter === "all") return true;
+    if (filter === "active") return !["completed", "cancelled"].includes(o.status);
+    if (filter === "completed") return o.status === "completed";
+    if (filter === "delayed") return o.aiPrediction?.delayRisk === "medium" || o.aiPrediction?.delayRisk === "high";
+    return true;
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
         {[
           { id: "all", label: "All Orders", count: allOrders.length },
           { id: "active", label: "Active", count: allOrders.filter(o => !["completed", "cancelled"].includes(o.status)).length },
-          { id: "delayed", label: "Delayed Risk", count: 1 },
+          { id: "delayed", label: "Delayed Risk", count: allOrders.filter(o => o.aiPrediction?.delayRisk === "medium" || o.aiPrediction?.delayRisk === "high").length },
           { id: "completed", label: "Completed", count: allOrders.filter(o => o.status === "completed").length },
         ].map((f) => (
           <button
@@ -545,42 +592,46 @@ function AdminOrders() {
               </tr>
             </thead>
             <tbody>
-              {allOrders.map((o) => (
-                <tr key={o.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                  <td className="p-3">
-                    <p className="font-mono text-xs font-semibold">{o.code}</p>
-                    <p className="text-[10px] text-muted-foreground">{new Date(o.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</p>
-                  </td>
-                  <td className="p-3">
-                    <div className="flex items-center gap-2">
-                      <Avatar className="h-7 w-7">
-                        <AvatarFallback className="bg-muted text-[10px]">{o.customerAvatar}</AvatarFallback>
-                      </Avatar>
-                      <span className="text-xs">{o.customerName}</span>
-                    </div>
-                  </td>
-                  <td className="p-3 text-xs">{o.vendorName}</td>
-                  <td className="p-3 text-center">
-                    <Badge variant="outline" className="text-[10px] capitalize">{o.status.replace(/_/g, " ")}</Badge>
-                  </td>
-                  <td className="p-3 text-right font-semibold">{formatINRDecimal(o.total)}</td>
-                  <td className="p-3 text-center">
-                    {o.aiPrediction && (
-                      <Badge variant="outline" className={cn(
-                        "text-[10px]",
-                        o.aiPrediction.delayRisk === "low" && "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30",
-                        o.aiPrediction.delayRisk === "medium" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
-                        o.aiPrediction.delayRisk === "high" && "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30",
-                      )}>
-                        {o.aiPrediction.delayRisk}
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="p-3 text-right">
-                    <Button variant="ghost" size="sm" className="h-7 text-xs">View</Button>
-                  </td>
-                </tr>
-              ))}
+              {filteredOrders.length === 0 ? (
+                <tr><td colSpan={7} className="p-8 text-center text-muted-foreground text-sm">No orders match this filter.</td></tr>
+              ) : (
+                filteredOrders.map((o) => (
+                  <tr key={o.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                    <td className="p-3">
+                      <p className="font-mono text-xs font-semibold">{o.code}</p>
+                      <p className="text-[10px] text-muted-foreground">{new Date(o.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</p>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <Avatar className="h-7 w-7">
+                          <AvatarFallback className="bg-muted text-[10px]">{o.customerAvatar}</AvatarFallback>
+                        </Avatar>
+                        <span className="text-xs">{o.customerName}</span>
+                      </div>
+                    </td>
+                    <td className="p-3 text-xs">{o.vendorName}</td>
+                    <td className="p-3 text-center">
+                      <Badge variant="outline" className="text-[10px] capitalize">{o.status.replace(/_/g, " ")}</Badge>
+                    </td>
+                    <td className="p-3 text-right font-semibold">{formatINRDecimal(o.total)}</td>
+                    <td className="p-3 text-center">
+                      {o.aiPrediction && (
+                        <Badge variant="outline" className={cn(
+                          "text-[10px]",
+                          o.aiPrediction.delayRisk === "low" && "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30",
+                          o.aiPrediction.delayRisk === "medium" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
+                          o.aiPrediction.delayRisk === "high" && "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30",
+                        )}>
+                          {o.aiPrediction.delayRisk}
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="p-3 text-right">
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => toast.info(`Order ${o.code}`, { description: `${o.customerName} · ${o.vendorName} · ${formatINRDecimal(o.total)}` })}>View</Button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -623,7 +674,7 @@ function AdminCommission() {
               </div>
             ))}
           </div>
-          <Button variant="outline" size="sm" className="w-full mt-3">
+          <Button variant="outline" size="sm" className="w-full mt-3" onClick={() => toast.success("New commission rule", { description: "Rule builder opened." })}>
             <Settings2 className="h-3.5 w-3.5 mr-1.5" />
             Add new rule
           </Button>
@@ -666,66 +717,123 @@ function AdminCommission() {
 // Admin Support
 // ============================================================================
 function AdminSupport() {
+  const [tickets, setTickets] = useState([
+    { id: "t1", code: "LH-2812", customer: "Priya Sharma", issue: "Missing item from delivery", priority: "high", time: "12 mins ago", assigned: false, agent: null as string | null, status: "open" },
+    { id: "t2", code: "LH-2810", customer: "Rohan Gupta", issue: "Stain not removed", priority: "medium", time: "1 hour ago", assigned: true, agent: "Ananya", status: "open" },
+    { id: "t3", code: "LH-2808", customer: "Sneha Reddy", issue: "Late delivery refund request", priority: "medium", time: "2 hours ago", assigned: true, agent: "Vikram", status: "open" },
+    { id: "t4", code: "LH-2805", customer: "Aarav Mehta", issue: "Wrong service charged", priority: "high", time: "3 hours ago", assigned: false, agent: null as string | null, status: "open" },
+    { id: "t5", code: "LH-2801", customer: "Karthik R", issue: "Garment damaged during wash", priority: "high", time: "5 hours ago", assigned: true, agent: "Ananya", status: "open" },
+    { id: "t6", code: "LH-2798", customer: "Meera Nair", issue: "Refund of ₹350 — duplicate charge", priority: "medium", time: "6 hours ago", assigned: true, agent: "Vikram", status: "open" },
+    { id: "t7", code: "LH-2795", customer: "Arjun Rao", issue: "Refund of ₹180 — order cancelled", priority: "low", time: "8 hours ago", assigned: false, agent: null as string | null, status: "open" },
+    { id: "t8", code: "LH-2790", customer: "Divya Krishnan", issue: "Escalated: vendor refused to redeliver", priority: "high", time: "1 day ago", assigned: true, agent: "Ananya", status: "escalated" },
+    { id: "t9", code: "LH-2785", customer: "Sanjay Pillai", issue: "Resolved: wrong items delivered", priority: "medium", time: "2 days ago", assigned: true, agent: "Vikram", status: "resolved" },
+    { id: "t10", code: "LH-2780", customer: "Kavya Reddy", issue: "Resolved: refund processed", priority: "low", time: "3 days ago", assigned: true, agent: "Ananya", status: "resolved" },
+  ]);
+
+  const [activeTab, setActiveTab] = useState("open");
+
+  const openTickets = tickets.filter((t) => t.status === "open");
+  const refundTickets = tickets.filter((t) => t.issue.toLowerCase().includes("refund"));
+  const escalatedTickets = tickets.filter((t) => t.status === "escalated");
+  const resolvedTickets = tickets.filter((t) => t.status === "resolved");
+
+  const handleAssign = (ticketId: string) => {
+    const agents = ["Ananya", "Vikram", "Priya"];
+    const randomAgent = agents[Math.floor(Math.random() * agents.length)];
+    setTickets((prev) => prev.map((t) => t.id === ticketId ? { ...t, assigned: true, agent: randomAgent } : t));
+    toast.success(`Ticket assigned to ${randomAgent}`);
+  };
+
+  const handleResolve = (ticketId: string) => {
+    const ticket = tickets.find((t) => t.id === ticketId);
+    setTickets((prev) => prev.map((t) => t.id === ticketId ? { ...t, status: "resolved" } : t));
+    toast.success(`Ticket ${ticket?.code} resolved`, { description: `${ticket?.issue}` });
+  };
+
+  const renderTicket = (t: typeof tickets[0]) => (
+    <Card key={t.id} className="p-4 shadow-soft hover:shadow-lift transition-shadow">
+      <div className="flex items-center gap-3">
+        <div className={cn(
+          "flex h-10 w-10 items-center justify-center rounded-lg shrink-0",
+          t.priority === "high" ? "bg-rose-50 text-rose-600 dark:bg-rose-950/30" :
+          t.priority === "medium" ? "bg-amber-50 text-amber-600 dark:bg-amber-950/30" :
+          "bg-muted text-muted-foreground"
+        )}>
+          <AlertTriangle className="h-5 w-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-mono font-semibold">{t.code}</span>
+            <Badge variant="outline" className={cn(
+              "text-[9px] py-0 h-4",
+              t.priority === "high" ? "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30" :
+              t.priority === "medium" ? "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30" :
+              "border-border"
+            )}>
+              {t.priority}
+            </Badge>
+            {t.status === "escalated" && (
+              <Badge variant="outline" className="text-[9px] py-0 h-4 border-violet-300 text-violet-700 bg-violet-50 dark:bg-violet-950/30">
+                escalated
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm font-medium mt-0.5">{t.issue}</p>
+          <p className="text-xs text-muted-foreground">{t.customer} · {t.time}</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {t.assigned ? (
+            <Badge variant="secondary" className="text-[10px]">{t.agent}</Badge>
+          ) : (
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAssign(t.id)}>
+              Assign
+            </Button>
+          )}
+          {t.status !== "resolved" && (
+            <Button size="sm" className="bg-primary hover:bg-primary/90 h-7" onClick={() => handleResolve(t.id)}>
+              Resolve
+            </Button>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Open Tickets" value="7" icon={Headphones} accent="from-amber-500 to-orange-600" />
-        <StatCard label="Pending Refunds" value="3" value2="" icon={IndianRupee} accent="from-rose-500 to-pink-600" />
+        <StatCard label="Open Tickets" value={openTickets.length.toString()} icon={Headphones} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Pending Refunds" value={refundTickets.length.toString()} icon={IndianRupee} accent="from-rose-500 to-pink-600" />
         <StatCard label="Avg Response" value="4 mins" change={-12} trend="down" invertTrend icon={Clock} accent="from-emerald-500 to-green-600" />
         <StatCard label="Resolution Rate" value="94.2%" change={2.1} trend="up" icon={CheckCircle2} accent="from-teal-500 to-cyan-600" />
       </div>
 
-      <Tabs defaultValue="open">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="open">Open Tickets <Badge variant="secondary" className="ml-1.5 text-[10px]">7</Badge></TabsTrigger>
-          <TabsTrigger value="refunds">Refunds <Badge variant="secondary" className="ml-1.5 text-[10px]">3</Badge></TabsTrigger>
-          <TabsTrigger value="escalated">Escalated <Badge variant="secondary" className="ml-1.5 text-[10px]">1</Badge></TabsTrigger>
-          <TabsTrigger value="resolved">Resolved</TabsTrigger>
+          <TabsTrigger value="open">Open Tickets <Badge variant="secondary" className="ml-1.5 text-[10px]">{openTickets.length}</Badge></TabsTrigger>
+          <TabsTrigger value="refunds">Refunds <Badge variant="secondary" className="ml-1.5 text-[10px]">{refundTickets.length}</Badge></TabsTrigger>
+          <TabsTrigger value="escalated">Escalated <Badge variant="secondary" className="ml-1.5 text-[10px]">{escalatedTickets.length}</Badge></TabsTrigger>
+          <TabsTrigger value="resolved">Resolved <Badge variant="secondary" className="ml-1.5 text-[10px]">{resolvedTickets.length}</Badge></TabsTrigger>
         </TabsList>
-        <TabsContent value="open" className="mt-4">
-          <div className="space-y-2">
-            {[
-              { id: "t1", code: "LH-2812", customer: "Priya Sharma", issue: "Missing item from delivery", priority: "high", time: "12 mins ago", assigned: false },
-              { id: "t2", code: "LH-2810", customer: "Rohan Gupta", issue: "Stain not removed", priority: "medium", time: "1 hour ago", assigned: true, agent: "Ananya" },
-              { id: "t3", code: "LH-2808", customer: "Sneha Reddy", issue: "Late delivery refund request", priority: "medium", time: "2 hours ago", assigned: true, agent: "Vikram" },
-              { id: "t4", code: "LH-2805", customer: "Aarav Mehta", issue: "Wrong service charged", priority: "high", time: "3 hours ago", assigned: false },
-              { id: "t5", code: "LH-2801", customer: "Karthik R", issue: "Garment damaged during wash", priority: "high", time: "5 hours ago", assigned: true, agent: "Ananya" },
-            ].map((t) => (
-              <Card key={t.id} className="p-4 shadow-soft hover:shadow-lift transition-shadow">
-                <div className="flex items-center gap-3">
-                  <div className={cn(
-                    "flex h-10 w-10 items-center justify-center rounded-lg",
-                    t.priority === "high" ? "bg-rose-50 text-rose-600 dark:bg-rose-950/30" : "bg-amber-50 text-amber-600 dark:bg-amber-950/30"
-                  )}>
-                    <AlertTriangle className="h-5 w-5" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono font-semibold">{t.code}</span>
-                      <Badge variant="outline" className={cn(
-                        "text-[9px] py-0 h-4",
-                        t.priority === "high" ? "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30" : "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30"
-                      )}>
-                        {t.priority}
-                      </Badge>
-                    </div>
-                    <p className="text-sm font-medium mt-0.5">{t.issue}</p>
-                    <p className="text-xs text-muted-foreground">{t.customer} · {t.time}</p>
-                  </div>
-                  <div className="text-right">
-                    {t.assigned ? (
-                      <Badge variant="secondary" className="text-[10px]">{t.agent}</Badge>
-                    ) : (
-                      <Button size="sm" variant="outline" className="h-7 text-xs">Assign</Button>
-                    )}
-                  </div>
-                  <Button size="sm" className="bg-primary hover:bg-primary/90 h-7">
-                    Resolve
-                  </Button>
-                </div>
-              </Card>
-            ))}
-          </div>
+        <TabsContent value="open" className="mt-4 space-y-2">
+          {openTickets.length === 0 ? (
+            <Card className="p-8 text-center text-muted-foreground text-sm shadow-soft">No open tickets. All caught up!</Card>
+          ) : openTickets.map(renderTicket)}
+        </TabsContent>
+        <TabsContent value="refunds" className="mt-4 space-y-2">
+          {refundTickets.length === 0 ? (
+            <Card className="p-8 text-center text-muted-foreground text-sm shadow-soft">No refund requests.</Card>
+          ) : refundTickets.map(renderTicket)}
+        </TabsContent>
+        <TabsContent value="escalated" className="mt-4 space-y-2">
+          {escalatedTickets.length === 0 ? (
+            <Card className="p-8 text-center text-muted-foreground text-sm shadow-soft">No escalated tickets.</Card>
+          ) : escalatedTickets.map(renderTicket)}
+        </TabsContent>
+        <TabsContent value="resolved" className="mt-4 space-y-2">
+          {resolvedTickets.length === 0 ? (
+            <Card className="p-8 text-center text-muted-foreground text-sm shadow-soft">No resolved tickets yet.</Card>
+          ) : resolvedTickets.map(renderTicket)}
         </TabsContent>
       </Tabs>
     </div>
@@ -749,7 +857,7 @@ function AdminMarketing() {
         <Card className="p-5 shadow-soft">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold">Active Campaigns</h3>
-            <Button size="sm" className="bg-primary hover:bg-primary/90">
+            <Button size="sm" className="bg-primary hover:bg-primary/90" onClick={() => toast.success("New campaign", { description: "Campaign builder opened." })}>
               <Megaphone className="h-3.5 w-3.5 mr-1.5" />
               New Campaign
             </Button>
@@ -795,7 +903,7 @@ function AdminMarketing() {
                   <p className="text-sm font-medium">{c.channel}</p>
                   <p className="text-[11px] text-muted-foreground">{c.sent} sent · {c.delivered} delivered</p>
                 </div>
-                <Button variant="ghost" size="sm" className="h-7 text-xs">Compose</Button>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => toast.success(`Composing ${c.channel}`, { description: "Message composer opened." })}>Compose</Button>
               </div>
             ))}
           </div>
@@ -832,13 +940,13 @@ function AdminReports() {
               <p className="font-semibold text-sm">{r.name}</p>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{r.desc}</p>
               <div className="flex gap-1.5 mt-3 pt-3 border-t border-border/60">
-                <Button variant="outline" size="sm" className="flex-1 h-7 text-xs">
+                <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => toast.success(`${r.name} exported`, { description: "Downloaded as PDF." })}>
                   <FileText className="h-3 w-3 mr-1" /> PDF
                 </Button>
-                <Button variant="outline" size="sm" className="flex-1 h-7 text-xs">
+                <Button variant="outline" size="sm" className="flex-1 h-7 text-xs" onClick={() => toast.success(`${r.name} exported`, { description: "Downloaded as Excel." })}>
                   <FileSpreadsheet className="h-3 w-3 mr-1" /> Excel
                 </Button>
-                <Button variant="outline" size="sm" className="h-7 w-7 p-0 text-xs">
+                <Button variant="outline" size="sm" className="h-7 w-7 p-0 text-xs" onClick={() => toast.success(`${r.name} exported`, { description: "Downloaded as CSV." })}>
                   CSV
                 </Button>
               </div>
@@ -863,7 +971,7 @@ function AdminReports() {
                 <p className="text-sm font-medium">{r.name}</p>
                 <p className="text-[11px] text-muted-foreground">{r.schedule} · {r.recipients} recipients · Last sent: {r.lastSent}</p>
               </div>
-              <Button variant="outline" size="sm" className="h-7 text-xs">Edit</Button>
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => toast.info(`Editing ${r.name}`)}>Edit</Button>
             </div>
           ))}
         </div>
@@ -1005,7 +1113,7 @@ function AdminAI() {
             )}>
               <Sparkles className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
               <p className="text-sm flex-1">{insight.text}</p>
-              <Button size="sm" variant="outline" className="h-7 text-xs">{insight.action}</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => toast.success(`Action: ${insight.action}`, { description: insight.text })}>{insight.action}</Button>
             </div>
           ))}
         </div>
