@@ -456,19 +456,22 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
                         {VENDORS.filter((v) => v.isOpen).map((v) => (
                           <label
                             key={v.id}
+                            onClick={() => setSelectedVendor(v.id)}
                             className={cn(
                               "flex items-center gap-3 rounded-lg border p-3 cursor-pointer transition-all",
                               selectedVendor === v.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:bg-muted/30"
                             )}
                           >
-                            <RadioGroupItem
-                              value={v.id}
-                              checked={selectedVendor === v.id}
-                              onClick={() => setSelectedVendor(v.id)}
-                              onChange={() => setSelectedVendor(v.id)}
-                            />
                             <div className={cn(
-                              "flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br text-white text-xs font-bold",
+                              "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-all",
+                              selectedVendor === v.id ? "border-primary bg-primary" : "border-input bg-background"
+                            )}>
+                              {selectedVendor === v.id && (
+                                <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />
+                              )}
+                            </div>
+                            <div className={cn(
+                              "flex h-10 w-10 items-center justify-center rounded-lg bg-primary-surface text-primary-foreground text-xs font-semibold",
                               v.logoColor
                             )}>
                               {v.logoInitials}
