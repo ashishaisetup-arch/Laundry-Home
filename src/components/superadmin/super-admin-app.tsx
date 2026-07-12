@@ -36,6 +36,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -398,7 +399,7 @@ function RbacMatrix() {
 // User Management
 // ============================================================================
 function UserManagement() {
-  const users = [
+  const [users, setUsers] = useState([
     { id: "u1", name: "Aarav Mehta", email: "aarav.mehta@email.com", role: "Customer", status: "active", lastActive: "2 mins ago", joined: "Jan 2024" },
     { id: "u2", name: "FreshFold Laundry Co.", email: "owner@freshfold.co", role: "Vendor", status: "active", lastActive: "5 mins ago", joined: "Mar 2023" },
     { id: "u3", name: "Rajesh Kumar", email: "rajesh.k@delivery.co", role: "Delivery Exec", status: "active", lastActive: "now", joined: "Feb 2024" },
@@ -409,23 +410,70 @@ function UserManagement() {
     { id: "u8", name: "Rohan Gupta", email: "rohan.g@email.com", role: "Customer", status: "suspended", lastActive: "3 days ago", joined: "Dec 2023" },
     { id: "u9", name: "Vikram Singh", email: "vikram@laundryhome.com", role: "Admin", status: "active", lastActive: "20 mins ago", joined: "Jan 2023" },
     { id: "u10", name: "Sneha Reddy", email: "sneha.r@email.com", role: "Customer", status: "active", lastActive: "45 mins ago", joined: "May 2024" },
-  ];
+  ]);
+
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [editingUser, setEditingUser] = useState<(typeof users)[0] | null>(null);
+
+  // Role mapping for filter matching
+  const roleMap: Record<string, string> = {
+    customer: "Customer",
+    vendor: "Vendor",
+    delivery: "Delivery Exec",
+    admin: "Admin",
+    superadmin: "Super Admin",
+  };
+
+  // Apply filters
+  const filteredUsers = users.filter((u) => {
+    const matchesSearch = !search ||
+      u.name.toLowerCase().includes(search.toLowerCase()) ||
+      u.email.toLowerCase().includes(search.toLowerCase());
+    const matchesRole = roleFilter === "all" || u.role === roleMap[roleFilter];
+    const matchesStatus = statusFilter === "all" || u.status === statusFilter;
+    return matchesSearch && matchesRole && matchesStatus;
+  });
+
+  const handleToggleStatus = (userId: string) => {
+    const user = users.find((u) => u.id === userId);
+    if (!user) return;
+    const newStatus = user.status === "active" ? "suspended" : "active";
+    setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, status: newStatus } : u));
+    if (newStatus === "suspended") {
+      toast.success(`User ${user.name} suspended`, { description: "They can no longer access the platform." });
+    } else {
+      toast.success(`User ${user.name} reactivated`, { description: "Access has been restored." });
+    }
+  };
+
+  const handleSaveEdit = (updated: (typeof users)[0]) => {
+    setUsers((prev) => prev.map((u) => u.id === updated.id ? updated : u));
+    setEditingUser(null);
+    toast.success(`User ${updated.name} updated`, { description: "Changes have been saved." });
+  };
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Users" value="52,494" change={8.4} trend="up" icon={Users} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="Active Now" value="1,284" icon={Activity} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Suspended" value="42" icon={XCircle} accent="from-rose-500 to-pink-600" />
+        <StatCard label="Total Users" value={users.length.toLocaleString()} change={8.4} trend="up" icon={Users} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="Active Now" value={users.filter((u) => u.status === "active").length.toString()} icon={Activity} accent="from-emerald-500 to-green-600" />
+        <StatCard label="Suspended" value={users.filter((u) => u.status === "suspended").length.toString()} icon={XCircle} accent="from-rose-500 to-pink-600" />
         <StatCard label="New This Week" value="1,842" change={12.1} trend="up" icon={UserCog} accent="from-amber-500 to-orange-600" />
       </div>
 
       <div className="flex flex-col md:flex-row gap-3">
         <div className="flex-1 flex items-center rounded-lg border border-input bg-background px-3">
           <Search className="h-4 w-4 text-muted-foreground" />
-          <input placeholder="Search users by name, email…" className="flex-1 bg-transparent px-2 py-2 outline-none text-sm" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search users by name, email…"
+            className="flex-1 bg-transparent px-2 py-2 outline-none text-sm"
+          />
         </div>
-        <Select defaultValue="all">
+        <Select value={roleFilter} onValueChange={setRoleFilter}>
           <SelectTrigger className="w-[160px]"><SelectValue placeholder="Role" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All roles</SelectItem>
@@ -436,7 +484,7 @@ function UserManagement() {
             <SelectItem value="superadmin">Super Admin</SelectItem>
           </SelectContent>
         </Select>
-        <Select defaultValue="all">
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All status</SelectItem>
@@ -444,6 +492,21 @@ function UserManagement() {
             <SelectItem value="suspended">Suspended</SelectItem>
           </SelectContent>
         </Select>
+      </div>
+
+      {/* Filter results count */}
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>
+          Showing <strong className="text-foreground">{filteredUsers.length}</strong> of {users.length} users
+          {(search || roleFilter !== "all" || statusFilter !== "all") && (
+            <button
+              onClick={() => { setSearch(""); setRoleFilter("all"); setStatusFilter("all"); }}
+              className="ml-2 text-primary hover:underline"
+            >
+              Clear filters
+            </button>
+          )}
+        </span>
       </div>
 
       <Card className="shadow-soft overflow-hidden">
@@ -460,53 +523,148 @@ function UserManagement() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
-                <tr key={u.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                  <td className="p-3">
-                    <div className="flex items-center gap-2">
-                      <Avatar className="h-8 w-8">
-                        <AvatarFallback className="bg-primary-surface text-primary-foreground text-[10px] font-semibold">
-                          {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="text-sm font-medium">{u.name}</p>
-                        <p className="text-[11px] text-muted-foreground">{u.email}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="p-3">
-                    <Badge variant="outline" className="text-[10px]">{u.role}</Badge>
-                  </td>
-                  <td className="p-3 text-center">
-                    <Badge variant="outline" className={cn(
-                      "text-[10px]",
-                      u.status === "active" ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30"
-                    )}>
-                      {u.status}
-                    </Badge>
-                  </td>
-                  <td className="p-3 text-xs text-muted-foreground">{u.lastActive}</td>
-                  <td className="p-3 text-xs text-muted-foreground">{u.joined}</td>
-                  <td className="p-3 text-right">
-                    <Button variant="ghost" size="sm" className="h-7 text-xs">Edit</Button>
-                    {u.status === "active" ? (
-                      <Button variant="ghost" size="sm" className="h-7 text-xs text-rose-600" onClick={() => toast.success(`User ${u.name} suspended`)}>
-                        Suspend
-                      </Button>
-                    ) : (
-                      <Button variant="ghost" size="sm" className="h-7 text-xs text-emerald-600" onClick={() => toast.success(`User ${u.name} reactivated`)}>
-                        Reactivate
-                      </Button>
-                    )}
+              {filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-muted-foreground text-sm">
+                    No users match your filters.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredUsers.map((u) => (
+                  <tr key={u.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <Avatar className="h-8 w-8">
+                          <AvatarFallback className="bg-primary-surface text-primary-foreground text-[10px] font-semibold">
+                            {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="text-sm font-medium">{u.name}</p>
+                          <p className="text-[11px] text-muted-foreground">{u.email}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <Badge variant="outline" className="text-[10px]">{u.role}</Badge>
+                    </td>
+                    <td className="p-3 text-center">
+                      <Badge variant="outline" className={cn(
+                        "text-[10px]",
+                        u.status === "active" ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30"
+                      )}>
+                        {u.status}
+                      </Badge>
+                    </td>
+                    <td className="p-3 text-xs text-muted-foreground">{u.lastActive}</td>
+                    <td className="p-3 text-xs text-muted-foreground">{u.joined}</td>
+                    <td className="p-3 text-right whitespace-nowrap">
+                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditingUser(u)}>
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={cn("h-7 text-xs", u.status === "active" ? "text-rose-600" : "text-emerald-600")}
+                        onClick={() => handleToggleStatus(u.id)}
+                      >
+                        {u.status === "active" ? "Suspend" : "Reactivate"}
+                      </Button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
       </Card>
+
+      {/* Edit User Dialog */}
+      <EditUserDialog
+        user={editingUser}
+        onClose={() => setEditingUser(null)}
+        onSave={handleSaveEdit}
+      />
     </div>
+  );
+}
+
+// ============================================================================
+// Edit User Dialog
+// ============================================================================
+function EditUserDialog({
+  user,
+  onClose,
+  onSave,
+}: {
+  user: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string } | null;
+  onClose: () => void;
+  onSave: (u: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string }) => void;
+}) {
+  return (
+    <Dialog open={!!user} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        {user && (
+          <EditUserForm key={user.id} user={user} onClose={onClose} onSave={onSave} />
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditUserForm({
+  user,
+  onClose,
+  onSave,
+}: {
+  user: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string };
+  onClose: () => void;
+  onSave: (u: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string }) => void;
+}) {
+  const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
+  const [role, setRole] = useState(user.role);
+
+  return (
+    <>
+      <div>
+        <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Edit User</h2>
+        <p className="text-xs text-muted-foreground mt-0.5">Update user information and role</p>
+      </div>
+      <div className="space-y-3 pt-2">
+        <div>
+          <Label className="text-xs">Name</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
+        </div>
+        <div>
+          <Label className="text-xs">Email</Label>
+          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1" />
+        </div>
+        <div>
+          <Label className="text-xs">Role</Label>
+          <Select value={role} onValueChange={setRole}>
+            <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Customer">Customer</SelectItem>
+              <SelectItem value="Vendor">Vendor</SelectItem>
+              <SelectItem value="Delivery Exec">Delivery Exec</SelectItem>
+              <SelectItem value="Admin">Admin</SelectItem>
+              <SelectItem value="Super Admin">Super Admin</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="flex gap-2 pt-4">
+        <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+        <Button
+          className="flex-1"
+          disabled={!name || !email || !role}
+          onClick={() => onSave({ ...user, name, email, role })}
+        >
+          Save Changes
+        </Button>
+      </div>
+    </>
   );
 }
 
