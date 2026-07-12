@@ -22,7 +22,6 @@ import {
   Store,
   Truck,
   Users,
-  Zap,
   Lock,
   ChevronRight,
   Apple,
@@ -44,13 +43,34 @@ import { cn } from "@/lib/utils";
 type AuthMethod = "otp" | "google" | "apple" | "microsoft" | "email";
 type AuthStep = "method" | "otp" | "password";
 
-const ROLE_PRESETS: { id: Role; label: string; icon: React.ComponentType<{ className?: string }>; desc: string }[] = [
-  { id: "customer", label: "Customer", icon: ShoppingBag, desc: "Book & track laundry" },
-  { id: "vendor", label: "Vendor", icon: Store, desc: "Manage operations" },
-  { id: "delivery", label: "Delivery Exec", icon: Bike, desc: "Pickups & deliveries" },
-  { id: "admin", label: "Admin", icon: Shield, desc: "Control center" },
-  { id: "superadmin", label: "Super Admin", icon: Crown, desc: "Unrestricted access" },
+// Credentials → Role mapping. In production this would be a backend lookup.
+// For this demo, entering any of these emails/phones signs you in as that role.
+const DEMO_ACCOUNTS: {
+  role: Role;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  email: string;
+  phone: string;
+  name: string;
+  color: string;
+}[] = [
+  { role: "customer",  label: "Customer",      icon: ShoppingBag, email: "aarav.mehta@email.com",    phone: "9876543210", name: "Aarav Mehta",         color: "from-teal-500 to-cyan-600" },
+  { role: "vendor",    label: "Vendor",        icon: Store,       email: "owner@freshfold.co",       phone: "9123456780", name: "FreshFold Laundry",    color: "from-emerald-500 to-green-600" },
+  { role: "delivery",  label: "Delivery Exec", icon: Bike,        email: "rajesh.k@delivery.co",     phone: "9012345678", name: "Rajesh Kumar",         color: "from-amber-500 to-orange-600" },
+  { role: "admin",     label: "Admin",         icon: Shield,      email: "ananya@laundryhome.com",   phone: "8976543210", name: "Ananya Iyer",          color: "from-violet-500 to-purple-600" },
+  { role: "superadmin", label: "Super Admin",  icon: Crown,       email: "admin@laundryhome.com",    phone: "8765432109", name: "System Admin",         color: "from-rose-500 to-pink-600" },
 ];
+
+// Detect role from entered credentials. Falls back to "customer" for unknown accounts
+// (since social/OTP sign-in for new users defaults to customer role on this platform).
+function detectRole(email: string, phone: string): Role {
+  const e = email.toLowerCase().trim();
+  const p = phone.replace(/\D/g, "");
+  const match = DEMO_ACCOUNTS.find(
+    (a) => a.email.toLowerCase() === e || a.phone === p
+  );
+  return match?.role || "customer";
+}
 
 const FEATURES = [
   { icon: MapPin, title: "Verified vendors near you", desc: "AI-matched to your location, ratings and budget." },
@@ -101,19 +121,36 @@ export function AuthLanding() {
   const [showAuth, setShowAuth] = useState(false);
   const [method, setMethod] = useState<AuthMethod>("otp");
   const [step, setStep] = useState<AuthStep>("method");
-  const [selectedRole, setSelectedRole] = useState<Role>("customer");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
 
-  const handleLogin = () => {
-    login(selectedRole);
+  // Role is detected from the credentials the user enters — not pre-selected.
+  // For OAuth (Google/Apple/Microsoft) and unknown accounts, defaults to customer.
+  const detectedRole = detectRole(email, phone);
+  const detectedAccount = DEMO_ACCOUNTS.find(
+    (a) => a.email.toLowerCase() === email.toLowerCase().trim() || a.phone === phone.replace(/\D/g, "")
+  );
+
+  const handleLogin = (roleOverride?: Role) => {
+    login(roleOverride || detectedRole);
+  };
+
+  // Quick-login directly as a specific demo account (skips OTP/password entry)
+  const quickLogin = (role: Role) => {
+    const account = DEMO_ACCOUNTS.find((a) => a.role === role);
+    if (account) {
+      setEmail(account.email);
+      setPhone(account.phone);
+    }
+    login(role);
   };
 
   const handleAuth = (m: AuthMethod) => {
     if (m === "google" || m === "apple" || m === "microsoft") {
-      // Simulate OAuth
-      setTimeout(handleLogin, 600);
+      // OAuth — new social users default to customer role.
+      // Existing linked accounts would be resolved server-side.
+      setTimeout(() => login("customer"), 600);
       return;
     }
     setMethod(m);
@@ -345,10 +382,7 @@ export function AuthLanding() {
               <Button
                 size="lg"
                 className="mt-7 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90 h-12 px-6"
-                onClick={() => {
-                  setSelectedRole("vendor");
-                  setShowAuth(true);
-                }}
+                onClick={() => setShowAuth(true)}
               >
                 Register your business
                 <ArrowRight className="ml-2 h-5 w-5" />
@@ -493,13 +527,15 @@ export function AuthLanding() {
             phone={phone}
             email={email}
             otp={otp}
-            selectedRole={selectedRole}
-            setSelectedRole={setSelectedRole}
+            detectedRole={detectedRole}
+            detectedAccount={detectedAccount}
             setPhone={setPhone}
             setEmail={setEmail}
             setOtp={setOtp}
+            setStep={setStep}
             onAuth={handleAuth}
             onLogin={handleLogin}
+            onQuickLogin={quickLogin}
           />
         )}
       </AnimatePresence>
@@ -517,13 +553,15 @@ function AuthModal({
   phone,
   email,
   otp,
-  selectedRole,
-  setSelectedRole,
+  detectedRole,
+  detectedAccount,
   setPhone,
   setEmail,
   setOtp,
+  setStep,
   onAuth,
   onLogin,
+  onQuickLogin,
 }: {
   onClose: () => void;
   method: AuthMethod;
@@ -531,13 +569,15 @@ function AuthModal({
   phone: string;
   email: string;
   otp: string;
-  selectedRole: Role;
-  setSelectedRole: (r: Role) => void;
+  detectedRole: Role;
+  detectedAccount?: (typeof DEMO_ACCOUNTS)[number];
   setPhone: (s: string) => void;
   setEmail: (s: string) => void;
   setOtp: (s: string) => void;
+  setStep: (s: AuthStep) => void;
   onAuth: (m: AuthMethod) => void;
-  onLogin: () => void;
+  onLogin: (roleOverride?: Role) => void;
+  onQuickLogin: (role: Role) => void;
 }) {
   return (
     <>
@@ -575,32 +615,31 @@ function AuthModal({
             </div>
 
             <div className="p-6 max-h-[70vh] overflow-y-auto scroll-fancy">
-              {/* Role selector */}
-              <div className="mb-5">
-                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
-                  I am a…
-                </Label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {ROLE_PRESETS.map((r) => (
-                    <button
-                      key={r.id}
-                      onClick={() => setSelectedRole(r.id)}
-                      className={cn(
-                        "flex items-center gap-2 rounded-lg border p-2.5 text-left transition-all",
-                        selectedRole === r.id
-                          ? "border-primary bg-primary/5 ring-1 ring-primary"
-                          : "border-border hover:bg-muted"
-                      )}
-                    >
-                      <r.icon className={cn("h-4 w-4", selectedRole === r.id ? "text-primary" : "text-muted-foreground")} />
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold">{r.label}</p>
-                        <p className="text-[10px] text-muted-foreground truncate">{r.desc}</p>
-                      </div>
-                    </button>
-                  ))}
+              {/* Detected role badge — shows which role the entered credentials map to */}
+              {detectedAccount ? (
+                <div className="mb-4 flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                  <div className={cn("flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br text-white", detectedAccount.color)}>
+                    <detectedAccount.icon className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-xs text-muted-foreground">Recognised account</p>
+                    <p className="text-sm font-semibold">{detectedAccount.name} · {detectedAccount.label}</p>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] border-primary text-primary">
+                    will sign in as {detectedAccount.label}
+                  </Badge>
                 </div>
-              </div>
+              ) : (phone.length === 10 || email.length > 3) ? (
+                <div className="mb-4 flex items-center gap-3 rounded-xl border border-border bg-muted/30 p-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                    <ShoppingBag className="h-5 w-5 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-xs text-muted-foreground">New to Laundry Home?</p>
+                    <p className="text-sm font-semibold">You&apos;ll be signed in as a Customer</p>
+                  </div>
+                </div>
+              ) : null}
 
               <AnimatePresence mode="wait">
                 {step === "method" && (
@@ -672,7 +711,7 @@ function AuthModal({
                     className="space-y-4"
                   >
                     <button
-                      onClick={() => useAppStore.setState({})}
+                      onClick={() => setStep("method")}
                       className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
                     >
                       ← Back to all options
@@ -735,7 +774,7 @@ function AuthModal({
                     className="space-y-4"
                   >
                     <button
-                      onClick={() => useAppStore.setState({})}
+                      onClick={() => setStep("method")}
                       className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
                     >
                       ← Back to all options
@@ -781,13 +820,34 @@ function AuthModal({
                 )}
               </AnimatePresence>
 
-              {/* Demo shortcut */}
+              {/* Demo accounts — quick login as any role */}
               <div className="mt-5 pt-4 border-t border-border">
-                <p className="text-[10px] text-center text-muted-foreground mb-2">⚡ Demo mode — instant sign in</p>
-                <Button variant="outline" className="w-full h-9 text-xs" onClick={onLogin}>
-                  <Zap className="mr-1.5 h-3.5 w-3.5 text-amber-500" />
-                  Continue as {selectedRole} (skip)
-                </Button>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    ⚡ Demo accounts — one-click sign in
+                  </p>
+                </div>
+                <p className="text-[10px] text-muted-foreground mb-2.5 leading-relaxed">
+                  Pick a role to explore. In production, the role is detected from your credentials after login.
+                </p>
+                <div className="space-y-1.5">
+                  {DEMO_ACCOUNTS.map((account) => (
+                    <button
+                      key={account.role}
+                      onClick={() => onQuickLogin(account.role)}
+                      className="group w-full flex items-center gap-2.5 rounded-lg border border-border bg-card p-2 hover:bg-muted hover:border-primary/30 transition-all text-left"
+                    >
+                      <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br text-white shrink-0", account.color)}>
+                        <account.icon className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold leading-tight">{account.label}</p>
+                        <p className="text-[10px] text-muted-foreground truncate font-mono">{account.email}</p>
+                      </div>
+                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground group-hover:translate-x-0.5 group-hover:text-primary transition-all" />
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           </Card>
