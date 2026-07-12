@@ -46,7 +46,7 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
         <DialogTitle className="sr-only">Track order {order.code}</DialogTitle>
 
         {/* Header with live status */}
-        <div className="relative overflow-hidden bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 p-5 text-white">
+        <div className="relative overflow-hidden bg-primary-surface p-5 text-primary-foreground">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative">
             <div className="flex items-start justify-between gap-3">

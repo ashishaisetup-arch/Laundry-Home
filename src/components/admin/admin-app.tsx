@@ -114,7 +114,7 @@ export function AdminApp() {
               <Download className="h-4 w-4" />
               Export
             </Button>
-            <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+            <Button size="sm" className="bg-primary hover:bg-primary/90">
               <FileText className="h-4 w-4 mr-1.5" />
               Generate Report
             </Button>
@@ -169,7 +169,7 @@ function AdminDashboard() {
     <div className="space-y-6">
       {/* Banner */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-        <Card className="relative overflow-hidden p-6 bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 text-white border-0">
+        <Card className="relative overflow-hidden p-6 bg-primary-surface text-primary-foreground border-0">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -253,8 +253,8 @@ function AdminDashboard() {
             <AreaChart data={REVENUE_CHART} margin={{ left: -16, right: 8 }}>
               <defs>
                 <linearGradient id="rev" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#14b8a6" stopOpacity={0.4} />
-                  <stop offset="100%" stopColor="#14b8a6" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#6B9C8E" stopOpacity={0.4} />
+                  <stop offset="100%" stopColor="#6B9C8E" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="com" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.4} />
@@ -266,8 +266,8 @@ function AdminDashboard() {
               <YAxis tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" tickFormatter={(v) => `₹${v}L`} />
               <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 180)", fontSize: 12 }} formatter={(v: number) => `₹${v}L`} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Area type="monotone" dataKey="revenue" name="Revenue (₹L)" stroke="#14b8a6" strokeWidth={2.5} fill="url(#rev)" />
-              <Area type="monotone" dataKey="commission" name="Commission (₹L)" stroke="#8b5cf6" strokeWidth={2.5} fill="url(#com)" />
+              <Area type="monotone" dataKey="revenue" name="Revenue (₹L)" stroke="#6B9C8E" strokeWidth={2.5} fill="url(#rev)" />
+              <Area type="monotone" dataKey="commission" name="Commission (₹L)" stroke="#A89B7B" strokeWidth={2.5} fill="url(#com)" />
             </AreaChart>
           </ResponsiveContainer>
         </Card>
@@ -306,7 +306,7 @@ function AdminDashboard() {
                 <span className="text-sm w-28 truncate">{a.area}</span>
                 <div className="flex-1 h-6 rounded-md bg-muted overflow-hidden relative">
                   <motion.div
-                    className="h-full rounded-md bg-gradient-to-r from-teal-400 to-cyan-500"
+                    className="h-full rounded-md bg-primary"
                     initial={{ width: 0 }}
                     animate={{ width: `${(a.orders / 3120) * 100}%` }}
                     transition={{ duration: 0.6 }}
@@ -335,8 +335,8 @@ function AdminDashboard() {
               <YAxis tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" />
               <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 180)", fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Line type="monotone" dataKey="pickups" name="Pickups" stroke="#14b8a6" strokeWidth={2.5} dot={{ r: 3 }} />
-              <Line type="monotone" dataKey="deliveries" name="Deliveries" stroke="#8b5cf6" strokeWidth={2.5} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="pickups" name="Pickups" stroke="#6B9C8E" strokeWidth={2.5} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="deliveries" name="Deliveries" stroke="#A89B7B" strokeWidth={2.5} dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </Card>
@@ -432,7 +432,7 @@ function AdminVendors() {
             <SelectItem value="suspended">Suspended</SelectItem>
           </SelectContent>
         </Select>
-        <Button className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+        <Button className="bg-primary hover:bg-primary/90">
           <UserCheck className="h-4 w-4 mr-1.5" />
           Onboard Vendor
         </Button>
@@ -691,7 +691,7 @@ function AdminSupport() {
               { id: "t4", code: "LH-2805", customer: "Aarav Mehta", issue: "Wrong service charged", priority: "high", time: "3 hours ago", assigned: false },
               { id: "t5", code: "LH-2801", customer: "Karthik R", issue: "Garment damaged during wash", priority: "high", time: "5 hours ago", assigned: true, agent: "Ananya" },
             ].map((t) => (
-              <Card key={t.id} className="p-4 shadow-soft hover:shadow-glow transition-shadow">
+              <Card key={t.id} className="p-4 shadow-soft hover:shadow-lift transition-shadow">
                 <div className="flex items-center gap-3">
                   <div className={cn(
                     "flex h-10 w-10 items-center justify-center rounded-lg",
@@ -719,7 +719,7 @@ function AdminSupport() {
                       <Button size="sm" variant="outline" className="h-7 text-xs">Assign</Button>
                     )}
                   </div>
-                  <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90 h-7">
+                  <Button size="sm" className="bg-primary hover:bg-primary/90 h-7">
                     Resolve
                   </Button>
                 </div>
@@ -749,7 +749,7 @@ function AdminMarketing() {
         <Card className="p-5 shadow-soft">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold">Active Campaigns</h3>
-            <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+            <Button size="sm" className="bg-primary hover:bg-primary/90">
               <Megaphone className="h-3.5 w-3.5 mr-1.5" />
               New Campaign
             </Button>
@@ -763,7 +763,7 @@ function AdminMarketing() {
               { name: "Independence Day offer", type: "Festival", reach: "—", redeemed: 0, status: "scheduled" },
             ].map((c) => (
               <div key={c.name} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-cyan-600 text-white">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-surface text-primary-foreground">
                   <Megaphone className="h-4 w-4" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -825,7 +825,7 @@ function AdminReports() {
       <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {reports.map((r) => (
           <motion.div key={r.name} whileHover={{ y: -2 }}>
-            <Card className="p-5 shadow-soft hover:shadow-glow transition-shadow cursor-pointer">
+            <Card className="p-5 shadow-soft hover:shadow-lift transition-shadow cursor-pointer">
               <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", r.color)}>
                 <r.icon className="h-5 w-5" />
               </div>
@@ -879,7 +879,7 @@ function AdminAI() {
   return (
     <div className="space-y-6">
       {/* Hero */}
-      <Card className="relative overflow-hidden p-6 bg-gradient-to-br from-violet-500 via-purple-500 to-fuchsia-600 text-white border-0">
+      <Card className="relative overflow-hidden p-6 bg-tonal text-foreground border-0">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
         <div className="relative flex items-center gap-4">
           <motion.div
@@ -1028,7 +1028,7 @@ function AIFeatureCard({
   stats: { label: string; value: string }[];
 }) {
   return (
-    <Card className="p-5 shadow-soft hover:shadow-glow transition-shadow">
+    <Card className="p-5 shadow-soft hover:shadow-lift transition-shadow">
       <div className="flex items-start gap-3 mb-3">
         <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white shrink-0", color)}>
           <Icon className="h-5 w-5" />

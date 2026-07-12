@@ -160,7 +160,7 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
               transition={{ duration: 0.2 }}
             >
               {/* Stepper header */}
-              <div className="border-b border-border p-5 bg-gradient-to-r from-teal-50 via-emerald-50 to-cyan-50 dark:from-teal-950/30 dark:via-emerald-950/30 dark:to-cyan-950/30">
+              <div className="border-b border-border p-5 bg-tonal-accent">
                 <div className="flex items-center justify-between">
                   {steps.map((s, i) => (
                     <div key={s.id} className="flex items-center gap-2 flex-1">
@@ -637,7 +637,7 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
                       </Button>
                     )}
                     <Button
-                      className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90"
+                      className="bg-primary hover:bg-primary/90"
                       disabled={!canProceed()}
                       onClick={handleNext}
                     >
@@ -685,7 +685,7 @@ function BookingConfirmed({
         initial={{ scale: 0 }}
         animate={{ scale: 1 }}
         transition={{ type: "spring", damping: 12, delay: 0.1 }}
-        className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-600 shadow-glow mb-4"
+        className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-teal-600 shadow-lift mb-4"
       >
         <CheckCircle2 className="h-9 w-9 text-white" />
       </motion.div>
@@ -716,7 +716,7 @@ function BookingConfirmed({
 
       <div className="flex gap-2 mt-5">
         <Button variant="outline" className="flex-1" onClick={onClose}>Close</Button>
-        <Button className="flex-1 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90" onClick={onClose}>
+        <Button className="flex-1 bg-primary hover:bg-primary/90" onClick={onClose}>
           Track Order
           <ArrowRight className="ml-1.5 h-4 w-4" />
         </Button>

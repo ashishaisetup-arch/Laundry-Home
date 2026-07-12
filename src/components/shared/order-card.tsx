@@ -31,14 +31,14 @@ export function OrderCard({ order, onClick, className, showVendor = true }: Orde
       transition={{ duration: 0.2 }}
     >
       <Card
-        className={cn("overflow-hidden p-0 cursor-pointer transition-shadow hover:shadow-glow shadow-soft", className)}
+        className={cn("overflow-hidden p-0 cursor-pointer transition-all duration-300 hover:shadow-lift shadow-soft", className)}
         onClick={onClick}
       >
         <div className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className={cn(
-                "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white font-bold text-sm shadow-soft",
+                "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary-surface text-primary-foreground font-semibold text-sm shadow-soft",
                 order.vendorLogoColor
               )}>
                 {order.vendorLogoInitials}
@@ -94,7 +94,7 @@ export function OrderCard({ order, onClick, className, showVendor = true }: Orde
             </div>
             <div className="h-1.5 rounded-full bg-muted overflow-hidden">
               <motion.div
-                className="h-full rounded-full bg-gradient-to-r from-teal-400 via-emerald-500 to-cyan-500"
+                className="h-full rounded-full bg-primary"
                 initial={{ width: 0 }}
                 animate={{ width: `${progress}%` }}
                 transition={{ duration: 0.6 }}

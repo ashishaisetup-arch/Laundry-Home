@@ -104,7 +104,7 @@ export function VendorApp() {
       pageSubtitle={pageSubtitle(view)}
       actions={
         view === "orders" ? (
-          <Button className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+          <Button className="bg-primary hover:bg-primary/90">
             <Plus className="mr-1.5 h-4 w-4" />
             Manual Order
           </Button>
@@ -155,7 +155,7 @@ function VendorDashboard() {
     <div className="space-y-6">
       {/* Welcome banner */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-        <Card className="relative overflow-hidden p-6 bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 text-white border-0">
+        <Card className="relative overflow-hidden p-6 bg-primary-surface text-primary-foreground border-0">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -212,8 +212,8 @@ function VendorDashboard() {
             <AreaChart data={VENDOR_WEEKLY_REVENUE} margin={{ left: -16, right: 8, top: 8 }}>
               <defs>
                 <linearGradient id="rev-grad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#14b8a6" stopOpacity={0.4} />
-                  <stop offset="100%" stopColor="#14b8a6" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#6B9C8E" stopOpacity={0.4} />
+                  <stop offset="100%" stopColor="#6B9C8E" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.91 0.012 180)" vertical={false} />
@@ -223,7 +223,7 @@ function VendorDashboard() {
                 contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 180)", fontSize: 12 }}
                 formatter={(v: number) => [formatINR(v), "Revenue"]}
               />
-              <Area type="monotone" dataKey="revenue" stroke="#14b8a6" strokeWidth={2.5} fill="url(#rev-grad)" />
+              <Area type="monotone" dataKey="revenue" stroke="#6B9C8E" strokeWidth={2.5} fill="url(#rev-grad)" />
             </AreaChart>
           </ResponsiveContainer>
         </Card>
@@ -296,7 +296,7 @@ function VendorDashboard() {
                   </Button>
                   <Button
                     size="sm"
-                    className="h-7 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90"
+                    className="h-7 bg-primary hover:bg-primary/90"
                     onClick={() => toast.success(`Order ${o.code} accepted`, { description: "Customer has been notified." })}
                   >
                     <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
@@ -356,7 +356,7 @@ function VendorOrders() {
 function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
   const stage = ORDER_STAGE_FLOW[order.currentStageIndex];
   return (
-    <Card className="p-4 shadow-soft hover:shadow-glow transition-shadow">
+    <Card className="p-4 shadow-soft hover:shadow-lift transition-shadow">
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
           <Avatar className="h-8 w-8">
@@ -406,7 +406,7 @@ function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
             </Button>
             <Button
               size="sm"
-              className="flex-1 h-8 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90"
+              className="flex-1 h-8 bg-primary hover:bg-primary/90"
               onClick={() => toast.success(`Order ${order.code} accepted`)}
             >
               <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
@@ -415,7 +415,7 @@ function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
           </>
         )}
         {!["placed", "vendor_assigned", "delivered", "completed"].includes(order.status) && (
-          <Button size="sm" className="flex-1 h-8 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+          <Button size="sm" className="flex-1 h-8 bg-primary hover:bg-primary/90">
             Update Status
             <ArrowRight className="h-3.5 w-3.5 ml-1" />
           </Button>
@@ -462,7 +462,7 @@ function VendorProcessing() {
                 </div>
                 <div className="h-1 rounded-full bg-muted overflow-hidden mt-1.5">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-teal-400 to-cyan-500"
+                    className="h-full rounded-full bg-primary"
                     style={{ width: `${((o.currentStageIndex + 1) / 18) * 100}%` }}
                   />
                 </div>
@@ -491,7 +491,7 @@ function VendorProcessing() {
             {/* Action buttons */}
             <div className="flex flex-wrap gap-2">
               <Button
-                className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90"
+                className="bg-primary hover:bg-primary/90"
                 onClick={() => toast.success("Stage updated", { description: "Customer notified." })}
               >
                 <ArrowUpRight className="h-4 w-4 mr-1.5" />
@@ -538,7 +538,7 @@ function VendorInventory() {
           <Badge variant="secondary">LH-2847</Badge>
           <span className="text-sm text-muted-foreground">Aarav Mehta · 11 items</span>
         </div>
-        <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+        <Button size="sm" className="bg-primary hover:bg-primary/90">
           <Plus className="h-4 w-4 mr-1.5" />
           Add garment
         </Button>
@@ -750,8 +750,8 @@ function VendorAnalytics() {
               <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" />
               <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 180)", fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar yAxisId="left" dataKey="revenue" name="Revenue (₹)" fill="#14b8a6" radius={[4, 4, 0, 0]} />
-              <Bar yAxisId="right" dataKey="orders" name="Orders" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+              <Bar yAxisId="left" dataKey="revenue" name="Revenue (₹)" fill="#6B9C8E" radius={[4, 4, 0, 0]} />
+              <Bar yAxisId="right" dataKey="orders" name="Orders" fill="#A89B7B" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>
@@ -798,7 +798,7 @@ function VendorAnalytics() {
               </div>
               <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
                 <motion.div
-                  className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-500"
+                  className="h-full rounded-full bg-amber-500"
                   initial={{ width: 0 }}
                   whileInView={{ width: `${r.pct}%` }}
                   viewport={{ once: true }}
@@ -858,7 +858,7 @@ function VendorStaff() {
             </button>
           ))}
         </div>
-        <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+        <Button size="sm" className="bg-primary hover:bg-primary/90">
           <Plus className="h-4 w-4 mr-1.5" />
           Add Staff
         </Button>
@@ -867,12 +867,12 @@ function VendorStaff() {
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {staff.map((s) => (
           <motion.div key={s.id} whileHover={{ y: -2 }}>
-            <Card className="p-4 shadow-soft hover:shadow-glow transition-shadow">
+            <Card className="p-4 shadow-soft hover:shadow-lift transition-shadow">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <div className="relative">
                     <Avatar className="h-11 w-11">
-                      <AvatarFallback className="bg-gradient-to-br from-teal-500 to-cyan-600 text-white text-xs font-semibold">
+                      <AvatarFallback className="bg-primary-surface text-primary-foreground text-xs font-semibold">
                         {s.avatar}
                       </AvatarFallback>
                     </Avatar>

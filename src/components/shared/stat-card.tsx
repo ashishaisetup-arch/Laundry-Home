@@ -12,10 +12,10 @@ interface StatCardProps {
   change?: number;
   trend?: "up" | "down" | "flat";
   icon?: React.ComponentType<{ className?: string }>;
-  accent?: string; // gradient classes
+  accent?: string;
   spark?: number[];
   className?: string;
-  invertTrend?: boolean; // for metrics where down = good (e.g., cancellation rate)
+  invertTrend?: boolean;
 }
 
 export function StatCard({
@@ -24,7 +24,7 @@ export function StatCard({
   change,
   trend = "up",
   icon: Icon,
-  accent = "from-teal-500 to-cyan-600",
+  accent,
   spark,
   className,
   invertTrend = false,
@@ -34,55 +34,56 @@ export function StatCard({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 8 }}
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ y: -2 }}
-      transition={{ duration: 0.2 }}
+      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+      className="hover-lift"
     >
-      <Card className={cn("relative overflow-hidden p-5 shadow-soft hover:shadow-glow transition-shadow", className)}>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</p>
-            <p className="text-2xl font-bold mt-1.5 tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-              {value}
-            </p>
-            {change !== undefined && (
-              <div className={cn(
-                "mt-2 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-semibold",
-                isGood ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400" :
-                trend === "flat" ? "bg-muted text-muted-foreground" :
-                "bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400"
-              )}>
-                <TrendIcon className="h-3 w-3" />
-                {Math.abs(change)}%
-              </div>
-            )}
-          </div>
+      <Card className={cn("relative overflow-hidden p-6 shadow-soft hover:shadow-lift transition-shadow duration-300", className)}>
+        <div className="flex items-start justify-between gap-4 mb-1">
+          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-[0.08em]">
+            {label}
+          </p>
           {Icon && (
-            <div className={cn(
-              "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br text-white shadow-soft",
-              accent
-            )}>
-              <Icon className="h-5 w-5" />
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-tonal text-muted-foreground">
+              <Icon className="h-4 w-4" />
             </div>
           )}
         </div>
-        {spark && spark.length > 0 && (
-          <div className="mt-3 -mx-1 h-8">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={spark.map((v, i) => ({ i, v }))}>
-                <Line
-                  type="monotone"
-                  dataKey="v"
-                  stroke="oklch(0.62 0.13 180)"
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+
+        <p className="text-[28px] font-semibold tracking-tight leading-tight mt-2" style={{ fontFamily: "var(--font-inter)" }}>
+          {value}
+        </p>
+
+        <div className="flex items-center gap-3 mt-2">
+          {change !== undefined && (
+            <div className={cn(
+              "inline-flex items-center gap-1 text-[11px] font-medium",
+              isGood ? "text-emerald-600 dark:text-emerald-400" :
+              trend === "flat" ? "text-muted-foreground" :
+              "text-rose-600 dark:text-rose-400"
+            )}>
+              <TrendIcon className="h-3 w-3" />
+              {Math.abs(change)}%
+            </div>
+          )}
+          {spark && spark.length > 0 && (
+            <div className="flex-1 h-6 -mx-1 opacity-70">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={spark.map((v, i) => ({ i, v }))}>
+                  <Line
+                    type="monotone"
+                    dataKey="v"
+                    stroke="oklch(0.50 0.052 165)"
+                    strokeWidth={1.5}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
       </Card>
     </motion.div>
   );

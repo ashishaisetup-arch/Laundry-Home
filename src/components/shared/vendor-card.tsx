@@ -27,23 +27,22 @@ export function VendorCard({ vendor, onView, onBook, isSelected, className }: Ve
     >
       <Card
         className={cn(
-          "relative overflow-hidden p-0 transition-all",
-          isSelected ? "ring-2 ring-primary shadow-glow" : "shadow-soft hover:shadow-glow",
+          "relative overflow-hidden p-0 transition-all duration-300",
+          isSelected ? "ring-1 ring-primary shadow-lift" : "shadow-soft hover:shadow-lift",
           className
         )}
       >
-        {/* Header band */}
-        <div className={cn("h-20 bg-gradient-to-br relative", vendor.logoColor)}>
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_30%,rgba(255,255,255,0.2),transparent_50%)]" />
+        {/* Header band — subtle tonal */}
+        <div className="h-16 bg-tonal-accent relative">
           {vendor.verified && (
-            <Badge className="absolute top-3 right-3 bg-white/20 backdrop-blur text-white border-0 gap-1">
-              <BadgeCheck className="h-3 w-3" />
+            <Badge className="absolute top-3 right-3 bg-background/80 backdrop-blur text-foreground border-0 gap-1 text-[10px]">
+              <BadgeCheck className="h-3 w-3 text-primary" />
               Verified
             </Badge>
           )}
-          <div className="absolute -bottom-6 left-5">
+          <div className="absolute -bottom-5 left-5">
             <div className={cn(
-              "flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br shadow-lg ring-4 ring-card text-white font-bold text-lg",
+              "flex h-12 w-12 items-center justify-center rounded-xl bg-primary-surface shadow-soft ring-4 ring-card text-primary-foreground font-semibold text-base",
               vendor.logoColor
             )}>
               {vendor.logoInitials}
@@ -51,7 +50,7 @@ export function VendorCard({ vendor, onView, onBook, isSelected, className }: Ve
           </div>
         </div>
 
-        <div className="p-5 pt-8">
+        <div className="p-5 pt-7">
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="min-w-0">
               <h3 className="font-semibold text-base leading-tight truncate">{vendor.name}</h3>
@@ -109,10 +108,10 @@ export function VendorCard({ vendor, onView, onBook, isSelected, className }: Ve
             <div className="h-1.5 rounded-full bg-muted overflow-hidden">
               <div
                 className={cn(
-                  "h-full rounded-full bg-gradient-to-r",
-                  vendor.capacityUsedPct > 80 ? "from-amber-400 to-rose-500" :
-                  vendor.capacityUsedPct > 60 ? "from-teal-400 to-amber-400" :
-                  "from-teal-400 to-emerald-500"
+                  "h-full rounded-full",
+                  vendor.capacityUsedPct > 80 ? "bg-amber-500" :
+                  vendor.capacityUsedPct > 60 ? "bg-primary" :
+                  "bg-primary"
                 )}
                 style={{ width: `${vendor.capacityUsedPct}%` }}
               />
@@ -126,7 +125,7 @@ export function VendorCard({ vendor, onView, onBook, isSelected, className }: Ve
             </Button>
             <Button
               size="sm"
-              className="flex-1 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90"
+              className="flex-1 bg-primary hover:bg-primary/90"
               onClick={onBook}
               disabled={!vendor.isOpen}
             >

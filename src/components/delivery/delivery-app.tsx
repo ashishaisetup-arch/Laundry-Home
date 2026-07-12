@@ -101,7 +101,7 @@ function DeliveryDashboard() {
     <div className="space-y-6">
       {/* Banner */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-        <Card className="relative overflow-hidden p-6 bg-gradient-to-br from-emerald-500 via-teal-500 to-cyan-600 text-white border-0">
+        <Card className="relative overflow-hidden p-6 bg-primary-surface text-primary-foreground border-0">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -133,7 +133,7 @@ function DeliveryDashboard() {
       </div>
 
       {/* Next task highlight */}
-      <Card className="p-5 shadow-glow border-primary/30 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30">
+      <Card className="p-5 shadow-lift border-primary/30 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30">
         <div className="flex items-center gap-2 mb-3">
           <motion.span
             className="flex h-2 w-2 rounded-full bg-primary"
@@ -144,7 +144,7 @@ function DeliveryDashboard() {
         </div>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 text-white">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-surface text-primary-foreground">
               <Package className="h-6 w-6" />
             </div>
             <div>
@@ -158,7 +158,7 @@ function DeliveryDashboard() {
               <Phone className="h-4 w-4 mr-1.5" />
               Call
             </Button>
-            <Button className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+            <Button className="bg-primary hover:bg-primary/90">
               <Navigation className="h-4 w-4 mr-1.5" />
               Start navigation
             </Button>
@@ -304,7 +304,7 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
                   <span className="font-medium">{selectedTask.distanceKm} km away</span>
                   <span className="text-muted-foreground">· ~{selectedTask.estimatedMins} mins</span>
                 </div>
-                <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+                <Button size="sm" className="bg-primary hover:bg-primary/90">
                   <Navigation className="h-3.5 w-3.5 mr-1.5" />
                   Navigate
                 </Button>
@@ -401,7 +401,7 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
                       <span className="text-[10px]">Photo</span>
                     </Button>
                   </div>
-                  <Button className="w-full mt-3 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+                  <Button className="w-full mt-3 bg-primary hover:bg-primary/90">
                     <ShieldCheck className="h-4 w-4 mr-1.5" />
                     Complete Delivery
                   </Button>
@@ -449,7 +449,7 @@ function DeliveryEarnings() {
             <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" />
             <YAxis tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" tickFormatter={(v) => `₹${v}`} />
             <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 180)", fontSize: 12 }} formatter={(v: number) => formatINR(v)} />
-            <Bar dataKey="earnings" fill="#10b981" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="earnings" fill="#6B9C8E" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </Card>

@@ -54,10 +54,10 @@ export function AiAssistant() {
               className="fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col bg-background border-l border-border shadow-2xl"
             >
               {/* Header */}
-              <div className="flex items-center justify-between p-4 border-b border-border bg-gradient-to-r from-teal-50 via-emerald-50 to-cyan-50 dark:from-teal-950/30 dark:via-emerald-950/30 dark:to-cyan-950/30">
+              <div className="flex items-center justify-between p-4 border-b border-border bg-tonal-accent">
                 <div className="flex items-center gap-3">
                   <div className="relative">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 shadow-glow">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-surface">
                       <Sparkles className="h-5 w-5 text-white" />
                     </div>
                     <motion.div
@@ -101,7 +101,7 @@ export function AiAssistant() {
                         className={cn(
                           "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
                           msg.role === "assistant"
-                            ? "bg-gradient-to-br from-teal-500 to-cyan-600 text-white"
+                            ? "bg-primary-surface text-primary-foreground"
                             : "bg-muted text-foreground"
                         )}
                       >

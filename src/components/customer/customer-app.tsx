@@ -98,7 +98,7 @@ export function CustomerApp() {
       actions={
         view === "dashboard" || view === "discover" ? (
           <Button
-            className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90"
+            className="bg-primary hover:bg-primary/90"
             onClick={() => setShowBooking(true)}
           >
             <Plus className="mr-1.5 h-4 w-4" />
@@ -187,7 +187,7 @@ function CustomerDashboard({
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        <Card className="relative overflow-hidden p-6 md:p-8 bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 text-white border-0">
+        <Card className="relative overflow-hidden p-6 md:p-8 bg-primary-surface text-primary-foreground border-0">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -234,7 +234,7 @@ function CustomerDashboard({
             onClick={a.onClick}
             className="text-left"
           >
-            <Card className="p-4 shadow-soft hover:shadow-glow transition-shadow">
+            <Card className="p-4 shadow-soft hover:shadow-lift transition-shadow">
               <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-2.5", a.color)}>
                 <a.icon className="h-5 w-5" />
               </div>
@@ -321,7 +321,7 @@ function CustomerDashboard({
             <p className="text-sm font-bold mt-0.5">Monthly Essentials</p>
             <p className="text-xs text-emerald-600 mt-1">₹1,499/mo · Save ₹350</p>
           </div>
-          <Button size="sm" className="w-full bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+          <Button size="sm" className="w-full bg-primary hover:bg-primary/90">
             View Plans
             <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
           </Button>
@@ -458,7 +458,7 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
         <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {SERVICES.map((s) => (
             <motion.div key={s.key} whileHover={{ y: -2 }}>
-              <Card className="p-4 shadow-soft hover:shadow-glow transition-shadow cursor-pointer" onClick={onBook}>
+              <Card className="p-4 shadow-soft hover:shadow-lift transition-shadow cursor-pointer" onClick={onBook}>
                 <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", s.gradient)}>
                   <ServiceIcon serviceKey={s.key} className="h-5 w-5" />
                 </div>
@@ -548,7 +548,7 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
 
       <div className="grid lg:grid-cols-3 gap-4">
         {/* Wallet card */}
-        <Card className="lg:col-span-1 p-5 shadow-soft bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 text-white border-0">
+        <Card className="lg:col-span-1 p-5 shadow-soft bg-primary-surface text-primary-foreground border-0">
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-white/80">Laundry Home Wallet</p>
             <Wallet className="h-5 w-5 text-white/80" />
@@ -635,7 +635,7 @@ function CustomerCoupons({ loyaltyPoints }: { loyaltyPoints: number }) {
   return (
     <div className="space-y-6">
       {/* Loyalty card */}
-      <Card className="relative overflow-hidden p-6 shadow-soft bg-gradient-to-br from-violet-500 via-purple-500 to-fuchsia-600 text-white border-0">
+      <Card className="relative overflow-hidden p-6 shadow-soft bg-tonal text-foreground border-0">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_30%,rgba(255,255,255,0.15),transparent_50%)]" />
         <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -673,8 +673,8 @@ function CustomerCoupons({ loyaltyPoints }: { loyaltyPoints: number }) {
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {COUPONS.map((c) => (
             <motion.div key={c.code} whileHover={{ y: -2 }}>
-              <Card className="overflow-hidden shadow-soft hover:shadow-glow transition-shadow">
-                <div className="relative bg-gradient-to-br from-teal-500 to-cyan-600 p-4 text-white">
+              <Card className="overflow-hidden shadow-soft hover:shadow-lift transition-shadow">
+                <div className="relative bg-primary-surface p-4 text-white">
                   <div className="absolute top-2 right-2 h-3 w-3 rounded-full bg-white/20" />
                   <p className="text-[10px] uppercase tracking-wider text-white/80 mb-1">Use code</p>
                   <p className="text-2xl font-bold font-mono tracking-tight">{c.code}</p>
@@ -740,7 +740,7 @@ function CustomerReviews() {
           <div className="flex items-start justify-between gap-3 mb-3">
             <div className="flex items-center gap-3">
               <Avatar className="h-10 w-10">
-                <AvatarFallback className="bg-gradient-to-br from-teal-500 to-cyan-600 text-white text-xs font-semibold">
+                <AvatarFallback className="bg-primary-surface text-primary-foreground text-xs font-semibold">
                   {r.customerAvatar}
                 </AvatarFallback>
               </Avatar>
@@ -887,7 +887,7 @@ function CustomerSubscriptions() {
           <motion.div key={plan.name} whileHover={{ y: -4 }} className={cn(plan.popular && "md:-mt-4")}>
             <Card className={cn(
               "relative overflow-hidden p-6 shadow-soft transition-shadow",
-              plan.popular ? "shadow-glow ring-2 ring-primary" : "hover:shadow-glow"
+              plan.popular ? "shadow-lift ring-2 ring-primary" : "hover:shadow-lift"
             )}>
               {plan.popular && (
                 <div className="absolute top-0 right-0 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-lg">
@@ -906,7 +906,7 @@ function CustomerSubscriptions() {
                 <span className="text-sm text-muted-foreground">/{billing === "monthly" ? "month" : "year"}</span>
               </div>
               <Button
-                className={cn("w-full", plan.popular ? "bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90" : "")}
+                className={cn("w-full", plan.popular ? "bg-primary hover:bg-primary/90" : "")}
                 variant={plan.popular ? "default" : "outline"}
               >
                 Choose {plan.name}

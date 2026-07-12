@@ -10,16 +10,16 @@ export function GradientOrb({ className }: { className?: string }) {
   return (
     <div className={cn("pointer-events-none absolute overflow-hidden", className)}>
       <motion.div
-        className="h-full w-full rounded-full opacity-50 blur-3xl"
+        className="h-full w-full rounded-full opacity-40 blur-3xl"
         style={{
           background:
-            "radial-gradient(circle at 30% 30%, oklch(0.62 0.13 180), transparent 60%)",
+            "radial-gradient(circle at 30% 30%, oklch(0.55 0.052 165), transparent 60%)",
         }}
         animate={{
-          scale: [1, 1.1, 1],
-          opacity: [0.3, 0.5, 0.3],
+          scale: [1, 1.08, 1],
+          opacity: [0.2, 0.35, 0.2],
         }}
-        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+        transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
       />
     </div>
   );
@@ -40,17 +40,16 @@ export function LogoMark({ className, size = 32 }: { className?: string; size?: 
     >
       <defs>
         <linearGradient id="lh-grad" x1="0" y1="0" x2="48" y2="48">
-          <stop stopColor="#14b8a6" />
-          <stop offset="0.5" stopColor="#10b981" />
-          <stop offset="1" stopColor="#06b6d4" />
+          <stop stopColor="#6B9C8E" />
+          <stop offset="1" stopColor="#5C8A7C" />
         </linearGradient>
       </defs>
-      <rect width="48" height="48" rx="14" fill="url(#lh-grad)" />
-      <circle cx="24" cy="24" r="11" stroke="white" strokeWidth="2.5" fill="none" opacity="0.95" />
-      <circle cx="24" cy="24" r="5.5" fill="white" opacity="0.95" />
-      <circle cx="20.5" cy="20.5" r="1.6" fill="#0d9488" />
-      <circle cx="27" cy="22" r="1.1" fill="#0d9488" opacity="0.6" />
-      <rect x="34" y="13" width="3" height="3" rx="1" fill="white" opacity="0.95" />
+      <rect width="48" height="48" rx="13" fill="url(#lh-grad)" />
+      <circle cx="24" cy="24" r="11" stroke="white" strokeWidth="2" fill="none" opacity="0.92" />
+      <circle cx="24" cy="24" r="5" fill="white" opacity="0.92" />
+      <circle cx="20.5" cy="20.5" r="1.5" fill="#5C8A7C" />
+      <circle cx="27" cy="22" r="1" fill="#5C8A7C" opacity="0.5" />
+      <rect x="34" y="13" width="2.5" height="2.5" rx="1" fill="white" opacity="0.92" />
     </svg>
   );
 }

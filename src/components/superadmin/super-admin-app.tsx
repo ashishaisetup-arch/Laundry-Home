@@ -75,7 +75,7 @@ export function SuperAdminApp() {
       pageSubtitle={pageSubtitle(view)}
       actions={
         view === "system" ? (
-          <Button className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90" onClick={() => toast.success("Settings saved", { description: "All system configurations updated." })}>
+          <Button className="bg-primary hover:bg-primary/90" onClick={() => toast.success("Settings saved", { description: "All system configurations updated." })}>
             <Save className="h-4 w-4 mr-1.5" />
             Save Changes
           </Button>
@@ -134,7 +134,7 @@ function SuperAdminOverview() {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-        <Card className="relative overflow-hidden p-6 bg-gradient-to-br from-violet-600 via-purple-600 to-fuchsia-600 text-white border-0">
+        <Card className="relative overflow-hidden p-6 bg-primary-surface text-primary-foreground border-0">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
@@ -176,7 +176,7 @@ function SuperAdminOverview() {
           { label: "User Management", desc: "All platform users", icon: UserCog, color: "from-sky-500 to-cyan-600" },
         ].map((a) => (
           <motion.div key={a.label} whileHover={{ y: -2 }}>
-            <Card className="p-5 shadow-soft hover:shadow-glow transition-shadow">
+            <Card className="p-5 shadow-soft hover:shadow-lift transition-shadow">
               <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", a.color)}>
                 <a.icon className="h-5 w-5" />
               </div>
@@ -296,7 +296,7 @@ function RbacMatrix() {
         <p className="text-sm text-muted-foreground">
           <strong className="text-emerald-600">✓</strong> = full access · <strong className="text-amber-600">R</strong> = read only · <strong className="text-muted-foreground">—</strong> = no access
         </p>
-        <Button className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90" onClick={() => toast.success("Permission matrix saved")}>
+        <Button className="bg-primary hover:bg-primary/90" onClick={() => toast.success("Permission matrix saved")}>
           <Save className="h-4 w-4 mr-1.5" />
           Save Matrix
         </Button>
@@ -416,7 +416,7 @@ function UserManagement() {
                   <td className="p-3">
                     <div className="flex items-center gap-2">
                       <Avatar className="h-8 w-8">
-                        <AvatarFallback className="bg-gradient-to-br from-teal-500 to-cyan-600 text-white text-[10px] font-semibold">
+                        <AvatarFallback className="bg-primary-surface text-primary-foreground text-[10px] font-semibold">
                           {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
                         </AvatarFallback>
                       </Avatar>
@@ -653,7 +653,7 @@ function Integrations() {
             </h3>
             <p className="text-xs text-muted-foreground mt-0.5">Third-party service credentials</p>
           </div>
-          <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+          <Button size="sm" className="bg-primary hover:bg-primary/90">
             <Key className="h-3.5 w-3.5 mr-1.5" />
             Add key
           </Button>

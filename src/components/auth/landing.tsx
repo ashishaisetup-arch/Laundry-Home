@@ -175,7 +175,7 @@ export function AuthLanding() {
             </Button>
             <Button
               size="sm"
-              className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90"
+              className="bg-primary hover:bg-primary/90"
               onClick={() => setShowAuth(true)}
             >
               Get Started
@@ -206,7 +206,7 @@ export function AuthLanding() {
                 style={{ fontFamily: "var(--font-display)" }}
               >
                 Your laundry,{" "}
-                <span className="bg-gradient-to-r from-teal-500 via-emerald-500 to-cyan-600 bg-clip-text text-transparent">
+                <span className="text-primary">
                   picked up, washed
                 </span>{" "}
                 and delivered.
@@ -218,7 +218,7 @@ export function AuthLanding() {
               <div className="mt-7 flex flex-col sm:flex-row gap-3">
                 <Button
                   size="lg"
-                  className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90 h-12 px-6 text-base shadow-glow"
+                  className="bg-primary hover:bg-primary/90 h-12 px-6 text-base shadow-lift"
                   onClick={() => setShowAuth(true)}
                 >
                   Book your first pickup
@@ -298,8 +298,8 @@ export function AuthLanding() {
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.1 }}
               >
-                <Card className="h-full p-6 shadow-soft hover:shadow-glow transition-shadow group">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 text-white mb-4 group-hover:scale-110 transition-transform">
+                <Card className="h-full p-6 shadow-soft hover:shadow-lift transition-shadow group">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-surface text-primary-foreground mb-4 group-hover:scale-110 transition-transform">
                     <f.icon className="h-5 w-5" />
                   </div>
                   <h3 className="font-semibold mb-1.5">{f.title}</h3>
@@ -333,7 +333,7 @@ export function AuthLanding() {
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.05 }}
               >
-                <Card className="p-5 shadow-soft hover:shadow-glow transition-all hover:-translate-y-1 group cursor-pointer">
+                <Card className="p-5 shadow-soft hover:shadow-lift transition-all hover:-translate-y-1 group cursor-pointer">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-muted text-2xl group-hover:scale-110 transition-transform">
@@ -354,7 +354,7 @@ export function AuthLanding() {
       </section>
 
       {/* ===== For Vendors CTA ===== */}
-      <section id="vendors" className="py-16 md:py-24 bg-gradient-to-br from-teal-50 via-emerald-50 to-cyan-50 dark:from-teal-950/30 dark:via-emerald-950/30 dark:to-cyan-950/30">
+      <section id="vendors" className="py-16 md:py-24 bg-tonal-accent">
         <div className="mx-auto max-w-7xl px-4 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div>
@@ -381,7 +381,7 @@ export function AuthLanding() {
               </div>
               <Button
                 size="lg"
-                className="mt-7 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90 h-12 px-6"
+                className="mt-7 bg-primary hover:bg-primary/90 h-12 px-6"
                 onClick={() => setShowAuth(true)}
               >
                 Register your business
@@ -425,7 +425,7 @@ export function AuthLanding() {
                   </div>
                   <p className="text-sm leading-relaxed text-foreground/90 mb-4">{t.text}</p>
                   <div className="flex items-center gap-3 pt-4 border-t border-border/60">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-cyan-600 text-white text-xs font-semibold">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-surface text-primary-foreground text-xs font-semibold">
                       {t.name.split(" ").map((n) => n[0]).join("")}
                     </div>
                     <div>
@@ -443,7 +443,7 @@ export function AuthLanding() {
       {/* ===== Final CTA ===== */}
       <section className="py-16 md:py-20">
         <div className="mx-auto max-w-5xl px-4 lg:px-8">
-          <Card className="relative overflow-hidden p-8 md:p-12 text-center shadow-glow">
+          <Card className="relative overflow-hidden p-8 md:p-12 text-center shadow-lift">
             <GradientOrb className="top-0 right-0 h-64 w-64" />
             <GradientOrb className="bottom-0 left-0 h-64 w-64" />
             <div className="relative">
@@ -455,7 +455,7 @@ export function AuthLanding() {
               </p>
               <Button
                 size="lg"
-                className="mt-6 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90 h-12 px-8 text-base shadow-glow"
+                className="mt-6 bg-primary hover:bg-primary/90 h-12 px-8 text-base shadow-lift"
                 onClick={() => setShowAuth(true)}
               >
                 Get started free
@@ -598,7 +598,7 @@ function AuthModal({
         >
           <Card className="overflow-hidden shadow-2xl border-0">
             {/* Header */}
-            <div className="relative bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 p-6 text-white">
+            <div className="relative bg-primary-surface p-6 text-primary-foreground">
               <button
                 onClick={onClose}
                 className="absolute top-4 right-4 flex h-8 w-8 items-center justify-center rounded-full bg-white/20 hover:bg-white/30 transition-colors"
@@ -751,7 +751,7 @@ function AuthModal({
                     )}
 
                     <Button
-                      className="w-full bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90 h-11"
+                      className="w-full bg-primary hover:bg-primary/90 h-11"
                       disabled={otp.length < 6}
                       onClick={onLogin}
                     >
@@ -810,7 +810,7 @@ function AuthModal({
                       <a href="#" className="text-primary hover:underline">Forgot password?</a>
                     </div>
                     <Button
-                      className="w-full bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90 h-11"
+                      className="w-full bg-primary hover:bg-primary/90 h-11"
                       onClick={onLogin}
                     >
                       Sign in
@@ -904,7 +904,7 @@ function PhoneMockup() {
                 <p className="text-[10px] text-muted-foreground">Good morning</p>
                 <p className="text-sm font-bold">Aarav 👋</p>
               </div>
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-teal-500 to-cyan-600 text-white text-[10px] font-bold">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-surface text-primary-foreground text-[10px] font-bold">
                 AM
               </div>
             </div>
@@ -927,7 +927,7 @@ function PhoneMockup() {
               </div>
               <div className="mt-2 h-1 rounded-full bg-muted overflow-hidden">
                 <motion.div
-                  className="h-full bg-gradient-to-r from-teal-400 to-cyan-500"
+                  className="h-full bg-primary"
                   animate={{ width: ["10%", "55%", "55%"] }}
                   transition={{ duration: 3, repeat: Infinity }}
                 />
@@ -962,7 +962,7 @@ function PhoneMockup() {
 
       {/* Floating badges */}
       <motion.div
-        className="absolute -left-12 top-20 rounded-xl bg-white dark:bg-card p-2.5 shadow-glow"
+        className="absolute -left-12 top-20 rounded-xl bg-white dark:bg-card p-2.5 shadow-lift"
         animate={{ y: [0, -8, 0] }}
         transition={{ duration: 3, repeat: Infinity }}
       >
@@ -975,7 +975,7 @@ function PhoneMockup() {
         </div>
       </motion.div>
       <motion.div
-        className="absolute -right-8 bottom-32 rounded-xl bg-white dark:bg-card p-2.5 shadow-glow"
+        className="absolute -right-8 bottom-32 rounded-xl bg-white dark:bg-card p-2.5 shadow-lift"
         animate={{ y: [0, 8, 0] }}
         transition={{ duration: 3.5, repeat: Infinity, delay: 0.5 }}
       >
@@ -1003,10 +1003,10 @@ function VendorDashboardPreview() {
       transition={{ duration: 0.6 }}
       className="relative"
     >
-      <Card className="p-5 shadow-glow">
+      <Card className="p-5 shadow-lift">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-cyan-600 text-white text-xs font-bold">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-surface text-primary-foreground text-xs font-bold">
               FF
             </div>
             <div>

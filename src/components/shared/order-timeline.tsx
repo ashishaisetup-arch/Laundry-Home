@@ -139,7 +139,7 @@ export function OrderTimeline({ order, variant = "full", className }: OrderTimel
                 className={cn(
                   "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 transition-all",
                   done && "bg-primary border-primary text-primary-foreground",
-                  active && "bg-background border-primary text-primary shadow-glow",
+                  active && "bg-background border-primary text-primary shadow-lift",
                   !done && !active && "bg-background border-muted text-muted-foreground"
                 )}
               >

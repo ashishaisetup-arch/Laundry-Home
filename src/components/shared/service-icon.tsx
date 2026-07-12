@@ -45,7 +45,7 @@ export function ServiceIcon({ serviceKey, className, size = 20, withGradient = f
 
   if (withGradient) {
     return (
-      <div className={cn("flex items-center justify-center rounded-xl bg-gradient-to-br text-white", service.gradient, className)}>
+      <div className={cn("flex items-center justify-center rounded-xl bg-tonal-accent text-primary", className)}>
         <Icon className="h-5 w-5" />
       </div>
     );
