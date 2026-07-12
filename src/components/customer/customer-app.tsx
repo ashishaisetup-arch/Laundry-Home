@@ -85,6 +85,14 @@ export function CustomerApp() {
   const [showBooking, setShowBooking] = useState(false);
   const [trackingOrder, setTrackingOrder] = useState<string | null>(null);
 
+  const handleNavigate = (v: string) => {
+    if (v === "booking") {
+      setShowBooking(true);
+      return;
+    }
+    setView(v);
+  };
+
   const activeOrders = ORDERS.filter((o) => !["completed", "cancelled"].includes(o.status));
   const completedOrders = ORDERS.filter((o) => o.status === "completed");
 
@@ -92,7 +100,7 @@ export function CustomerApp() {
     <AppShell
       groups={NAV_GROUPS}
       activeView={view}
-      onNavigate={setView}
+      onNavigate={handleNavigate}
       pageTitle={pageTitle(view)}
       pageSubtitle={pageSubtitle(view)}
       actions={

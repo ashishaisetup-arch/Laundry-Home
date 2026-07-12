@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bike,
@@ -13,6 +14,7 @@ import {
   Clock,
   Sparkles,
   Shield,
+  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -24,10 +26,22 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { OrderTimeline } from "@/components/shared/order-timeline";
 import { ServiceIcon } from "@/components/shared/service-icon";
 import { ORDERS, ORDER_STAGE_FLOW } from "@/lib/mock-data";
 import { cn, formatINRDecimal, formatDateTime } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface OrderTrackingProps {
   orderId: string | null;
@@ -35,10 +49,19 @@ interface OrderTrackingProps {
 }
 
 export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
+  const [cancelled, setCancelled] = useState(false);
   const order = ORDERS.find((o) => o.id === orderId);
   if (!order) return null;
 
   const currentStage = ORDER_STAGE_FLOW[order.currentStageIndex];
+  const isCancellable = !["completed", "cancelled", "delivered", "out_for_delivery"].includes(order.status) && !cancelled;
+
+  const handleCancel = () => {
+    setCancelled(true);
+    toast.success(`Order ${order.code} cancelled`, {
+      description: `Refund of ${formatINRDecimal(order.total)} will be processed in 3-5 business days.`,
+    });
+  };
 
   return (
     <Dialog open={!!orderId} onOpenChange={(o) => !o && onClose()}>
@@ -314,6 +337,41 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
                   Report an issue
                 </button>
               </div>
+              {isCancellable && (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="outline" className="w-full mt-3 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900 dark:hover:bg-rose-950/30">
+                      <XCircle className="h-4 w-4 mr-1.5" />
+                      Cancel this order
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Cancel order {order.code}?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This action cannot be undone. The vendor will be notified and a full refund of {formatINRDecimal(order.total)} will be initiated to your original payment method within 3-5 business days.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Keep Order</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={handleCancel}
+                        className="bg-rose-600 hover:bg-rose-700 text-white"
+                      >
+                        Yes, Cancel Order
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              )}
+              {cancelled && (
+                <div className="mt-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 p-3 border-l-2 border-rose-400">
+                  <p className="text-xs font-semibold text-rose-700 dark:text-rose-400">Order Cancelled</p>
+                  <p className="text-[11px] text-rose-600/80 dark:text-rose-300/70 mt-0.5">
+                    Refund of {formatINRDecimal(order.total)} is being processed.
+                  </p>
+                </div>
+              )}
             </Card>
           </div>
         </div>
