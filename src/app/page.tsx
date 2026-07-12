@@ -8,6 +8,7 @@ import { CustomerApp } from "@/components/customer/customer-app";
 import { VendorApp } from "@/components/vendor/vendor-app";
 import { DeliveryApp } from "@/components/delivery/delivery-app";
 import { AdminApp } from "@/components/admin/admin-app";
+import { SuperAdminApp } from "@/components/superadmin/super-admin-app";
 
 export default function Home() {
   const { role, isAuthenticated, switchRole } = useAppStore();
@@ -38,7 +39,8 @@ export default function Home() {
           {role === "customer" && <CustomerApp />}
           {role === "vendor" && <VendorApp />}
           {role === "delivery" && <DeliveryApp />}
-          {(role === "admin" || role === "superadmin") && <AdminApp />}
+          {role === "admin" && <AdminApp />}
+          {role === "superadmin" && <SuperAdminApp />}
         </motion.div>
       )}
     </AnimatePresence>

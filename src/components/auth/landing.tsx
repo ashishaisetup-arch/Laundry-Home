@@ -14,6 +14,7 @@ import {
   Package,
   Phone,
   Quote,
+  Crown,
   Shield,
   ShoppingBag,
   Sparkles,
@@ -48,6 +49,7 @@ const ROLE_PRESETS: { id: Role; label: string; icon: React.ComponentType<{ class
   { id: "vendor", label: "Vendor", icon: Store, desc: "Manage operations" },
   { id: "delivery", label: "Delivery Exec", icon: Bike, desc: "Pickups & deliveries" },
   { id: "admin", label: "Admin", icon: Shield, desc: "Control center" },
+  { id: "superadmin", label: "Super Admin", icon: Crown, desc: "Unrestricted access" },
 ];
 
 const FEATURES = [
@@ -578,7 +580,7 @@ function AuthModal({
                 <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 block">
                   I am a…
                 </Label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {ROLE_PRESETS.map((r) => (
                     <button
                       key={r.id}

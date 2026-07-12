@@ -70,6 +70,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "discover", label: "Find Vendors", icon: "MapPin" },
       { id: "booking", label: "Book Pickup", icon: "Package", badge: "New" },
       { id: "orders", label: "My Orders", icon: "ClipboardList", badge: 3 },
+      { id: "subscriptions", label: "Subscription Plans", icon: "Calendar" },
       { id: "payments", label: "Payments & Wallet", icon: "Wallet" },
       { id: "coupons", label: "Coupons & Rewards", icon: "Ticket" },
       { id: "favorites", label: "Favorites", icon: "Heart" },
@@ -120,6 +121,7 @@ export function CustomerApp() {
           />
         )}
         {view === "payments" && <CustomerPayments key="p" walletBalance={walletBalance} />}
+        {view === "subscriptions" && <CustomerSubscriptions key="sub" />}
         {view === "coupons" && <CustomerCoupons key="c" loyaltyPoints={loyaltyPoints} />}
         {view === "favorites" && <CustomerFavorites key="f" onBook={() => setShowBooking(true)} />}
         {view === "reviews" && <CustomerReviews key="r" />}
@@ -143,6 +145,7 @@ function pageTitle(view: string) {
     discover: "Find Vendors",
     booking: "Book Pickup",
     orders: "My Orders",
+    subscriptions: "Subscription Plans",
     payments: "Payments & Wallet",
     coupons: "Coupons & Rewards",
     favorites: "Favorite Vendors",
@@ -155,6 +158,7 @@ function pageSubtitle(view: string) {
     discover: "Discover verified vendors near you",
     booking: "Schedule a pickup in 30 seconds",
     orders: "Track and manage your laundry orders",
+    subscriptions: "Save more with monthly subscription plans",
     payments: "Wallet, payment methods & invoices",
     coupons: "Save more on every order",
     favorites: "Your go-to laundry vendors",
@@ -782,6 +786,166 @@ function CustomerReviews() {
           )}
         </Card>
       ))}
+    </div>
+  );
+}
+
+// ============================================================================
+// Customer Subscriptions
+// ============================================================================
+function CustomerSubscriptions() {
+  const [billing, setBilling] = useState<"monthly" | "yearly">("monthly");
+  const plans = [
+    {
+      name: "Essentials",
+      tagline: "Perfect for daily laundry needs",
+      monthly: 999,
+      yearly: 9990,
+      color: "from-teal-500 to-cyan-600",
+      features: [
+        "20 kg Wash & Fold per month",
+        "10 pieces Wash & Iron per month",
+        "Free pickup & delivery (4x/month)",
+        "Standard 24-48hr delivery",
+        "Loyalty points 2× boost",
+      ],
+      popular: false,
+    },
+    {
+      name: "Premium",
+      tagline: "Best value for families",
+      monthly: 1499,
+      yearly: 14990,
+      color: "from-violet-500 to-purple-600",
+      features: [
+        "40 kg Wash & Fold per month",
+        "25 pieces Wash & Iron per month",
+        "5 pieces Dry Cleaning per month",
+        "Unlimited free pickup & delivery",
+        "Express 12hr delivery (2x/month)",
+        "Loyalty points 3× boost",
+        "Priority customer support",
+      ],
+      popular: true,
+    },
+    {
+      name: "Ultimate",
+      tagline: "Complete laundry freedom",
+      monthly: 2499,
+      yearly: 24990,
+      color: "from-amber-500 to-orange-600",
+      features: [
+        "Unlimited Wash & Fold",
+        "Unlimited Wash & Iron",
+        "15 pieces Dry Cleaning per month",
+        "5 pieces Premium Garment Care",
+        "Unlimited express delivery",
+        "Loyalty points 5× boost + Platinum tier",
+        "Dedicated laundry concierge",
+        "Free garment damage protection",
+      ],
+      popular: false,
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Billing toggle */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-semibold">Choose your plan</h3>
+          <p className="text-sm text-muted-foreground">Save 17% with annual billing. Cancel anytime.</p>
+        </div>
+        <div className="inline-flex rounded-lg bg-muted p-1">
+          <button
+            onClick={() => setBilling("monthly")}
+            className={cn(
+              "rounded-md px-4 py-1.5 text-sm font-medium transition-all",
+              billing === "monthly" ? "bg-background shadow-soft" : "text-muted-foreground"
+            )}
+          >
+            Monthly
+          </button>
+          <button
+            onClick={() => setBilling("yearly")}
+            className={cn(
+              "rounded-md px-4 py-1.5 text-sm font-medium transition-all flex items-center gap-1.5",
+              billing === "yearly" ? "bg-background shadow-soft" : "text-muted-foreground"
+            )}
+          >
+            Yearly
+            <Badge variant="secondary" className="text-[9px] py-0 h-4 bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400">
+              −17%
+            </Badge>
+          </button>
+        </div>
+      </div>
+
+      {/* Plans grid */}
+      <div className="grid md:grid-cols-3 gap-4">
+        {plans.map((plan) => (
+          <motion.div key={plan.name} whileHover={{ y: -4 }} className={cn(plan.popular && "md:-mt-4")}>
+            <Card className={cn(
+              "relative overflow-hidden p-6 shadow-soft transition-shadow",
+              plan.popular ? "shadow-glow ring-2 ring-primary" : "hover:shadow-glow"
+            )}>
+              {plan.popular && (
+                <div className="absolute top-0 right-0 bg-gradient-to-r from-teal-500 to-cyan-600 text-white text-[10px] font-bold px-3 py-1 rounded-bl-lg">
+                  ★ MOST POPULAR
+                </div>
+              )}
+              <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white mb-3", plan.color)}>
+                <Sparkles className="h-5 w-5" />
+              </div>
+              <h4 className="text-lg font-bold">{plan.name}</h4>
+              <p className="text-xs text-muted-foreground">{plan.tagline}</p>
+              <div className="mt-4 mb-4">
+                <span className="text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
+                  ₹{billing === "monthly" ? plan.monthly : plan.yearly}
+                </span>
+                <span className="text-sm text-muted-foreground">/{billing === "monthly" ? "month" : "year"}</span>
+              </div>
+              <Button
+                className={cn("w-full", plan.popular ? "bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90" : "")}
+                variant={plan.popular ? "default" : "outline"}
+              >
+                Choose {plan.name}
+              </Button>
+              <Separator className="my-4" />
+              <ul className="space-y-2">
+                {plan.features.map((f) => (
+                  <li key={f} className="flex items-start gap-2 text-xs">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                    <span>{f}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Comparison / FAQ */}
+      <Card className="p-5 shadow-soft">
+        <h3 className="font-semibold mb-3">Why subscribe?</h3>
+        <div className="grid sm:grid-cols-3 gap-4">
+          {[
+            { icon: Wallet, title: "Save up to 35%", desc: "Compared to pay-per-order pricing" },
+            { icon: Zap, title: "Priority service", desc: "Skip the queue with priority pickups" },
+            { icon: Gift, title: "Bonus rewards", desc: "2×–5× loyalty points boost" },
+          ].map((b) => (
+            <div key={b.title} className="flex items-start gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-50 text-teal-600 dark:bg-teal-950/30">
+                <b.icon className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">{b.title}</p>
+                <p className="text-xs text-muted-foreground">{b.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
     </div>
   );
 }

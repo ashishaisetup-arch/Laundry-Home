@@ -83,6 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
       { id: "orders", label: "Order Management", icon: "ClipboardList", badge: 4 },
       { id: "processing", label: "Laundry Processing", icon: "WashingMachine" },
       { id: "inventory", label: "Garment Inventory", icon: "Boxes" },
+      { id: "staff", label: "Staff Management", icon: "Users" },
       { id: "services", label: "Service Management", icon: "Settings2" },
       { id: "analytics", label: "Analytics", icon: "BarChart3" },
     ],
@@ -115,6 +116,7 @@ export function VendorApp() {
         {view === "orders" && <VendorOrders key="o" />}
         {view === "processing" && <VendorProcessing key="p" />}
         {view === "inventory" && <VendorInventory key="i" />}
+        {view === "staff" && <VendorStaff key="st" />}
         {view === "services" && <VendorServices key="s" />}
         {view === "analytics" && <VendorAnalytics key="a" />}
       </AnimatePresence>
@@ -128,6 +130,7 @@ function pageTitle(view: string) {
     orders: "Order Management",
     processing: "Laundry Processing",
     inventory: "Garment Inventory",
+    staff: "Staff Management",
     services: "Service Management",
     analytics: "Analytics & Reports",
   }[view] || "Dashboard";
@@ -138,6 +141,7 @@ function pageSubtitle(view: string) {
     orders: "Accept, schedule and manage incoming orders",
     processing: "Update each garment through the laundry workflow",
     inventory: "Track every garment with photos and condition notes",
+    staff: "Manage your laundry staff and assignments",
     services: "Configure your offerings, pricing and availability",
     analytics: "Revenue, ratings and operational insights",
   }[view];
@@ -811,6 +815,145 @@ function VendorAnalytics() {
             <p className="text-xs text-muted-foreground">Average rating · 1,195 reviews</p>
           </div>
           <Badge variant="secondary" className="text-emerald-600">Top 5% vendors</Badge>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// Vendor Staff Management
+// ============================================================================
+function VendorStaff() {
+  const staff = [
+    { id: "s1", name: "Lakshmi Devi", role: "Senior Washer", avatar: "LD", shift: "Morning (6 AM – 2 PM)", status: "on-duty", ordersToday: 18, rating: 4.9, joined: "Mar 2023" },
+    { id: "s2", name: "Mohammed Irfan", role: "Ironing Specialist", avatar: "MI", shift: "Morning (6 AM – 2 PM)", status: "on-duty", ordersToday: 22, rating: 4.8, joined: "Jul 2023" },
+    { id: "s3", name: "Sunita Rao", role: "Dry Cleaner", avatar: "SR", shift: "Afternoon (2 PM – 10 PM)", status: "on-duty", ordersToday: 14, rating: 4.7, joined: "Jan 2024" },
+    { id: "s4", name: "Arjun Nair", role: "Quality Inspector", avatar: "AN", shift: "Afternoon (2 PM – 10 PM)", status: "on-duty", ordersToday: 28, rating: 4.9, joined: "Nov 2023" },
+    { id: "s5", name: "Fatima Begum", role: "Packing Specialist", avatar: "FB", shift: "Evening (10 AM – 6 PM)", status: "on-break", ordersToday: 16, rating: 4.6, joined: "Feb 2024" },
+    { id: "s6", name: "Vijay Kumar", role: "Sorting & Tagging", avatar: "VK", shift: "Morning (6 AM – 2 PM)", status: "off-duty", ordersToday: 0, rating: 4.5, joined: "Apr 2024" },
+    { id: "s7", name: "Deepa Singh", role: "Junior Washer", avatar: "DS", shift: "Afternoon (2 PM – 10 PM)", status: "off-duty", ordersToday: 0, rating: 4.4, joined: "May 2024" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard label="Total Staff" value="7" icon={Users} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="On Duty Now" value="5" icon={CheckCircle2} accent="from-emerald-500 to-green-600" />
+        <StatCard label="On Break" value="1" icon={Clock} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Off Duty" value="1" icon={XCircle} accent="from-rose-500 to-pink-600" />
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {["All Staff", "On Duty", "On Break", "Off Duty"].map((f, i) => (
+            <button
+              key={f}
+              className={cn(
+                "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                i === 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/70"
+              )}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <Button size="sm" className="bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-90">
+          <Plus className="h-4 w-4 mr-1.5" />
+          Add Staff
+        </Button>
+      </div>
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {staff.map((s) => (
+          <motion.div key={s.id} whileHover={{ y: -2 }}>
+            <Card className="p-4 shadow-soft hover:shadow-glow transition-shadow">
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <Avatar className="h-11 w-11">
+                      <AvatarFallback className="bg-gradient-to-br from-teal-500 to-cyan-600 text-white text-xs font-semibold">
+                        {s.avatar}
+                      </AvatarFallback>
+                    </Avatar>
+                    {s.status === "on-duty" && (
+                      <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-card" />
+                    )}
+                    {s.status === "on-break" && (
+                      <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-amber-500 ring-2 ring-card" />
+                    )}
+                    {s.status === "off-duty" && (
+                      <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-muted-foreground ring-2 ring-card" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold">{s.name}</p>
+                    <p className="text-[11px] text-muted-foreground">{s.role}</p>
+                  </div>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[9px]",
+                    s.status === "on-duty" && "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30",
+                    s.status === "on-break" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
+                    s.status === "off-duty" && "border-border text-muted-foreground"
+                  )}
+                >
+                  {s.status.replace("-", " ")}
+                </Badge>
+              </div>
+
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-muted-foreground">Shift:</span>
+                  <span className="font-medium">{s.shift}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Package className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-muted-foreground">Orders today:</span>
+                  <span className="font-medium">{s.ordersToday}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Star className="h-3 w-3 text-amber-400 fill-amber-400" />
+                  <span className="text-muted-foreground">Rating:</span>
+                  <span className="font-medium">{s.rating}</span>
+                </div>
+              </div>
+
+              <Separator className="my-3" />
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" className="flex-1 h-7 text-xs">
+                  Assign Order
+                </Button>
+                <Button variant="ghost" size="sm" className="h-7 text-xs">
+                  View Profile
+                </Button>
+              </div>
+            </Card>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Shift schedule */}
+      <Card className="p-5 shadow-soft">
+        <h3 className="font-semibold mb-3">Today&apos;s Shift Schedule</h3>
+        <div className="space-y-2">
+          {[
+            { shift: "Morning (6 AM – 2 PM)", staff: ["Lakshmi Devi", "Mohammed Irfan", "Vijay Kumar"], color: "bg-amber-100 text-amber-700 dark:bg-amber-950/30" },
+            { shift: "Evening (10 AM – 6 PM)", staff: ["Fatima Begum"], color: "bg-teal-100 text-teal-700 dark:bg-teal-950/30" },
+            { shift: "Afternoon (2 PM – 10 PM)", staff: ["Sunita Rao", "Arjun Nair", "Deepa Singh"], color: "bg-violet-100 text-violet-700 dark:bg-violet-950/30" },
+          ].map((s) => (
+            <div key={s.shift} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
+              <Badge variant="outline" className={cn("text-[10px]", s.color)}>{s.shift}</Badge>
+              <div className="flex flex-wrap gap-1.5">
+                {s.staff.map((name) => (
+                  <span key={name} className="text-xs font-medium rounded-full bg-muted px-2 py-0.5">{name}</span>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </Card>
     </div>
