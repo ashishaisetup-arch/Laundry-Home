@@ -62,8 +62,6 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
   const liveLoc = useLiveLocation(order?.deliveryExecutiveId || null);
   const [route, setRoute] = useState<{ coordinates: [number, number][]; distance: number; duration: number } | null>(null);
 
-  const patchOrder = useAppStore((s) => s.patchOrder);
-
   useEffect(() => {
     if (!orderId || loading || !order) return;
     const origin = liveLoc?.lat != null ? { lat: liveLoc.lat, lng: liveLoc.lng } : null;
@@ -98,13 +96,15 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
   const isCompleted = ["completed", "delivered"].includes(order.status) && !cancelled;
   const milestoneIndices = [0, Math.floor(ORDER_STAGE_FLOW.length / 3), Math.floor(ORDER_STAGE_FLOW.length * 2 / 3), ORDER_STAGE_FLOW.length - 1];
 
+  const markOrderCancelled = useAppStore((s) => s.markOrderCancelled);
+
   const handleCancel = async () => {
     try {
       await api.post(`/api/orders/${orderId}/cancel`);
       setCancelled(true);
-      // Immediately update the shared store so all views reflect cancellation
-      patchOrder(orderId, { status: "cancelled", paymentStatus: "refunded" });
+      markOrderCancelled(orderId);
       onCancel?.();
+      onClose();
       toast.success(`Order ${order.code || order.id?.slice(0, 8)} cancelled`, {
         description: `Refund of ${formatINRDecimal(order.total || 0)} will be processed in 3-5 business days.`,
       });

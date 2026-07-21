@@ -58,6 +58,7 @@ interface AppState {
   orders: any[];
   setOrders: (orders: any[]) => void;
   patchOrder: (id: string, updates: Record<string, unknown>) => void;
+  markOrderCancelled: (id: string) => void;
 }
 
 
@@ -465,6 +466,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       orders: s.orders.map((o: any) =>
         o.id === id ? { ...o, ...updates } : o
+      ),
+    }));
+  },
+  markOrderCancelled: (id: string) => {
+    set((s) => ({
+      orders: s.orders.map((o: any) =>
+        o.id === id ? { ...o, status: "cancelled", paymentStatus: "refunded" } : o
       ),
     }));
   },
