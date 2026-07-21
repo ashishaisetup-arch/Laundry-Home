@@ -46,6 +46,7 @@ import { api } from "@/lib/api/client";
 import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 import { cn, formatINRDecimal, formatDateTime } from "@/lib/utils";
 import { toast } from "sonner";
+import { useAppStore } from "@/lib/store";
 import { ReviewDialog } from "./review-dialog";
 
 interface OrderTrackingProps {
@@ -95,10 +96,14 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
   const isCompleted = ["completed", "delivered"].includes(order.status) && !cancelled;
   const milestoneIndices = [0, Math.floor(ORDER_STAGE_FLOW.length / 3), Math.floor(ORDER_STAGE_FLOW.length * 2 / 3), ORDER_STAGE_FLOW.length - 1];
 
+  const patchOrder = useAppStore((s) => s.patchOrder);
+
   const handleCancel = async () => {
     try {
       await api.post(`/api/orders/${orderId}/cancel`);
       setCancelled(true);
+      // Immediately update the shared store so all views reflect cancellation
+      patchOrder(orderId, { status: "cancelled", paymentStatus: "refunded" });
       onCancel?.();
       toast.success(`Order ${order.code || order.id?.slice(0, 8)} cancelled`, {
         description: `Refund of ${formatINRDecimal(order.total || 0)} will be processed in 3-5 business days.`,

@@ -68,7 +68,14 @@ export function CustomerApp() {
   const [trackingOrder, setTrackingOrder] = useState<string | null>(null);
   const [discoverArea, setDiscoverArea] = useState<string | null>(null);
   const [bookingLocation, setBookingLocation] = useState<{lat: number; lng: number} | null>(null);
-  const { data: orders, refetch: refetchOrders } = useOrders(userId ? { customerId: userId } : undefined);
+  const { data: ordersHook, refetch: refetchOrders } = useOrders(userId ? { customerId: userId } : undefined);
+  const setOrders = useAppStore((s) => s.setOrders);
+  const patchOrder = useAppStore((s) => s.patchOrder);
+  const orders = useAppStore((s) => s.orders);
+
+  useEffect(() => {
+    if (ordersHook) setOrders(ordersHook);
+  }, [ordersHook, setOrders]);
 
   // Browser back button → always go to dashboard
   useEffect(() => {
@@ -140,7 +147,7 @@ export function CustomerApp() {
     >
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
-          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} orders={orders || []} />
+          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} />
         )}
         {view === "profile" && <CustomerProfile key="pf" />}
         {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
@@ -212,14 +219,12 @@ function CustomerDashboard({
   onTrack,
   onBook,
   onNavigate,
-  orders,
 }: {
   onTrack: (id: string) => void;
   onBook: () => void;
   onNavigate: (view: string) => void;
-  orders: any[];
 }) {
-  const { userName, walletBalance, loyaltyPoints } = useAppStore();
+  const { userName, walletBalance, loyaltyPoints, orders } = useAppStore();
   const firstName = userName.split(" ")[0];
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
 

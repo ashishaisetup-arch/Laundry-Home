@@ -53,6 +53,11 @@ interface AppState {
   walletBalance: number;
   loyaltyPoints: number;
   fetchWallet: () => Promise<void>;
+
+  // Orders
+  orders: any[];
+  setOrders: (orders: any[]) => void;
+  patchOrder: (id: string, updates: Record<string, unknown>) => void;
 }
 
 
@@ -451,6 +456,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         set({ walletBalance: data.balance || 0, loyaltyPoints: data.loyaltyPoints || 0 });
       }
     } catch {}
+  },
+
+  // Orders
+  orders: [],
+  setOrders: (orders: any[]) => set({ orders }),
+  patchOrder: (id: string, updates: Record<string, unknown>) => {
+    set((s) => ({
+      orders: s.orders.map((o: any) =>
+        o.id === id ? { ...o, ...updates } : o
+      ),
+    }));
   },
 
   setupRealtimeNotifications: () => {
