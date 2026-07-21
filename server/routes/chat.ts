@@ -80,19 +80,19 @@ router.post("/ask", async (req: Request, res: Response) => {
         reply = "No vendors are currently available in your area. Check back soon!";
       }
     } else if (/(price|cost|rate|how much|pricing|charges)/.test(lower)) {
-      const { data: services } = await admin.from("services").select("name, base_price, unit").limit(10);
+      const { data: services } = await admin.from("services").select("name, base_price, pricing_type").limit(10);
       if (services && services.length > 0) {
         reply = `Our pricing:\n${services.map((s: any) =>
-          `• **${s.name}** — ₹${s.base_price}/${s.unit || "item"}`
+          `• **${s.name}** — ₹${s.base_price}/${s.pricing_type === "per_kg" ? "kg" : "pc"}`
         ).join("\n")}\n\n*Prices may vary by vendor. Check the booking page for exact quotes.*`;
       } else {
         reply = "Visit the **Book Pickup** page to see service pricing in your area.";
       }
     } else if (/(wallet|balance|money|payment|pay)/.test(lower)) {
-      const { data: wallets } = await admin.from("wallets").select("balance, points").eq("user_id", user.id).limit(1);
-      const wallet = wallets?.[0];
+      const { data: profiles } = await admin.from("user_profiles").select("wallet_balance, loyalty_points").eq("id", user.id).limit(1);
+      const wallet = profiles?.[0];
       if (wallet) {
-        reply = `Your wallet balance is **₹${wallet.balance || 0}** with **${wallet.points || 0} loyalty points**.`;
+        reply = `Your wallet balance is **₹${wallet.wallet_balance || 0}** with **${wallet.loyalty_points || 0} loyalty points**.`;
       } else {
         reply = "You don't have a wallet yet. It will be created when you make your first payment.";
       }

@@ -7,8 +7,8 @@ router.get("/", async (req: Request, res: Response) => {
   try {
     const vendorId = req.query.vendorId as string;
     const admin = createAdminClient();
-    let query = admin.from("garment_inventory").select("*").order("name");
-    if (vendorId) query = query.eq("vendor_id", vendorId);
+    let query = admin.from("garment_inventory").select("*, orders!inner(vendor_id)");
+    if (vendorId) query = query.eq("orders.vendor_id", vendorId);
     const { data, error } = await query;
     if (error) { res.status(500).json({ error: error.message }); return; }
     res.json(data);

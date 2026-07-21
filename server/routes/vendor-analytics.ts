@@ -141,7 +141,7 @@ router.get("/stats", async (req: Request, res: Response) => {
         .neq("status", "cancelled"),
       supabase
         .from("reviews")
-        .select("rating")
+        .select("overall")
         .eq("vendor_id", vendorId),
       supabase
         .from("orders")
@@ -169,12 +169,12 @@ router.get("/stats", async (req: Request, res: Response) => {
     const reviews = reviewsRes.data || [];
     const avgRating =
       reviews.length > 0
-        ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length)
+        ? (reviews.reduce((s, r) => s + r.overall, 0) / reviews.length)
         : 0;
 
     const ratingBuckets: Record<number, number> = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
     for (const r of reviews) {
-      const star = Math.round(r.rating);
+      const star = Math.round(r.overall);
       if (star >= 1 && star <= 5) ratingBuckets[star]++;
     }
     const totalReviews = reviews.length;
@@ -205,7 +205,7 @@ router.get("/inventory", async (req: Request, res: Response) => {
     const vendorId = req.query.vendorId as string;
     if (!vendorId) { res.status(400).json({ error: "vendorId required" }); return; }
     const supabase = createAdminClient();
-    const { data } = await supabase.from("garment_inventory").select("*").eq("vendor_id", vendorId);
+    const { data } = await supabase.from("garment_inventory").select("*, orders!inner(vendor_id)").eq("orders.vendor_id", vendorId);
     res.json(data || []);
   } catch (err: any) {
     res.status(500).json({ error: err.message });

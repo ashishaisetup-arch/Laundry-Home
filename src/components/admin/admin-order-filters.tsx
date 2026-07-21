@@ -63,7 +63,7 @@ const STAGES = [
 
 export function AdminOrderFilters({ filters, onChange, vendors, deliveryExecutives }: Props) {
   const [localSearch, setLocalSearch] = useState(filters.search);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
 

@@ -13,8 +13,12 @@ export function useRealtime(
   useEffect(() => {
     if (!enabled) return;
     const supabase = createClient();
+    const channelName = `realtime-${table}-${filter || "all"}`;
+    const existing = supabase.getChannels().find(c => c.topic === channelName);
+    if (existing) return;
+
     const channel = supabase
-      .channel(`realtime-${table}-${filter || "all"}-${Math.random().toString(36).slice(2, 8)}`)
+      .channel(channelName)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table, filter },

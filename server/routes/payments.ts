@@ -60,14 +60,12 @@ router.post("/verify", async (req: Request, res: Response) => {
     }
 
     const admin = createAdminClient();
-    const update: Record<string, any> = {
-      payment_status: "paid",
-      razorpay_payment_id,
-      razorpay_order_id,
-    };
 
     if (order_id) {
-      await admin.from("orders").update(update).eq("id", order_id);
+      await admin.from("orders").update({
+        payment_status: "paid",
+        payment_details: { razorpay_payment_id, razorpay_order_id },
+      }).eq("id", order_id);
     }
 
     res.json({ success: true, payment_id: razorpay_payment_id });
@@ -86,7 +84,15 @@ router.post("/wallet/add", async (req: Request, res: Response) => {
     if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
 
     const admin = createAdminClient();
-    await admin.rpc("add_wallet_funds" as any, { user_id: user.id, amount });
+
+    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
+    const currentBalance = (profile as any)?.wallet_balance || 0;
+
+    const { error: updateError } = await admin.from("user_profiles").update({
+      wallet_balance: currentBalance + amount,
+    }).eq("id", user.id);
+
+    if (updateError) { res.status(500).json({ error: updateError.message }); return; }
 
     await admin.from("wallet_transactions").insert({
       user_id: user.id,
@@ -95,8 +101,8 @@ router.post("/wallet/add", async (req: Request, res: Response) => {
       description: "Wallet top-up via payment gateway",
     });
 
-    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
-    res.json({ balance: profile?.wallet_balance || 0 });
+    const { data: updatedProfile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
+    res.json({ balance: (updatedProfile as any)?.wallet_balance || currentBalance + amount });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

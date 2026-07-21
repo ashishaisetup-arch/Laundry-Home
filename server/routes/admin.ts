@@ -18,7 +18,7 @@ router.get("/kpis", async (_req: Request, res: Response) => {
       supabase.from("user_profiles").select("id", { count: "exact", head: true }),
       supabase.from("vendors").select("id, verified, is_open"),
       supabase.from("orders").select("total, status, created_at"),
-      supabase.from("reviews").select("rating"),
+      supabase.from("reviews").select("overall"),
       supabase.from("orders").select("id", { count: "exact", head: true }).gte("created_at", todayStr),
     ]);
 
@@ -42,7 +42,7 @@ router.get("/kpis", async (_req: Request, res: Response) => {
 
     const reviews = reviewsRes.data || [];
     const avgRating = reviews.length > 0
-      ? (reviews.reduce((s: number, r: any) => s + r.rating, 0) / reviews.length).toFixed(2)
+      ? (reviews.reduce((s: number, r: any) => s + r.overall, 0) / reviews.length).toFixed(2)
       : "0.00";
 
     const todayOrders = todayOrdersRes.count || 0;

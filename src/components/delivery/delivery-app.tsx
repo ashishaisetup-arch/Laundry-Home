@@ -586,9 +586,9 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
   };
 
   // Determine which status steps to show based on type and actual status
-  const steps = useMemo(() => {
+  const steps: (typeof PICKUP_STEPS[number] & { done: boolean; available: boolean })[] = useMemo(() => {
     const allSteps = type === "pickup" ? PICKUP_STEPS : DELIVERY_STEPS;
-    if (!selectedTask) return allSteps;
+    if (!selectedTask) return allSteps.map((s) => ({ ...s, done: false, available: false }));
     const currentIdx = statusIndex(selectedTask.status);
     return allSteps.map((s) => {
       const stepIdx = statusIndex(s.id);
