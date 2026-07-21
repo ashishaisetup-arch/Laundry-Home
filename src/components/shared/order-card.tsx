@@ -1,7 +1,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { ChevronRight, Clock, MapPin, Package, XCircle } from "lucide-react";
+import { ChevronRight, Clock, MapPin, Package, RefreshCw, XCircle } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,15 +28,19 @@ interface OrderCardProps {
   className?: string;
   showVendor?: boolean;
   onCancel?: (orderId: string) => void;
+  onReorder?: (orderId: string) => void;
 }
 
-export function OrderCard({ order, onClick, className, showVendor = true, onCancel }: OrderCardProps) {
+export function OrderCard({ order, onClick, className, showVendor = true, onCancel, onReorder }: OrderCardProps) {
   const [cancelOpen, setCancelOpen] = useState(false);
   const currentStage = ORDER_STAGE_FLOW[order.currentStageIndex];
   const totalStages = ORDER_STAGE_FLOW.length;
   const progress = ((order.currentStageIndex + 1) / totalStages) * 100;
 
   const isCancellable = !["completed", "cancelled", "delivered", "out_for_delivery"].includes(order.status);
+
+  const isReordable = ["completed", "delivered", "out_for_delivery"].includes(order.status);
+  const isCompleted = ["completed", "delivered", "out_for_delivery", "cancelled"].includes(order.status);
 
   const handleCancel = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -47,6 +51,15 @@ export function OrderCard({ order, onClick, className, showVendor = true, onCanc
       toast.success(`Order ${order.code} cancelled`, {
         description: "Refund will be processed within 3-5 business days.",
       });
+    }
+  };
+
+  const handleReorder = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onReorder) {
+      onReorder(order.id);
+    } else {
+      toast.success(`Reordering ${order.code}...`);
     }
   };
 
@@ -185,6 +198,17 @@ export function OrderCard({ order, onClick, className, showVendor = true, onCanc
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
+              )}
+              {isReordable && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                  onClick={handleReorder}
+                >
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                  Reorder
+                </Button>
               )}
               <Button variant="ghost" size="sm" className="h-7 text-xs gap-1">
                 Track
