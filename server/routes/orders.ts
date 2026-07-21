@@ -522,4 +522,46 @@ router.post("/:id/cancel", async (req: Request, res: Response) => {
   }
 });
 
+// Reorder — duplicate a previous order
+router.post("/reorder/:id", async (req: Request, res: Response) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const { id } = req.params;
+    const { data: original, error: fetchError } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .single();
+
+    if (fetchError || !original) return res.status(404).json({ error: "Order not found" });
+
+    const newOrder = {
+      user_id: user.id,
+      vendor_id: original.vendor_id,
+      pickup_area: original.pickup_area,
+      pickup_address: original.pickup_address,
+      delivery_area: original.delivery_area,
+      delivery_address: original.delivery_address,
+      scheduled_pickup: new Date(Date.now() + 86400000).toISOString(), // tomorrow
+      scheduled_delivery: null,
+      notes: original.notes,
+      total: original.total,
+      status: "pending",
+      current_stage_index: 0,
+      garment_count: original.garment_count,
+    };
+
+    const { data, error } = await supabase.from("orders").insert(newOrder).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    res.status(201).json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
