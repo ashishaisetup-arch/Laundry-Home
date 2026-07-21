@@ -73,6 +73,8 @@ import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { StatCard } from "@/components/shared/stat-card";
 import { useOrders, useVendors, useAdminKpis, useAdminAnalytics, useSupportTickets, useCampaigns, useReports } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
+import { ProfilePage } from "@/components/shared/profile-page";
+import { SettingsPage } from "@/components/shared/settings-page";
 import { useRealtime } from "@/lib/hooks/useRealtime";
 import type { Vendor } from "@/lib/types";
 import { AdminOrderDetail } from "@/components/admin/admin-order-detail";
@@ -130,6 +132,8 @@ export function AdminApp() {
         {view === "marketing" && <AdminMarketing key="m" />}
         {view === "reports" && <AdminReports key="r" />}
         {view === "ai" && <AdminAI key="a" />}
+        {view === "profile" && <ProfilePage key="profile" />}
+        {view === "settings" && <SettingsPage key="settings" />}
       </AnimatePresence>
     </AppShell>
   );
@@ -145,11 +149,15 @@ function pageTitle(view: string) {
     marketing: "Marketing & Campaigns",
     reports: "Reports & Analytics",
     ai: "AI Features",
+    profile: "My Profile",
+    settings: "Settings",
   }[view] || "Dashboard";
 }
 function pageSubtitle(view: string) {
   return {
     dashboard: "Centralised view of the entire Laundry Home ecosystem",
+    profile: "Manage your account details",
+    settings: "Account and app preferences",
     vendors: "Onboard, verify and manage vendor partners",
     orders: "Monitor every order in real time across all cities",
     commission: "Configure commission rules and track settlements",

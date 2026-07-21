@@ -39,6 +39,8 @@ import { StatCard } from "@/components/shared/stat-card";
 import { LeafletMap } from "@/components/shared/leaflet-map";
 import { useDeliveryTasks, useOrders } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
+import { ProfilePage } from "@/components/shared/profile-page";
+import { SettingsPage } from "@/components/shared/settings-page";
 import { useGeolocation } from "@/lib/hooks/useGeolocation";
 import { useDeliveryLocation } from "@/lib/hooks/useDeliveryLocation";
 import { useAppStore } from "@/lib/store";
@@ -115,6 +117,8 @@ export function DeliveryApp() {
     pickups: "Today's Pickups",
     deliveries: "Today's Deliveries",
     earnings: "Earnings",
+    profile: "My Profile",
+    settings: "Settings",
   } as Record<string, string>), []);
 
   const pageSubtitle = useMemo(() => ({
@@ -122,6 +126,8 @@ export function DeliveryApp() {
     pickups: "Pickup tasks assigned to you today",
     deliveries: "Delivery tasks assigned to you today",
     earnings: "Track your earnings and payouts",
+    profile: "Manage your account details",
+    settings: "Account and app preferences",
   } as Record<string, string>), [userName]);
 
   return (
@@ -137,6 +143,8 @@ export function DeliveryApp() {
         {view === "pickups" && <DeliveryTasks key="pickups" type="pickup" />}
         {view === "deliveries" && <DeliveryTasks key="deliveries" type="delivery" />}
         {view === "earnings" && <DeliveryEarnings key="earnings" />}
+        {view === "profile" && <ProfilePage key="profile" />}
+        {view === "settings" && <SettingsPage key="settings" />}
       </AnimatePresence>
     </AppShell>
   );

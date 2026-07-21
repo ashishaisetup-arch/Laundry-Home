@@ -65,7 +65,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { ErrorState } from "@/components/shared/error-state";
 import { DashboardSkeleton, OrderCardSkeleton } from "@/components/shared/skeleton-card";
 import { CustomerDashboard } from "./customer-dashboard";
-
+import { SettingsPage } from "@/components/shared/settings-page";
 export function CustomerApp() {
   const { userId, walletBalance, loyaltyPoints } = useAppStore();
   const [view, setView, handleNavigateFromRouter] = useRouterView("dashboard");
@@ -154,6 +154,7 @@ export function CustomerApp() {
           <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} onCancel={handleCancelOrder} />
         )}
         {view === "profile" && <CustomerProfile key="pf" />}
+        {view === "settings" && <SettingsPage key="set" />}
         {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
         {view === "orders" && (
           ordersLoading ? <div className="grid md:grid-cols-2 gap-4"><OrderCardSkeleton /><OrderCardSkeleton /></div> : ordersError ? <ErrorState message={ordersError} onRetry={refetchOrders} /> :
@@ -197,12 +198,14 @@ function pageTitle(view: string) {
     coupons: "Coupons & Rewards",
     favorites: "Favorite Vendors",
     reviews: "My Reviews",
+    settings: "Settings",
   }[view] || "Dashboard";
 }
 function pageSubtitle(view: string, discoverArea?: string | null) {
   const subtitles: Record<string, string> = {
     dashboard: "Your laundry at a glance",
     profile: "Manage your personal details",
+    settings: "Account and app preferences",
     discover: "Discover verified vendors near you",
     booking: "Schedule a pickup in 30 seconds",
     orders: "Track and manage your laundry orders",

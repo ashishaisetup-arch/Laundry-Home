@@ -55,6 +55,8 @@ import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { useOrderStages, useAuditLogs, useFeatureFlags, useApiKeys, useWebhooks, useUsers, useSystemConfig, useVendors, useRbac } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
+import { ProfilePage } from "@/components/shared/profile-page";
+import { SettingsPage } from "@/components/shared/settings-page";
 import type { AdminUser } from "@/lib/hooks/useUsers";
 import type { SystemConfig } from "@/lib/hooks/useSystemConfig";
 import type { RolePermission } from "@/lib/hooks/useRbac";
@@ -120,6 +122,8 @@ export function SuperAdminApp() {
         {view === "features" && <FeatureFlags key="features" />}
         {view === "integrations" && <Integrations key="integrations" />}
         {view === "system" && <SystemConfig key="system" />}
+        {view === "profile" && <ProfilePage key="profile" />}
+        {view === "settings" && <SettingsPage key="settings" />}
       </AnimatePresence>
 
       <VendorOnboarding open={showOnboarding} onClose={() => setShowOnboarding(false)} />
@@ -137,11 +141,15 @@ function pageTitle(view: string) {
     features: "Feature Flags",
     integrations: "API & Webhooks",
     system: "System Configuration",
+    profile: "My Profile",
+    settings: "Settings",
   }[view] || "Super Admin";
 }
 function pageSubtitle(view: string) {
   return {
     overview: "Super Admin · Full platform access",
+    profile: "Manage your account details",
+    settings: "Account and app preferences",
     vendors: "All platform vendors · KYC status, approvals and management",
     rbac: "Configure role-based access control across all modules",
     users: "Manage platform users, staff and administrators",

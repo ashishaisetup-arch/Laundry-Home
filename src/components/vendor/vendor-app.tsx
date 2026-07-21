@@ -78,6 +78,8 @@ import { ServiceIcon } from "@/components/shared/service-icon";
 import { OrderTimeline } from "@/components/shared/order-timeline";
 import { useOrders, useServices, useStaff, useGarments, useVendor } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
+import { ProfilePage } from "@/components/shared/profile-page";
+import { SettingsPage } from "@/components/shared/settings-page";
 import { useVendorWeeklyRevenue, useVendorServiceRevenue, useVendorInventory, useVendorDashboardStats } from "@/lib/hooks/useVendorAnalytics";
 import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 import type { Order } from "@/lib/types";
@@ -131,6 +133,8 @@ export function VendorApp() {
           {view === "staff" && <VendorStaff key="staff" />}
           {view === "services" && <VendorServices key="services" />}
           {view === "analytics" && <VendorAnalytics key="analytics" />}
+          {view === "profile" && <ProfilePage key="profile" />}
+          {view === "settings" && <SettingsPage key="settings" />}
         </AnimatePresence>
       </AppShell>
 
@@ -164,11 +168,15 @@ function pageTitle(view: string) {
     staff: "Staff Management",
     services: "Service Management",
     analytics: "Analytics & Reports",
+    profile: "My Profile",
+    settings: "Settings",
   }[view] || "Dashboard";
 }
 function pageSubtitle(view: string) {
   return {
     dashboard: "FreshFold Laundry Co. · Indiranagar, Bengaluru",
+    profile: "Manage your account details",
+    settings: "Account and app preferences",
     orders: "Accept, schedule and manage incoming orders",
     processing: "Update each garment through the laundry workflow",
     inventory: "Track every garment with photos and condition notes",
