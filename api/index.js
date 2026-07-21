@@ -551,18 +551,20 @@ var router3 = (0, import_express3.Router)();
 router3.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
+    const deliveryExecutiveId = req.query.deliveryExecutiveId;
     const status = req.query.status;
     const limit = parseInt(req.query.limit) || 20;
     const isAdminQuery = req.query.admin === "true";
     const user = req.user;
     let customerId = req.query.customerId;
-    if (!customerId && user && !vendorId && !isAdminQuery) customerId = user.id;
+    if (!customerId && user && !vendorId && !deliveryExecutiveId && !isAdminQuery) customerId = user.id;
     const admin = createAdminClient();
     let query = admin.from("orders").select("*").limit(limit).order("created_at", { ascending: false });
     if (customerId) query = query.eq("customer_id", customerId);
     if (vendorId) query = query.eq("vendor_id", vendorId);
+    if (deliveryExecutiveId) query = query.eq("delivery_executive_id", deliveryExecutiveId);
     if (status) query = query.eq("status", status);
-    console.log("[orders] GET", { vendorId, customerId, status, limit, isAdminQuery });
+    console.log("[orders] GET", { vendorId, deliveryExecutiveId, customerId, status, limit, isAdminQuery });
     const { data, error } = await query;
     if (error) {
       console.error("[orders] DB error:", error.message);
@@ -874,7 +876,7 @@ router3.post("/:id/cancel", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
-    const { data: order } = await supabase.from("orders").select("status").eq("id", id).single();
+    const { data: order } = await supabase.from("orders").select("status, customer_id, vendor_id, delivery_executive_id, code, total").eq("id", id).single();
     if (!order) {
       res.status(404).json({ error: "Order not found" });
       return;
@@ -888,6 +890,35 @@ router3.post("/:id/cancel", async (req, res) => {
     if (error) {
       res.status(400).json({ error: error.message });
       return;
+    }
+    await supabase.from("delivery_tasks").update({ status: "cancelled" }).eq("order_id", id).in("status", ["pending", "heading_to_pickup", "picked_up", "heading_to_vendor", "reached_vendor", "ready_for_delivery", "out_for_delivery"]);
+    await supabase.from("notifications").insert({
+      user_id: order.customer_id,
+      type: "payment",
+      title: "Order Cancelled",
+      body: `Order #${order.code} has been cancelled. Refund of \u20B9${order.total || 0} will be processed in 3-5 business days.`,
+      channel: "push"
+    });
+    if (order.vendor_id) {
+      const { data: vendor } = await supabase.from("vendors").select("owner_id").eq("id", order.vendor_id).single();
+      if (vendor?.owner_id) {
+        await supabase.from("notifications").insert({
+          user_id: vendor.owner_id,
+          type: "booking",
+          title: "Order Cancelled",
+          body: `Order #${order.code} was cancelled by the customer.`,
+          channel: "push"
+        });
+      }
+    }
+    if (order.delivery_executive_id) {
+      await supabase.from("notifications").insert({
+        user_id: order.delivery_executive_id,
+        type: "delivery",
+        title: "Delivery Cancelled",
+        body: `Order #${order.code} has been cancelled. No delivery needed.`,
+        channel: "push"
+      });
     }
     res.json(data);
   } catch (err) {

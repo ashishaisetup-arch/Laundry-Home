@@ -2,7 +2,7 @@ import type { Order } from "@/lib/types";
 import { useFetch } from "./use-fetch";
 import { useRealtime } from "./useRealtime";
 
-export function useOrders(params?: { vendorId?: string | null; customerId?: string; status?: string; limit?: number; admin?: string }) {
+export function useOrders(params?: { vendorId?: string | null; customerId?: string; status?: string; limit?: number; admin?: string; deliveryExecutiveId?: string }) {
   const cleanParams = params
     ? Object.fromEntries(Object.entries(params).filter(([_, v]) => v != null && v !== ""))
     : undefined;
@@ -15,6 +15,9 @@ export function useOrders(params?: { vendorId?: string | null; customerId?: stri
 
   const vendorFilter = params?.vendorId ? `vendor_id=eq.${params.vendorId}` : undefined;
   useRealtime("orders", vendorFilter, result.refetch, !!params?.vendorId);
+
+  const execFilter = params?.deliveryExecutiveId ? `delivery_executive_id=eq.${params.deliveryExecutiveId}` : undefined;
+  useRealtime("orders", execFilter, result.refetch, !!params?.deliveryExecutiveId);
 
   return result;
 }

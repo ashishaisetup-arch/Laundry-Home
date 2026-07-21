@@ -37,7 +37,7 @@ import { Input } from "@/components/ui/input";
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { StatCard } from "@/components/shared/stat-card";
 import { LeafletMap } from "@/components/shared/leaflet-map";
-import { useDeliveryTasks } from "@/lib/hooks";
+import { useDeliveryTasks, useOrders } from "@/lib/hooks";
 import { useGeolocation } from "@/lib/hooks/useGeolocation";
 import { useDeliveryLocation } from "@/lib/hooks/useDeliveryLocation";
 import { useAppStore } from "@/lib/store";
@@ -91,6 +91,7 @@ export function DeliveryApp() {
   const [view, setView] = useState("dashboard");
   const { userName, userId } = useAppStore();
   const { data: allTasks } = useDeliveryTasks(userId);
+  useOrders(userId ? { deliveryExecutiveId: userId } : undefined);
   const tasks = allTasks || [];
 
   const pickupCount = useMemo(() => tasks.filter((t) => t.type === "pickup").length, [tasks]);
