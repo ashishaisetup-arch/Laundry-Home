@@ -160,7 +160,7 @@ export function CustomerApp() {
     >
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
-          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} />
+          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} onCancel={handleCancelOrder} />
         )}
         {view === "profile" && <CustomerProfile key="pf" />}
         {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
@@ -233,10 +233,12 @@ function CustomerDashboard({
   onTrack,
   onBook,
   onNavigate,
+  onCancel,
 }: {
   onTrack: (id: string) => void;
   onBook: () => void;
   onNavigate: (view: string) => void;
+  onCancel?: (orderId: string) => void;
 }) {
   const { userName, walletBalance, loyaltyPoints, orders } = useAppStore();
   const firstName = userName.split(" ")[0];
@@ -317,7 +319,7 @@ function CustomerDashboard({
         </div>
         <div className="grid md:grid-cols-2 gap-4">
           {activeOrders.slice(0, 2).map((order) => (
-            <OrderCard key={order.id} order={order} onClick={() => onTrack(order.id)} onCancel={handleCancelOrder} />
+            <OrderCard key={order.id} order={order} onClick={() => onTrack(order.id)} onCancel={onCancel} />
           ))}
         </div>
       </div>
