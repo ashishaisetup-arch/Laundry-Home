@@ -20,6 +20,7 @@ node_modules
 # production
 /build
 /dist
+api/index.js
 
 # misc
 .DS_Store

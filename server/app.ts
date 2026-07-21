@@ -1,7 +1,3 @@
-import path from "path";
-import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -90,13 +86,5 @@ app.use("/api/routing", routingRouter);
 app.use("/api/delivery/location", deliveryLocationRouter);
 app.use("/api/vendor/onboarding", vendorOnboardingRouter);
 app.use("/api/payments", paymentsRouter);
-
-// Serve static frontend
-const distPath = path.resolve(__dirname, "../dist");
-app.use(express.static(distPath));
-app.get("/", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
-app.get("/{*any}", (_req, res) => {
-  res.sendFile(path.join(distPath, "index.html"));
-});
 
 export default app;
