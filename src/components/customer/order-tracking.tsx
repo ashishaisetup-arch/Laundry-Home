@@ -51,9 +51,10 @@ import { ReviewDialog } from "./review-dialog";
 interface OrderTrackingProps {
   orderId: string | null;
   onClose: () => void;
+  onCancel?: () => void;
 }
 
-export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
+export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps) {
   const [cancelled, setCancelled] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const { data: order, loading } = useOrder(orderId || "");
@@ -98,6 +99,7 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
     try {
       await api.post(`/api/orders/${orderId}/cancel`);
       setCancelled(true);
+      onCancel?.();
       toast.success(`Order ${order.code || order.id?.slice(0, 8)} cancelled`, {
         description: `Refund of ${formatINRDecimal(order.total || 0)} will be processed in 3-5 business days.`,
       });

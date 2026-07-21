@@ -464,6 +464,7 @@ router.post("/:id/cancel", async (req: Request, res: Response) => {
       .select()
       .single();
     if (error) { res.status(400).json({ error: error.message }); return; }
+
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });

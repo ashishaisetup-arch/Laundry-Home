@@ -166,6 +166,7 @@ export function CustomerApp() {
       <OrderTracking
         orderId={trackingOrder}
         onClose={() => setTrackingOrder(null)}
+        onCancel={refetchOrders}
       />
     </AppShell>
   );
