@@ -140,7 +140,7 @@ export function CustomerApp() {
     >
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
-          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} />
+          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} orders={orders || []} />
         )}
         {view === "profile" && <CustomerProfile key="pf" />}
         {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
@@ -212,14 +212,15 @@ function CustomerDashboard({
   onTrack,
   onBook,
   onNavigate,
+  orders,
 }: {
   onTrack: (id: string) => void;
   onBook: () => void;
   onNavigate: (view: string) => void;
+  orders: any[];
 }) {
-  const { userId, userName, walletBalance, loyaltyPoints } = useAppStore();
+  const { userName, walletBalance, loyaltyPoints } = useAppStore();
   const firstName = userName.split(" ")[0];
-  const { data: orders } = useOrders(userId ? { customerId: userId } : undefined);
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
 
   return (
