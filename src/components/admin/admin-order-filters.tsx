@@ -64,16 +64,18 @@ const STAGES = [
 export function AdminOrderFilters({ filters, onChange, vendors, deliveryExecutives }: Props) {
   const [localSearch, setLocalSearch] = useState(filters.search);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
 
   const update = useCallback((patch: Partial<OrderFilterValues>) => {
-    onChange({ ...filters, ...patch });
-  }, [filters, onChange]);
+    onChange({ ...filtersRef.current, ...patch });
+  }, [onChange]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      if (localSearch !== filters.search) {
-        onChange({ ...filters, search: localSearch });
+      if (localSearch !== filtersRef.current.search) {
+        onChange({ ...filtersRef.current, search: localSearch });
       }
     }, 300);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };

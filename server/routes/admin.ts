@@ -190,7 +190,9 @@ router.get("/orders", async (req: Request, res: Response) => {
     if (req.query.status) {
       const status = req.query.status as string;
       if (status === "active") {
-        query = query.not("status", "in", "(\"completed\",\"cancelled\")");
+        query = query.not("status", "eq", "completed").not("status", "eq", "cancelled");
+      } else if (status === "delayed") {
+        query = query.or("ai_prediction->>delayRisk.eq.high,ai_prediction->>delayRisk.eq.medium");
       } else {
         query = query.eq("status", status);
       }
