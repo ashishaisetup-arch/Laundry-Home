@@ -1600,10 +1600,51 @@ router13.get("/analytics", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router13.get("/orders", async (_req, res) => {
+router13.get("/orders", async (req, res) => {
   try {
     const supabase = createAdminClient();
-    const { data, error } = await supabase.from("orders").select("*").order("created_at", { ascending: false }).limit(200);
+    let query = supabase.from("orders").select("*");
+    if (req.query.status) {
+      const status = req.query.status;
+      if (status === "active") {
+        query = query.not("status", "in", '("completed","cancelled")');
+      } else {
+        query = query.eq("status", status);
+      }
+    }
+    if (req.query.vendor_id) {
+      query = query.eq("vendor_id", req.query.vendor_id);
+    }
+    if (req.query.delivery_executive_id) {
+      query = query.eq("delivery_executive_id", req.query.delivery_executive_id);
+    }
+    if (req.query.payment_status) {
+      query = query.eq("payment_status", req.query.payment_status);
+    }
+    if (req.query.pickup_area) {
+      query = query.ilike("pickup_area", `%${req.query.pickup_area}%`);
+    }
+    if (req.query.search) {
+      const term = `%${req.query.search}%`;
+      query = query.or(`code.ilike.${term},customer_name.ilike.${term},vendor_name.ilike.${term}`);
+    }
+    if (req.query.delay_risk) {
+      query = query.filter("ai_prediction->>delayRisk", "eq", req.query.delay_risk);
+    }
+    if (req.query.from_date) {
+      query = query.gte("created_at", req.query.from_date);
+    }
+    if (req.query.to_date) {
+      query = query.lte("created_at", req.query.to_date);
+    }
+    if (req.query.express) {
+      query = query.eq("express", req.query.express === "true");
+    }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 200;
+    const offset = (page - 1) * limit;
+    query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+    const { data, error } = await query;
     if (error) {
       res.status(500).json({ error: error.message });
       return;

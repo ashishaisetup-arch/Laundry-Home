@@ -75,6 +75,7 @@ import { useOrders, useVendors, useAdminKpis, useAdminAnalytics, useSupportTicke
 import { useRealtime } from "@/lib/hooks/useRealtime";
 import type { Vendor } from "@/lib/types";
 import { AdminOrderDetail } from "@/components/admin/admin-order-detail";
+import { AdminOrderFilters, type OrderFilterValues } from "@/components/admin/admin-order-filters";
 import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -538,12 +539,31 @@ function AdminVendors() {
 // Admin Orders
 // ============================================================================
 function AdminOrders() {
-  const { data: orders, refetch } = useFetch<import("@/lib/types").Order[]>("/api/admin/orders");
+  const { data: vendors } = useFetch<{ id: string; name: string }[]>("/api/vendors");
   const { data: executives, refetch: refetchExecs } = useFetch<{ id: string; name: string; isAvailable: boolean; assignedOrders: number; maxDailyOrders: number; distanceKm?: number }[]>("/api/delivery-executives");
-  const [filter, setFilter] = useState("all");
-  const allOrders = orders || [];
+  const [filters, setFilters] = useState<OrderFilterValues>({
+    search: "", status: "", vendorId: "", deliveryExecutiveId: "",
+    paymentStatus: "", delayRisk: "", pickupArea: "", express: "",
+    fromDate: "", toDate: "",
+  });
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [viewOrderId, setViewOrderId] = useState<string | null>(null);
+
+  const queryParams = new URLSearchParams();
+  if (filters.search) queryParams.set("search", filters.search);
+  if (filters.status) queryParams.set("status", filters.status);
+  if (filters.vendorId) queryParams.set("vendor_id", filters.vendorId);
+  if (filters.deliveryExecutiveId) queryParams.set("delivery_executive_id", filters.deliveryExecutiveId);
+  if (filters.paymentStatus) queryParams.set("payment_status", filters.paymentStatus);
+  if (filters.delayRisk) queryParams.set("delay_risk", filters.delayRisk);
+  if (filters.pickupArea) queryParams.set("pickup_area", filters.pickupArea);
+  if (filters.express) queryParams.set("express", filters.express);
+  if (filters.fromDate) queryParams.set("from_date", filters.fromDate);
+  if (filters.toDate) queryParams.set("to_date", filters.toDate);
+
+  const apiUrl = `/api/admin/orders${queryParams.toString() ? `?${queryParams.toString()}` : ""}`;
+  const { data: orders, refetch } = useFetch<import("@/lib/types").Order[]>(apiUrl);
+  const allOrders = orders || [];
 
   useRealtime("orders", undefined, refetch, true);
 
@@ -560,35 +580,14 @@ function AdminOrders() {
     }
   };
 
-  const filteredOrders = allOrders.filter((o) => {
-    if (filter === "all") return true;
-    if (filter === "active") return !["completed", "cancelled"].includes(o.status);
-    if (filter === "completed") return o.status === "completed";
-    if (filter === "delayed") return o.aiPrediction?.delayRisk === "medium" || o.aiPrediction?.delayRisk === "high";
-    return true;
-  });
-
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-2">
-        {[
-          { id: "all", label: "All Orders", count: allOrders.length },
-          { id: "active", label: "Active", count: allOrders.filter(o => !["completed", "cancelled"].includes(o.status)).length },
-          { id: "delayed", label: "Delayed Risk", count: allOrders.filter(o => o.aiPrediction?.delayRisk === "medium" || o.aiPrediction?.delayRisk === "high").length },
-          { id: "completed", label: "Completed", count: allOrders.filter(o => o.status === "completed").length },
-        ].map((f) => (
-          <button
-            key={f.id}
-            onClick={() => setFilter(f.id)}
-            className={cn(
-              "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-              filter === f.id ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/70"
-            )}
-          >
-            {f.label} <span className="ml-1 opacity-70">{f.count}</span>
-          </button>
-        ))}
-      </div>
+      <AdminOrderFilters
+        filters={filters}
+        onChange={setFilters}
+        vendors={vendors || []}
+        deliveryExecutives={executives || []}
+      />
 
       <Card className="shadow-soft overflow-hidden">
         <div className="overflow-x-auto">
@@ -606,10 +605,10 @@ function AdminOrders() {
               </tr>
             </thead>
             <tbody>
-              {filteredOrders.length === 0 ? (
-                <tr><td colSpan={8} className="p-8 text-center text-muted-foreground text-sm">No orders match this filter.</td></tr>
+              {allOrders.length === 0 ? (
+                <tr><td colSpan={8} className="p-8 text-center text-muted-foreground text-sm">No orders match the current filters.</td></tr>
               ) : (
-                filteredOrders.map((o) => (
+                allOrders.map((o) => (
                   <tr key={o.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                     <td className="p-3">
                       <p className="font-mono text-xs font-semibold">{o.code}</p>
