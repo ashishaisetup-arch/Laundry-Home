@@ -20,7 +20,8 @@ node_modules
 # production
 /build
 /dist
-api/index.js
+# Bundled by esbuild during build, committed for Vercel detection
+# api/index.js
 
 # misc
 .DS_Store
