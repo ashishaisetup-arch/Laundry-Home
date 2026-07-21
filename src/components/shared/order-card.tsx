@@ -1,4 +1,3 @@
-"use client";
 
 import { useState } from "react";
 import { motion } from "framer-motion";
@@ -18,7 +17,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import type { Order } from "@/lib/types";
-import { ORDER_STAGE_FLOW } from "@/lib/mock-data";
+import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 import { ServiceIcon } from "./service-icon";
 import { cn, formatINRDecimal, formatTime, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
@@ -133,7 +132,7 @@ export function OrderCard({ order, onClick, className, showVendor = true, onCanc
               </div>
               <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                 <motion.div
-                  className={cn("h-full rounded-full", order.status === "cancelled" ? "bg-rose-400" : "bg-primary")}
+                  className={cn("h-full rounded-full bg-primary")}
                   initial={{ width: 0 }}
                   animate={{ width: `${progress}%` }}
                   transition={{ duration: 0.6 }}

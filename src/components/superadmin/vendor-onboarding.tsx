@@ -1,6 +1,5 @@
-"use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
@@ -42,6 +41,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { api } from "@/lib/api/client";
 
 interface VendorOnboardingProps {
   open: boolean;
@@ -74,6 +74,7 @@ const KYC_DOCS = [
 
 export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
   const [step, setStep] = useState<Step>("business");
+  const [submitting, setSubmitting] = useState(false);
 
   // Business info
   const [businessName, setBusinessName] = useState("");
@@ -85,6 +86,21 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
   const [address, setAddress] = useState("");
   const [pincode, setPincode] = useState("");
   const [description, setDescription] = useState("");
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  const validate = useMemo(() => ({
+    businessName: businessName.trim().length >= 2,
+    ownerName: ownerName.trim().length >= 2,
+    email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),
+    phone: /^[6-9]\d{9}$/.test(phone),
+    city: city.length > 0,
+    area: area.trim().length > 0,
+    address: address.trim().length > 5,
+    pincode: /^\d{6}$/.test(pincode),
+  }), [businessName, ownerName, email, phone, city, area, address, pincode]);
+
+  const markTouched = (field: string) => setTouched((p) => ({ ...p, [field]: true }));
+  const businessStepValid = Object.values(validate).every(Boolean);
 
   // KYC
   const [uploadedDocs, setUploadedDocs] = useState<Record<string, boolean>>({});
@@ -115,6 +131,7 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
     setAddress("");
     setPincode("");
     setDescription("");
+    setTouched({});
     setUploadedDocs({});
     setKycStatus("pending");
     setSelectedServices({});
@@ -132,25 +149,58 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
   const selectedServiceCount = Object.values(selectedServices).filter(Boolean).length;
 
   const canProceed = () => {
-    if (step === "business") {
-      return businessName && ownerName && email && phone.length === 10 && city && area && address && pincode.length === 6;
-    }
+    if (step === "business") return businessStepValid;
     if (step === "kyc") return requiredDocsUploaded;
     if (step === "services") return selectedServiceCount > 0;
     return true;
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step === "business") setStep("kyc");
     else if (step === "kyc") {
       setKycStatus("verified");
       setStep("services");
     } else if (step === "services") setStep("review");
     else if (step === "review") {
-      setStep("submitted");
-      toast.success("Vendor onboarded successfully!", {
-        description: `${businessName} has been added and is now live on the platform.`,
-      });
+      setSubmitting(true);
+      try {
+        const vendorPassword = `vendor_${Math.random().toString(36).slice(2, 8)}`;
+        const { user: authUser } = await api.post<{ user: { id: string } }>("/api/auth/signup", {
+          email,
+          password: vendorPassword,
+          name: ownerName,
+          phone,
+          role: "vendor",
+        });
+
+        const selectedServiceKeys = Object.entries(selectedServices)
+          .filter(([, v]) => v)
+          .map(([k]) => k);
+
+        await api.post("/api/vendors", {
+          name: businessName,
+          owner_id: authUser.id,
+          area,
+          city,
+          logo_initials: businessName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase(),
+          logo_color: "bg-primary-surface",
+          services_offered: selectedServiceKeys,
+          distance_km: parseInt(serviceRadius),
+          is_open: true,
+          verified: true,
+          kyc_status: "approved",
+          tags: [city, area],
+        });
+
+        setStep("submitted");
+        toast.success("Vendor onboarded successfully!", {
+          description: `${businessName} has been added and is now live on the platform.`,
+        });
+      } catch (err: any) {
+        toast.error("Failed to onboard vendor", { description: err.message });
+      } finally {
+        setSubmitting(false);
+      }
     }
   };
 
@@ -296,28 +346,23 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
                       <p className="text-xs text-muted-foreground mt-0.5">Tell us about the laundry business</p>
                     </div>
                     <div className="grid sm:grid-cols-2 gap-3">
-                      <div className="sm:col-span-2">
-                        <Label className="text-xs">Business Name *</Label>
-                        <Input value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="e.g. FreshFold Laundry Co." className="mt-1" />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Owner Name *</Label>
-                        <Input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="Full name" className="mt-1" />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Phone *</Label>
+                      <FormField label="Business Name *" error={touched.businessName && !validate.businessName ? "At least 2 characters" : ""}>
+                        <Input value={businessName} onChange={(e) => setBusinessName(e.target.value)} onBlur={() => markTouched("businessName")} placeholder="e.g. FreshFold Laundry Co." className="mt-1" />
+                      </FormField>
+                      <FormField label="Owner Name *" error={touched.ownerName && !validate.ownerName ? "At least 2 characters" : ""}>
+                        <Input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} onBlur={() => markTouched("ownerName")} placeholder="Full name" className="mt-1" />
+                      </FormField>
+                      <FormField label="Phone *" error={touched.phone && !validate.phone ? "Valid 10-digit Indian mobile number required" : ""}>
                         <div className="flex gap-2 mt-1">
-                          <div className="flex h-9 items-center rounded-lg border border-input bg-tonal px-3 text-sm">+91</div>
-                          <Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="98765 43210" className="flex-1" />
+                          <div className="flex h-9 items-center rounded-lg border border-input bg-tonal px-3 text-sm shrink-0">+91</div>
+                          <Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} onBlur={() => markTouched("phone")} placeholder="98765 43210" className="flex-1" />
                         </div>
-                      </div>
-                      <div>
-                        <Label className="text-xs">Email *</Label>
-                        <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="owner@business.com" className="mt-1" />
-                      </div>
-                      <div>
-                        <Label className="text-xs">City *</Label>
-                        <Select value={city} onValueChange={setCity}>
+                      </FormField>
+                      <FormField label="Email *" error={touched.email && !validate.email ? "Valid email address required" : ""}>
+                        <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} onBlur={() => markTouched("email")} placeholder="owner@business.com" className="mt-1" />
+                      </FormField>
+                      <FormField label="City *" error={touched.city && !validate.city ? "Please select a city" : ""}>
+                        <Select value={city} onValueChange={(v) => { setCity(v); markTouched("city"); }}>
                           <SelectTrigger className="mt-1"><SelectValue placeholder="Select city" /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="Bengaluru">Bengaluru</SelectItem>
@@ -328,18 +373,17 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
                             <SelectItem value="Pune">Pune</SelectItem>
                           </SelectContent>
                         </Select>
-                      </div>
-                      <div>
-                        <Label className="text-xs">Area / Locality *</Label>
-                        <Input value={area} onChange={(e) => setArea(e.target.value)} placeholder="e.g. Indiranagar" className="mt-1" />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Pincode *</Label>
-                        <Input value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="560038" className="mt-1" />
-                      </div>
+                      </FormField>
+                      <FormField label="Area / Locality *" error={touched.area && !validate.area ? "Required" : ""}>
+                        <Input value={area} onChange={(e) => setArea(e.target.value)} onBlur={() => markTouched("area")} placeholder="e.g. Indiranagar" className="mt-1" />
+                      </FormField>
+                      <FormField label="Pincode *" error={touched.pincode && !validate.pincode ? "6-digit pincode required" : ""}>
+                        <Input value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} onBlur={() => markTouched("pincode")} placeholder="560038" className="mt-1" />
+                      </FormField>
                       <div className="sm:col-span-2">
-                        <Label className="text-xs">Full Address *</Label>
-                        <Textarea value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Shop number, street, landmark" className="mt-1 resize-none" rows={2} />
+                        <FormField label="Full Address *" error={touched.address && !validate.address ? "Min 6 characters" : ""}>
+                          <Textarea value={address} onChange={(e) => setAddress(e.target.value)} onBlur={() => markTouched("address")} placeholder="Shop number, street, landmark" className="mt-1 resize-none" rows={2} />
+                        </FormField>
                       </div>
                       <div className="sm:col-span-2">
                         <Label className="text-xs">Business Description (optional)</Label>
@@ -556,11 +600,17 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
                     </Button>
                   )}
                   <Button
-                    disabled={!canProceed()}
+                    disabled={!canProceed() || submitting}
                     onClick={handleNext}
                   >
-                    {step === "review" ? "Approve & Onboard" : "Continue"}
-                    <ArrowRight className="ml-1.5 h-4 w-4" />
+                    {submitting ? (
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent mr-1.5" />
+                    ) : step === "review" ? (
+                      "Approve & Onboard"
+                    ) : (
+                      "Continue"
+                    )}
+                    {!submitting && <ArrowRight className="ml-1.5 h-4 w-4" />}
                   </Button>
                 </div>
               </div>
@@ -569,5 +619,15 @@ export function VendorOnboarding({ open, onClose }: VendorOnboardingProps) {
         </AnimatePresence>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function FormField({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <Label className="text-xs">{label}</Label>
+      {children}
+      {error && <p className="text-[11px] text-rose-500 mt-1">{error}</p>}
+    </div>
   );
 }

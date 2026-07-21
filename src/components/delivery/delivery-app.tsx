@@ -1,26 +1,23 @@
-"use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
   Bike,
   Calendar,
   CheckCircle2,
-  Clock,
   IndianRupee,
-  MapPin,
   Navigation,
   Package,
   Phone,
   Signature,
   Store,
-  User,
   Camera,
   ShieldCheck,
-  MessageSquare,
   KeySquare,
   TrendingUp,
+  X,
+  Image,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -34,72 +31,141 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { StatCard } from "@/components/shared/stat-card";
-import { DELIVERY_TASKS } from "@/lib/mock-data";
-import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
+import { LeafletMap } from "@/components/shared/leaflet-map";
+import { useDeliveryTasks } from "@/lib/hooks";
+import { useGeolocation } from "@/lib/hooks/useGeolocation";
+import { useDeliveryLocation } from "@/lib/hooks/useDeliveryLocation";
+import { useAppStore } from "@/lib/store";
+import type { DeliveryTask } from "@/lib/types";
+import { api } from "@/lib/api/client";
+import { cn, formatINRDecimal } from "@/lib/utils";
+import { lookupAreaCoords } from "@/lib/geo";
 import { toast } from "sonner";
 
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "Delivery",
-    items: [
-      { id: "dashboard", label: "Dashboard", icon: "LayoutDashboard" },
-      { id: "pickups", label: "Today's Pickups", icon: "Package", badge: 2 },
-      { id: "deliveries", label: "Today's Deliveries", icon: "Truck", badge: 2 },
-      { id: "earnings", label: "Earnings", icon: "IndianRupee" },
-    ],
-  },
+const STATUS_ORDER = [
+  "pending",
+  "heading_to_pickup",
+  "picked_up",
+  "heading_to_vendor",
+  "reached_vendor",
+  "ready_for_delivery",
+  "out_for_delivery",
+  "delivered",
+] as const;
+
+// Pickup-relevant status steps (mapped to UI-friendly labels)
+const PICKUP_STEPS = [
+  { id: "heading_to_pickup", label: "Heading to pickup", icon: Navigation },
+  { id: "picked_up", label: "Picked up", icon: Package },
+  { id: "heading_to_vendor", label: "Heading to vendor", icon: Bike },
+  { id: "reached_vendor", label: "Reached vendor", icon: Store },
+  { id: "ready_for_delivery", label: "Handover to vendor", icon: CheckCircle2 },
 ];
+
+const DELIVERY_STEPS = [
+  { id: "out_for_delivery", label: "Out for delivery", icon: Bike },
+  { id: "delivered", label: "Delivered", icon: CheckCircle2 },
+];
+
+function statusIndex(status: string): number {
+  return STATUS_ORDER.indexOf(status as typeof STATUS_ORDER[number]);
+}
+
+function filterSortTasks(tasks: DeliveryTask[], type: "pickup" | "delivery") {
+  return tasks
+    .filter((t) => t.type === type)
+    .sort((a, b) => {
+      const orderA = statusIndex(a.status);
+      const orderB = statusIndex(b.status);
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.slot || "").localeCompare(b.slot || "");
+    });
+}
 
 export function DeliveryApp() {
   const [view, setView] = useState("dashboard");
+  const { userName, userId } = useAppStore();
+  const { data: allTasks } = useDeliveryTasks(userId);
+  const tasks = allTasks || [];
+
+  const pickupCount = useMemo(() => tasks.filter((t) => t.type === "pickup").length, [tasks]);
+  const deliveryCount = useMemo(() => tasks.filter((t) => t.type === "delivery").length, [tasks]);
+
+  const navGroups: NavGroup[] = useMemo(() => [
+    {
+      label: "Delivery",
+      items: [
+        { id: "dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+        { id: "pickups", label: "Today's Pickups", icon: "Package", badge: pickupCount },
+        { id: "deliveries", label: "Today's Deliveries", icon: "Truck", badge: deliveryCount },
+        { id: "earnings", label: "Earnings", icon: "IndianRupee" },
+      ],
+    },
+  ], [pickupCount, deliveryCount]);
+
+  const pageTitle = useMemo(() => ({
+    dashboard: "Delivery Dashboard",
+    pickups: "Today's Pickups",
+    deliveries: "Today's Deliveries",
+    earnings: "Earnings",
+  } as Record<string, string>), []);
+
+  const pageSubtitle = useMemo(() => ({
+    dashboard: `${userName || "Delivery Partner"} · Active now`,
+    pickups: "Pickup tasks assigned to you today",
+    deliveries: "Delivery tasks assigned to you today",
+    earnings: "Track your earnings and payouts",
+  } as Record<string, string>), [userName]);
 
   return (
     <AppShell
-      groups={NAV_GROUPS}
+      groups={navGroups}
       activeView={view}
       onNavigate={setView}
-      pageTitle={pageTitle(view)}
-      pageSubtitle={pageSubtitle(view)}
+      pageTitle={pageTitle[view] || "Dashboard"}
+      pageSubtitle={pageSubtitle[view] || ""}
     >
       <AnimatePresence mode="wait">
-        {view === "dashboard" && <DeliveryDashboard key="d" />}
-        {view === "pickups" && <DeliveryTasks key="p" type="pickup" />}
-        {view === "deliveries" && <DeliveryTasks key="d" type="delivery" />}
-        {view === "earnings" && <DeliveryEarnings key="e" />}
+        {view === "dashboard" && <DeliveryDashboard key="dashboard" tasks={tasks} />}
+        {view === "pickups" && <DeliveryTasks key="pickups" type="pickup" />}
+        {view === "deliveries" && <DeliveryTasks key="deliveries" type="delivery" />}
+        {view === "earnings" && <DeliveryEarnings key="earnings" />}
       </AnimatePresence>
     </AppShell>
   );
 }
 
-function pageTitle(view: string) {
-  return {
-    dashboard: "Delivery Dashboard",
-    pickups: "Today's Pickups",
-    deliveries: "Today's Deliveries",
-    earnings: "Earnings",
-  }[view] || "Dashboard";
-}
-function pageSubtitle(view: string) {
-  return {
-    dashboard: "Rajesh Kumar · Indiranagar zone",
-    pickups: "Pickup tasks assigned to you today",
-    deliveries: "Delivery tasks assigned to you today",
-    earnings: "Track your earnings and payouts",
-  }[view];
-}
+function DeliveryDashboard({ tasks }: { tasks: DeliveryTask[] }) {
+  const { userName } = useAppStore();
+  const pickups = tasks.filter((t) => t.type === "pickup");
+  const deliveries = tasks.filter((t) => t.type === "delivery");
+  const totalCount = tasks.length;
+  const completed = tasks.filter((t) => t.status === "delivered").length;
+  const totalKm = tasks.reduce((sum, t) => sum + (t.distanceKm || 0), 0);
+  const todayEarnings = tasks
+    .filter((t) => t.status === "delivered")
+    .reduce((sum, t) => sum + (t.amount || 0), 0);
+  const geo = useGeolocation(true);
 
-function DeliveryDashboard() {
-  const pickups = DELIVERY_TASKS.filter((t) => t.type === "pickup");
-  const deliveries = DELIVERY_TASKS.filter((t) => t.type === "delivery");
+  // Next task: the first pending non-delivered task sorted by status+slot
+  const nextTask = useMemo(() => {
+    const active = tasks.filter((t) => t.status !== "delivered");
+    const sorted = active.sort((a, b) => {
+      const orderA = statusIndex(a.status);
+      const orderB = statusIndex(b.status);
+      if (orderA !== orderB) return orderA - orderB;
+      return (a.slot || "").localeCompare(b.slot || "");
+    });
+    return sorted[0] || null;
+  }, [tasks]);
 
   return (
-    <div className="space-y-6">
-      {/* Banner */}
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }} className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
         <Card className="relative overflow-hidden p-6 bg-primary-surface text-primary-foreground border-0">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
@@ -107,103 +173,102 @@ function DeliveryDashboard() {
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <Badge className="bg-white/20 text-white border-0">● On duty</Badge>
-                <Badge className="bg-white/20 text-white border-0">Indiranagar zone</Badge>
+                {nextTask && <Badge className="bg-white/20 text-white border-0">{nextTask.area}</Badge>}
               </div>
               <h2 className="text-2xl md:text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-                Hi Rajesh! 4 tasks today 🛵
+                Hi {userName || "Partner"}! {totalCount} task{totalCount !== 1 ? "s" : ""} today 🛵
               </h2>
               <p className="text-sm text-white/80 mt-1">
-                <strong>2 pickups</strong> and <strong>2 deliveries</strong> · Estimated earnings: <strong>₹640</strong>
+                <strong>{pickups.length} pickup{pickups.length !== 1 ? "s" : ""}</strong> and <strong>{deliveries.length} delivery{deliveries.length !== 1 ? "ies" : "y"}</strong> · Estimated earnings: <strong>₹{todayEarnings}</strong>
               </p>
             </div>
             <div className="rounded-xl bg-white/15 backdrop-blur p-3">
               <p className="text-xs text-white/80">Today&apos;s earnings</p>
-              <p className="text-2xl font-bold mt-0.5">{formatINR(640)}</p>
-              <p className="text-[10px] text-emerald-200">+₹180 in tips</p>
+              <p className="text-2xl font-bold mt-0.5">₹{todayEarnings}</p>
             </div>
           </div>
         </Card>
       </motion.div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Today's Tasks" value="4" icon={Package} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="Completed" value="0" icon={CheckCircle2} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Km Today" value="12.4" icon={Navigation} accent="from-violet-500 to-purple-600" />
-        <StatCard label="Earnings" value={formatINR(640)} change={8.2} trend="up" icon={IndianRupee} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Today's Tasks" value={String(totalCount)} icon={Package} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="Completed" value={String(completed)} icon={CheckCircle2} accent="from-emerald-500 to-green-600" />
+        <StatCard label="Km Today" value={String(totalKm.toFixed(1))} icon={Navigation} accent="from-violet-500 to-purple-600" />
+        <StatCard label="Earnings" value={`₹${todayEarnings}`} icon={IndianRupee} accent="from-amber-500 to-orange-600" />
       </div>
 
-      {/* Next task highlight */}
-      <Card className="p-5 shadow-lift border-primary/30 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30">
-        <div className="flex items-center gap-2 mb-3">
-          <motion.span
-            className="flex h-2 w-2 rounded-full bg-primary"
-            animate={{ opacity: [1, 0.3, 1] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-          />
-          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Next task · in 25 mins</p>
-        </div>
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-surface text-primary-foreground">
-              <Package className="h-6 w-6" />
-            </div>
-            <div>
-              <p className="font-semibold">Pickup · LH-2849</p>
-              <p className="text-sm text-muted-foreground">Aarav Mehta · Flat 402, Skyline Residency, Indiranagar</p>
-              <p className="text-xs text-muted-foreground mt-0.5">10 shirts (Wash & Iron) · 1.4 km away</p>
+      {nextTask && (
+        <Card className="p-5 shadow-lift border-primary/30 bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30">
+          <div className="flex items-center gap-2 mb-3">
+            <motion.span
+              className="flex h-2 w-2 rounded-full bg-primary"
+              animate={{ opacity: [1, 0.3, 1] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+            />
+            <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+              Next task · {nextTask.slot}
+            </p>
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-surface text-primary-foreground">
+                {nextTask.type === "pickup" ? <Package className="h-6 w-6" /> : <Bike className="h-6 w-6" />}
+              </div>
+              <div>
+                <p className="font-semibold capitalize">{nextTask.type} · {nextTask.orderCode}</p>
+                <p className="text-sm text-muted-foreground">{nextTask.customerName} · {nextTask.address}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{nextTask.items} · {nextTask.distanceKm} km away</p>
+              </div>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline">
-              <Phone className="h-4 w-4 mr-1.5" />
-              Call
-            </Button>
-            <Button className="bg-primary hover:bg-primary/90">
-              <Navigation className="h-4 w-4 mr-1.5" />
-              Start navigation
-            </Button>
-          </div>
-        </div>
-      </Card>
+        </Card>
+      )}
 
       <div className="grid lg:grid-cols-2 gap-4">
-        {/* Today's pickups */}
         <Card className="p-5 shadow-soft">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold flex items-center gap-2">
               <Package className="h-4 w-4 text-teal-500" />
               Pickups
             </h3>
-            <Badge variant="secondary">{pickups.length} tasks</Badge>
+            <Badge variant="secondary">{pickups.length} task{pickups.length !== 1 ? "s" : ""}</Badge>
           </div>
           <div className="space-y-2">
             {pickups.map((t) => (
-              <TaskRow key={t.id} task={t} />
+              <TaskRow key={t.id} task={t} execLat={geo.lat} execLng={geo.lng} />
             ))}
+            {pickups.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">No pickup tasks</p>}
           </div>
         </Card>
 
-        {/* Today's deliveries */}
         <Card className="p-5 shadow-soft">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold flex items-center gap-2">
               <Bike className="h-4 w-4 text-emerald-500" />
               Deliveries
             </h3>
-            <Badge variant="secondary">{deliveries.length} tasks</Badge>
+            <Badge variant="secondary">{deliveries.length} task{deliveries.length !== 1 ? "s" : ""}</Badge>
           </div>
           <div className="space-y-2">
             {deliveries.map((t) => (
-              <TaskRow key={t.id} task={t} />
+              <TaskRow key={t.id} task={t} execLat={geo.lat} execLng={geo.lng} />
             ))}
+            {deliveries.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">No delivery tasks</p>}
           </div>
         </Card>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
-function TaskRow({ task }: { task: typeof DELIVERY_TASKS[0] }) {
+function TaskRow({ task, execLat, execLng }: { task: DeliveryTask; execLat?: number | null; execLng?: number | null }) {
+  function navUrl(t: DeliveryTask): string {
+    const lat = t.type === "pickup" ? t.pickupLat : t.deliveryLat;
+    const lng = t.type === "pickup" ? t.pickupLng : t.deliveryLng;
+    const dest = lat != null && lng != null ? `${lat},${lng}` : encodeURIComponent(t.address || t.area);
+    const origin = execLat != null && execLng != null ? `&origin=${execLat},${execLng}` : "";
+    return `https://www.google.com/maps/dir/?api=1&destination=${dest}${origin}&travelmode=driving`;
+  }
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
       <div className={cn(
@@ -220,21 +285,339 @@ function TaskRow({ task }: { task: typeof DELIVERY_TASKS[0] }) {
         <p className="text-xs text-muted-foreground truncate">{task.customerName} · {task.area}</p>
         <p className="text-[10px] text-muted-foreground">{task.distanceKm} km · {task.estimatedMins} mins</p>
       </div>
-      <Button size="sm" variant="outline" className="h-7 text-xs">
+      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => window.open(navUrl(task), "_blank")}>
         <Navigation className="h-3.5 w-3.5" />
       </Button>
     </div>
   );
 }
 
-function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
-  const tasks = DELIVERY_TASKS.filter((t) => t.type === type);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(tasks[0]?.id || null);
-  const selectedTask = tasks.find((t) => t.id === selectedTaskId) || tasks[0];
+// ── OTP Dialog ──
+function OtpDialog({ task, open, onOpenChange }: { task: DeliveryTask; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const [otp, setOtp] = useState<string | null>(null);
+  const [inputOtp, setInputOtp] = useState("");
+  const [verified, setVerified] = useState(task.otpVerified || false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setOtp(null);
+      setInputOtp("");
+      setVerified(task.otpVerified || false);
+    }
+  }, [open, task.otpVerified]);
+
+  const generateOtp = async () => {
+    setLoading(true);
+    try {
+      const data = await api.post<{ otp: string; masked: string }>(`/api/delivery-tasks/${task.id}/otp`);
+      setOtp(data.masked);
+      toast.success("OTP generated");
+    } catch (e: any) {
+      toast.error("Failed to generate OTP", { description: e.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOtp = async () => {
+    if (!inputOtp) { toast.error("Enter the OTP"); return; }
+    setLoading(true);
+    try {
+      const data = await api.post<{ verified: boolean }>(`/api/delivery-tasks/${task.id}/verify-otp`, { otp: inputOtp });
+      if (data.verified) {
+        setVerified(true);
+        toast.success("OTP verified");
+      }
+    } catch (e: any) {
+      toast.error("Invalid OTP", { description: e.message });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="grid lg:grid-cols-3 gap-4">
-      {/* Task list */}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Customer OTP</DialogTitle>
+          <DialogDescription>Verify identity before completing delivery</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          {verified ? (
+            <div className="flex items-center justify-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 p-4 text-emerald-700 dark:text-emerald-400">
+              <CheckCircle2 className="h-5 w-5" />
+              <span className="font-medium">OTP Verified</span>
+            </div>
+          ) : otp ? (
+            <>
+              <div className="text-center">
+                <p className="text-sm text-muted-foreground mb-1">Generated OTP</p>
+                <p className="text-3xl font-bold tracking-widest">{otp}</p>
+              </div>
+              <Separator />
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Enter OTP from customer</p>
+                <Input
+                  placeholder="Enter 4-digit OTP"
+                  value={inputOtp}
+                  onChange={(e) => setInputOtp(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  maxLength={4}
+                  className="text-center text-lg tracking-widest"
+                />
+                <Button className="w-full" onClick={verifyOtp} disabled={loading || inputOtp.length !== 4}>
+                  {loading ? "Verifying..." : "Verify OTP"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="text-center">
+              <p className="text-sm text-muted-foreground mb-4">Generate a one-time password for the customer to provide at delivery.</p>
+              <Button className="w-full" onClick={generateOtp} disabled={loading}>
+                {loading ? "Generating..." : "Generate OTP"}
+              </Button>
+            </div>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Signature Canvas Dialog ──
+function SignatureDialog({ task, open, onOpenChange }: { task: DeliveryTask; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [saved, setSaved] = useState(!!task.signature);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setSaved(!!task.signature);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.strokeStyle = "#000000";
+          ctx.lineWidth = 2;
+          ctx.lineCap = "round";
+        }
+      }
+    }
+  }, [open, task.signature]);
+
+  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+    setIsDrawing(true);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    let clientX: number, clientY: number;
+    if ("touches" in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    ctx.beginPath();
+    ctx.moveTo(clientX - rect.left, clientY - rect.top);
+  };
+
+  const draw = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const rect = canvas.getBoundingClientRect();
+    let clientX: number, clientY: number;
+    if ("touches" in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    ctx.lineTo(clientX - rect.left, clientY - rect.top);
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  };
+
+  const saveSignature = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL("image/png");
+    setLoading(true);
+    try {
+      await api.post(`/api/delivery-tasks/${task.id}/signature`, { signature_data: dataUrl });
+      setSaved(true);
+      toast.success("Signature saved");
+      onOpenChange(false);
+    } catch (e: any) {
+      toast.error("Failed to save signature", { description: e.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Proof of Delivery — Signature</DialogTitle>
+          <DialogDescription>Ask the customer to sign below</DialogDescription>
+        </DialogHeader>
+        {saved ? (
+          <div className="flex items-center justify-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 p-4 text-emerald-700 dark:text-emerald-400">
+            <CheckCircle2 className="h-5 w-5" />
+            <span className="font-medium">Signature captured</span>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <canvas
+              ref={canvasRef}
+              width={400}
+              height={200}
+              className="w-full border border-border rounded-lg cursor-crosshair touch-none"
+              onMouseDown={startDrawing}
+              onMouseMove={draw}
+              onMouseUp={stopDrawing}
+              onMouseLeave={stopDrawing}
+              onTouchStart={startDrawing}
+              onTouchMove={draw}
+              onTouchEnd={stopDrawing}
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={clearCanvas}>Clear</Button>
+              <Button className="flex-1" onClick={saveSignature} disabled={loading}>
+                {loading ? "Saving..." : "Accept Signature"}
+              </Button>
+            </div>
+          </div>
+        )}
+        <div className="flex justify-end">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Close</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Delivery Tasks (Pickups & Deliveries) ──
+function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
+  const { data: allTasks, refetch: refetchTasks } = useDeliveryTasks();
+  const tasks = useMemo(() => filterSortTasks(allTasks || [], type), [allTasks, type]);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTask = tasks.find((t) => t.id === selectedTaskId) || tasks[0] || null;
+
+  // Proof-of-delivery dialogs
+  const [otpDialogOpen, setOtpDialogOpen] = useState(false);
+  const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!selectedTaskId && tasks.length > 0) setSelectedTaskId(tasks[0].id);
+  }, [tasks, selectedTaskId]);
+
+  const isActive = selectedTask != null && !["pending", "delivered"].includes(selectedTask.status);
+  const geo = useGeolocation(true);
+  useDeliveryLocation(isActive);
+
+  function taskDest(task: DeliveryTask): { lat: number; lng: number } | null {
+    const lat = task.type === "pickup" ? task.pickupLat : task.deliveryLat;
+    const lng = task.type === "pickup" ? task.pickupLng : task.deliveryLng;
+    if (lat != null && lng != null) return { lat, lng };
+    return lookupAreaCoords(task.area);
+  }
+  const taskCoords = selectedTask ? taskDest(selectedTask) : null;
+  const origin = geo.lat && geo.lng ? { lat: geo.lat, lng: geo.lng } : null;
+  const dest = taskCoords;
+  const [route, setRoute] = useState<{ coordinates: [number, number][]; distance: number; duration: number } | null>(null);
+
+  useEffect(() => {
+    if (!origin || !dest) { setRoute(null); return; }
+    let cancelled = false;
+    fetch(`/api/routing/directions?start_lat=${origin.lat}&start_lng=${origin.lng}&end_lat=${dest.lat}&end_lng=${dest.lng}&profile=driving-car`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const coords = data?.features?.[0]?.geometry?.coordinates;
+        if (coords && coords.length >= 2) {
+          const summary = data.features[0].properties?.summary;
+          setRoute({
+            coordinates: coords.map((c: number[]) => [c[1], c[0]] as [number, number]),
+            distance: summary?.distance || 0,
+            duration: summary?.duration || 0,
+          });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [origin?.lat, origin?.lng, dest?.lat, dest?.lng]);
+
+  const updateTaskStatus = async (taskId: string, status: string, label: string) => {
+    try {
+      await api.patch(`/api/delivery-tasks/${taskId}`, { status });
+      toast.success(`Status updated: ${label}`);
+      refetchTasks();
+    } catch (e: any) {
+      toast.error("Failed to update status", { description: e.message });
+    }
+  };
+
+  // Determine which status steps to show based on type and actual status
+  const steps = useMemo(() => {
+    const allSteps = type === "pickup" ? PICKUP_STEPS : DELIVERY_STEPS;
+    if (!selectedTask) return allSteps;
+    const currentIdx = statusIndex(selectedTask.status);
+    return allSteps.map((s) => {
+      const stepIdx = statusIndex(s.id);
+      const done = stepIdx <= currentIdx && selectedTask.status !== "pending";
+      const available = !done && stepIdx === currentIdx + 1;
+      return { ...s, done, available };
+    });
+  }, [type, selectedTask]);
+
+  // Handle photo upload
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedTask) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const dataUrl = ev.target?.result as string;
+      try {
+        await api.post(`/api/delivery-tasks/${selectedTask.id}/photo`, { photo_data: dataUrl });
+        toast.success("Photo uploaded");
+        refetchTasks();
+      } catch (err: any) {
+        toast.error("Failed to upload photo", { description: err.message });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }} className="grid lg:grid-cols-3 gap-4">
       <Card className="p-4 shadow-soft">
         <h3 className="font-semibold mb-3 capitalize">{type} Tasks</h3>
         <div className="space-y-2">
@@ -252,62 +635,67 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
                 <Badge variant="outline" className="text-[9px] py-0 h-4 capitalize">{t.status.replace(/_/g, " ")}</Badge>
               </div>
               <p className="text-[11px] text-muted-foreground">{t.customerName}</p>
-              <p className="text-[10px] text-muted-foreground mt-1">{t.slot} · {t.distanceKm} km</p>
+              <p className="text-[10px] text-muted-foreground mt-1">{t.slot} · {t.area}</p>
             </button>
           ))}
+          {tasks.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">No {type} tasks</p>}
         </div>
       </Card>
 
-      {/* Task detail */}
       <div className="lg:col-span-2 space-y-4">
         {selectedTask && (
           <>
             {/* Map */}
             <Card className="p-0 overflow-hidden shadow-soft">
-              <div className="relative h-56 bg-gradient-to-br from-teal-100 via-emerald-100 to-cyan-100 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-cyan-950/40">
-                <div className="absolute inset-0 opacity-30" style={{
-                  backgroundImage: `
-                    linear-gradient(oklch(0.62 0.13 180 / 0.15) 1px, transparent 1px),
-                    linear-gradient(90deg, oklch(0.62 0.13 180 / 0.15) 1px, transparent 1px)
-                  `,
-                  backgroundSize: "30px 30px",
-                }} />
-                <svg className="absolute inset-0 w-full h-full" viewBox="0 0 400 200" preserveAspectRatio="none">
-                  <motion.path
-                    d="M 60 150 Q 150 50 200 100 T 340 60"
-                    stroke="oklch(0.62 0.13 180)"
-                    strokeWidth="3"
-                    strokeDasharray="6 4"
-                    fill="none"
-                    strokeLinecap="round"
-                    initial={{ pathLength: 0 }}
-                    animate={{ pathLength: 1 }}
-                    transition={{ duration: 2, repeat: Infinity, repeatType: "reverse" }}
-                  />
-                </svg>
-                <div className="absolute bottom-8 left-8 flex flex-col items-center">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-teal-500 text-white shadow-lg ring-4 ring-white">
-                    <MapPin className="h-4 w-4" />
-                  </div>
-                  <span className="text-[10px] font-semibold mt-1 bg-white/80 px-1.5 rounded">Your location</span>
-                </div>
-                <div className="absolute top-12 right-16 flex flex-col items-center">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-rose-500 text-white shadow-lg ring-4 ring-white">
-                    <Store className="h-4 w-4" />
-                  </div>
-                  <span className="text-[10px] font-semibold mt-1 bg-white/80 px-1.5 rounded capitalize">{type}</span>
-                </div>
+              <div className="relative">
+                <LeafletMap
+                  center={dest ? [dest.lat, dest.lng] : [12.9719, 77.6413]}
+                  zoom={13}
+                  height="h-56"
+                  markers={[
+                    ...(origin ? [{ lat: origin.lat, lng: origin.lng, label: "You", color: "#14b8a6", type: "exec" as const }] : []),
+                    ...(dest ? [{ lat: dest.lat, lng: dest.lng, label: type === "pickup" ? "Pickup" : "Delivery", color: "#f43f5e", type: "pickup" as const }] : []),
+                  ]}
+                  route={route ? { coordinates: route.coordinates, color: "#14b8a6", dashArray: "8 6" } : undefined}
+                />
+                {dest && (
+                  <Button
+                    size="sm"
+                    className="absolute bottom-3 right-3 bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg z-[1000]"
+                    onClick={() => {
+                      const org = origin ? `&origin=${origin.lat},${origin.lng}` : "";
+                      window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest.lat},${dest.lng}${org}&travelmode=driving`, "_blank");
+                    }}
+                  >
+                    <Navigation className="h-4 w-4 mr-1.5" />
+                    Start
+                  </Button>
+                )}
               </div>
               <div className="p-3 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-sm">
                   <Navigation className="h-4 w-4 text-primary" />
-                  <span className="font-medium">{selectedTask.distanceKm} km away</span>
-                  <span className="text-muted-foreground">· ~{selectedTask.estimatedMins} mins</span>
+                  {route ? (
+                    <>
+                      <span className="font-medium">{(route.distance / 1000).toFixed(1)} km</span>
+                      <span className="text-muted-foreground">· ~{Math.round(route.duration / 60)} mins</span>
+                    </>
+                  ) : (
+                    <span className="font-medium">{selectedTask.distanceKm} km away</span>
+                  )}
                 </div>
-                <Button size="sm" className="bg-primary hover:bg-primary/90">
-                  <Navigation className="h-3.5 w-3.5 mr-1.5" />
-                  Navigate
-                </Button>
+                {dest && (
+                  <Button
+                    size="sm" className="bg-primary hover:bg-primary/90"
+                    onClick={() => {
+                      const org = origin ? `&origin=${origin.lat},${origin.lng}` : "";
+                      window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest.lat},${dest.lng}${org}&travelmode=driving`, "_blank");
+                    }}
+                  >
+                    <Navigation className="h-3.5 w-3.5 mr-1.5" />
+                    Navigate
+                  </Button>
+                )}
               </div>
             </Card>
 
@@ -335,13 +723,22 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
               </div>
 
               <div className="grid grid-cols-3 gap-2">
-                <Button variant="outline" className="h-10">
+                <Button variant="outline" className="h-10" onClick={() => window.open(`tel:${selectedTask.customerPhone}`, "_blank")}>
                   <Phone className="h-4 w-4 mr-1.5" />
                   Call
                 </Button>
-                <Button variant="outline" className="h-10">
-                  <MessageSquare className="h-4 w-4 mr-1.5" />
-                  Chat
+                <Button variant="outline" className="h-10 bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => {
+                  const lat = type === "pickup" ? selectedTask.pickupLat : selectedTask.deliveryLat;
+                  const lng = type === "pickup" ? selectedTask.pickupLng : selectedTask.deliveryLng;
+                  const org = origin ? `&origin=${origin.lat},${origin.lng}` : "";
+                  if (lat != null && lng != null) {
+                    window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}${org}&travelmode=driving`, "_blank");
+                  } else {
+                    window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(selectedTask.address || selectedTask.area)}${org}&travelmode=driving`, "_blank");
+                  }
+                }}>
+                  <Navigation className="h-4 w-4 mr-1.5" />
+                  Navigate
                 </Button>
                 <Button variant="outline" className="h-10">
                   <Store className="h-4 w-4 mr-1.5" />
@@ -350,34 +747,31 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
               </div>
             </Card>
 
-            {/* Status update + Proof of delivery */}
+            {/* Status updates */}
             <Card className="p-5 shadow-soft">
               <h3 className="font-semibold mb-3">Status Updates</h3>
               <div className="space-y-2 mb-4">
-                {[
-                  { id: "heading_to_pickup", label: "Heading to pickup", icon: Navigation, done: type === "pickup" ? false : true },
-                  { id: "picked_up", label: "Picked up", icon: Package, done: type === "pickup" ? false : true },
-                  { id: "heading_to_vendor", label: "Heading to vendor", icon: Bike, done: type === "pickup" ? false : true },
-                  { id: "reached_vendor", label: "Reached vendor", icon: Store, done: type === "pickup" ? false : true },
-                  { id: "out_for_delivery", label: "Out for delivery", icon: Bike, done: type === "delivery" ? selectedTask.status === "out_for_delivery" : false },
-                  { id: "delivered", label: "Delivered", icon: CheckCircle2, done: false },
-                ].map((s) => (
+                {steps.map((s) => (
                   <button
                     key={s.id}
-                    onClick={() => toast.success(`Status updated: ${s.label}`)}
+                    disabled={s.done || !s.available}
+                    onClick={() => selectedTask && updateTaskStatus(selectedTask.id, s.id, s.label)}
                     className={cn(
                       "w-full flex items-center gap-3 rounded-lg border p-2.5 text-left transition-all",
-                      s.done ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30" : "border-border hover:bg-muted/30"
+                      s.done ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30" : s.available ? "border-primary/40 bg-primary/5 hover:bg-primary/10 cursor-pointer" : "border-border opacity-50"
                     )}
                   >
                     <div className={cn(
                       "flex h-8 w-8 items-center justify-center rounded-lg",
-                      s.done ? "bg-emerald-500 text-white" : "bg-muted text-muted-foreground"
+                      s.done ? "bg-emerald-500 text-white" : s.available ? "bg-primary-surface text-primary-foreground" : "bg-muted text-muted-foreground"
                     )}>
                       <s.icon className="h-4 w-4" />
                     </div>
-                    <span className={cn("text-sm flex-1", s.done ? "font-medium text-emerald-700 dark:text-emerald-400" : "")}>{s.label}</span>
-                    {!s.done && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                    <span className={cn(
+                      "text-sm flex-1",
+                      s.done ? "font-medium text-emerald-700 dark:text-emerald-400" : s.available ? "font-medium text-primary" : ""
+                    )}>{s.label}</span>
+                    {s.available && <ArrowRight className="h-3.5 w-3.5 text-primary" />}
                     {s.done && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />}
                   </button>
                 ))}
@@ -387,23 +781,61 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
                 <>
                   <Separator className="my-4" />
                   <h4 className="text-sm font-semibold mb-3">Proof of Delivery</h4>
+
+                  {/* Show existing photos */}
+                  {selectedTask.photos && selectedTask.photos.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {selectedTask.photos.map((photo, idx) => (
+                        <div key={idx} className="relative h-16 w-16 rounded-lg overflow-hidden border border-border">
+                          <img src={photo} alt={`Photo ${idx + 1}`} className="h-full w-full object-cover" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Show existing signature */}
+                  {selectedTask.signature && (
+                    <div className="mb-3 rounded-lg border border-border p-2">
+                      <p className="text-[10px] text-muted-foreground mb-1">Customer Signature</p>
+                      <img src={selectedTask.signature} alt="Signature" className="h-16 object-contain" />
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-3 gap-2">
-                    <Button variant="outline" className="flex-col h-20 hover:bg-muted/30">
+                    <Button
+                      variant={selectedTask.otpVerified ? "default" : "outline"}
+                      className={cn("flex-col h-20", selectedTask.otpVerified ? "bg-emerald-600 hover:bg-emerald-700" : "hover:bg-muted/30")}
+                      onClick={() => setOtpDialogOpen(true)}
+                    >
                       <KeySquare className="h-5 w-5 mb-1" />
-                      <span className="text-[10px]">Customer OTP</span>
+                      <span className="text-[10px]">{selectedTask.otpVerified ? "OTP Verified" : "Customer OTP"}</span>
                     </Button>
-                    <Button variant="outline" className="flex-col h-20 hover:bg-muted/30">
+                    <Button
+                      variant={selectedTask.signature ? "default" : "outline"}
+                      className={cn("flex-col h-20", selectedTask.signature ? "bg-emerald-600 hover:bg-emerald-700" : "hover:bg-muted/30")}
+                      onClick={() => setSignatureDialogOpen(true)}
+                    >
                       <Signature className="h-5 w-5 mb-1" />
-                      <span className="text-[10px]">Signature</span>
+                      <span className="text-[10px]">{selectedTask.signature ? "Signed" : "Signature"}</span>
                     </Button>
-                    <Button variant="outline" className="flex-col h-20 hover:bg-muted/30">
+                    <Button
+                      variant="outline"
+                      className="flex-col h-20 hover:bg-muted/30"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
                       <Camera className="h-5 w-5 mb-1" />
-                      <span className="text-[10px]">Photo</span>
+                      <span className="text-[10px]">{selectedTask.photos?.length ? `${selectedTask.photos.length} photo${selectedTask.photos.length > 1 ? "s" : ""}` : "Photo"}</span>
+                      <input ref={fileInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handlePhotoUpload} />
                     </Button>
                   </div>
-                  <Button className="w-full mt-3 bg-primary hover:bg-primary/90">
+
+                  <Button
+                    className="w-full mt-3"
+                    disabled={selectedTask.status === "delivered"}
+                    onClick={() => selectedTask && updateTaskStatus(selectedTask.id, "delivered", "Delivered")}
+                  >
                     <ShieldCheck className="h-4 w-4 mr-1.5" />
-                    Complete Delivery
+                    {selectedTask.status === "delivered" ? "Delivered" : "Complete Delivery"}
                   </Button>
                 </>
               )}
@@ -411,76 +843,114 @@ function DeliveryTasks({ type }: { type: "pickup" | "delivery" }) {
           </>
         )}
       </div>
-    </div>
+
+      {/* Dialogs */}
+      {selectedTask && (
+        <>
+          <OtpDialog task={selectedTask} open={otpDialogOpen} onOpenChange={setOtpDialogOpen} />
+          <SignatureDialog task={selectedTask} open={signatureDialogOpen} onOpenChange={setSignatureDialogOpen} />
+        </>
+      )}
+    </motion.div>
   );
 }
 
+// ── Earnings ──
 function DeliveryEarnings() {
-  const weeklyEarnings = [
-    { day: "Mon", earnings: 420, trips: 8 },
-    { day: "Tue", earnings: 580, trips: 11 },
-    { day: "Wed", earnings: 510, trips: 10 },
-    { day: "Thu", earnings: 640, trips: 12 },
-    { day: "Fri", earnings: 780, trips: 14 },
-    { day: "Sat", earnings: 920, trips: 16 },
-    { day: "Sun", earnings: 680, trips: 12 },
-  ];
+  const [data, setData] = useState<{
+    todayEarnings: number;
+    weekEarnings: number;
+    totalTrips: number;
+    avgPerTrip: number;
+    weekChart: { day: string; earnings: number }[];
+    recentPayouts: { id: string; amount: number; method: string; status: string; date: string; description: string }[];
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get<{
+      todayEarnings: number;
+      weekEarnings: number;
+      totalTrips: number;
+      avgPerTrip: number;
+      weekChart: { day: string; earnings: number }[];
+      recentPayouts: { id: string; amount: number; method: string; status: string; date: string; description: string }[];
+    }>("/api/delivery-executives/earnings")
+      .then(setData)
+      .catch((e) => toast.error("Failed to load earnings"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const hasData = data && data.totalTrips > 0;
+  const chartData = data?.weekChart || [];
 
   return (
-    <div className="space-y-6">
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.2 }} className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Today's Earnings" value={formatINR(640)} change={8.2} trend="up" icon={IndianRupee} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="This Week" value={formatINR(4530)} change={12.4} trend="up" icon={Calendar} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Total Trips" value="83" change={6.1} trend="up" icon={Bike} accent="from-violet-500 to-purple-600" />
-        <StatCard label="Avg Per Trip" value={formatINR(54)} change={3.2} trend="up" icon={TrendingUp} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Today's Earnings" value={data ? `₹${data.todayEarnings}` : "₹0"} icon={IndianRupee} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="This Week" value={data ? `₹${data.weekEarnings}` : "₹0"} icon={Calendar} accent="from-emerald-500 to-green-600" />
+        <StatCard label="Total Trips" value={data ? String(data.totalTrips) : "0"} icon={Bike} accent="from-violet-500 to-purple-600" />
+        <StatCard label="Avg Per Trip" value={data ? `₹${data.avgPerTrip}` : "₹0"} icon={TrendingUp} accent="from-amber-500 to-orange-600" />
       </div>
 
       <Card className="p-5 shadow-soft">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="font-semibold">Weekly Earnings</h3>
-            <p className="text-xs text-muted-foreground">Last 7 days · 83 trips · ₹4,530 total</p>
+            <p className="text-xs text-muted-foreground">
+              {hasData ? `₹${data!.weekEarnings} this week` : "No earnings data yet"}
+            </p>
           </div>
-          <Button variant="outline" size="sm">Withdraw</Button>
         </div>
-        <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={weeklyEarnings} margin={{ left: -16, right: 8 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.91 0.012 180)" vertical={false} />
-            <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" />
-            <YAxis tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" tickFormatter={(v) => `₹${v}`} />
-            <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid oklch(0.91 0.012 180)", fontSize: 12 }} formatter={(v: number) => formatINR(v)} />
-            <Bar dataKey="earnings" fill="#6B9C8E" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        {hasData && chartData.length > 0 ? (
+          <div className="h-60">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="day" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
+                <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" tickFormatter={(v: number) => `₹${v}`} />
+                <Tooltip
+                  contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
+                  formatter={(value: number) => [`₹${value}`, "Earnings"]}
+                />
+                <Bar dataKey="earnings" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center h-60 text-muted-foreground text-sm">
+            {loading ? "Loading..." : "Start completing deliveries to see your earnings"}
+          </div>
+        )}
       </Card>
 
       <Card className="p-5 shadow-soft">
         <h3 className="font-semibold mb-3">Recent Payouts</h3>
-        <div className="space-y-2">
-          {[
-            { date: "Today", amount: 640, status: "pending", trips: 4 },
-            { date: "Yesterday", amount: 920, status: "paid", trips: 16 },
-            { date: "2 days ago", amount: 780, status: "paid", trips: 14 },
-            { date: "3 days ago", amount: 640, status: "paid", trips: 12 },
-          ].map((p, i) => (
-            <div key={i} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30">
-                <IndianRupee className="h-4 w-4" />
+        {hasData && data!.recentPayouts.length > 0 ? (
+          <div className="space-y-2">
+            {data!.recentPayouts.map((p) => (
+              <div key={p.id} className="flex items-center justify-between rounded-lg border border-border/60 p-3">
+                <div>
+                  <p className="text-sm font-medium">{p.description}</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {new Date(p.date).toLocaleDateString("en-IN")} · {p.method}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold">₹{p.amount}</p>
+                  <Badge variant={p.status === "completed" ? "secondary" : "outline"} className="text-[9px] py-0 h-4 capitalize">
+                    {p.status}
+                  </Badge>
+                </div>
               </div>
-              <div className="flex-1">
-                <p className="text-sm font-medium">{p.date} · {p.trips} trips</p>
-                <p className="text-xs text-muted-foreground">Payout to •••• 4242</p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-semibold">{formatINR(p.amount)}</p>
-                <Badge variant="outline" className={cn("text-[10px] py-0 h-4", p.status === "paid" ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30")}>
-                  {p.status}
-                </Badge>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground text-center py-4">
+            {loading ? "Loading..." : "No payouts yet"}
+          </p>
+        )}
       </Card>
-    </div>
+    </motion.div>
   );
 }

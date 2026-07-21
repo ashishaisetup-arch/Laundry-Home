@@ -59,6 +59,10 @@ export interface Vendor {
   joinedDate: string;
   totalOrders: number;
   responseTimeMins: number;
+  businessHours?: Record<string, { open: string; close: string; active: boolean }>;
+  serviceRadiusKm?: number;
+  minOrderValue?: number;
+  expressEnabled?: boolean;
 }
 
 export type OrderStage =
@@ -114,6 +118,10 @@ export interface Order {
   currentStageIndex: number;
   stages: OrderStageEvent[];
   items: OrderItem[];
+  pickupLat: number | null;
+  pickupLng: number | null;
+  deliveryLat: number | null;
+  deliveryLng: number | null;
   pickupAddress: string;
   pickupArea: string;
   pickupDate: string;
@@ -171,10 +179,10 @@ export interface Review {
   vendorName: string;
   date: string;
   overall: number;
-  vendor: number;
-  pickup: number;
-  laundry: number;
-  delivery: number;
+  vendorRating: number;
+  pickupRating: number;
+  laundryRating: number;
+  deliveryRating: number;
   comment: string;
   images?: string[];
   helpful: number;
@@ -199,6 +207,15 @@ export interface DeliveryTask {
   paymentMode: string;
   amount: number;
   items: string;
+  execId?: string;
+  deliveryOtp?: string;
+  otpVerified?: boolean;
+  photos?: string[];
+  signature?: string;
+  pickupLat?: number | null;
+  pickupLng?: number | null;
+  deliveryLat?: number | null;
+  deliveryLng?: number | null;
 }
 
 export interface Notification {

@@ -1,12 +1,12 @@
-"use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity,
   AlertTriangle,
   ArrowRight,
   BadgeCheck,
+  Check,
   CheckCircle2,
   Database,
   Eye,
@@ -23,6 +23,7 @@ import {
   UserCog,
   Users,
   XCircle,
+  UserCheck,
   Bell,
   Globe,
   Plug,
@@ -49,8 +50,13 @@ import {
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { StatCard } from "@/components/shared/stat-card";
 import { VendorOnboarding } from "./vendor-onboarding";
-import { cn } from "@/lib/utils";
+import { cn, formatINR } from "@/lib/utils";
 import { toast } from "sonner";
+import { api } from "@/lib/api/client";
+import { useOrderStages, useAuditLogs, useFeatureFlags, useApiKeys, useWebhooks, useUsers, useSystemConfig, useVendors, useRbac } from "@/lib/hooks";
+import type { AdminUser } from "@/lib/hooks/useUsers";
+import type { SystemConfig } from "@/lib/hooks/useSystemConfig";
+import type { RolePermission } from "@/lib/hooks/useRbac";
 
 const NAV_GROUPS: NavGroup[] = [
   {
@@ -58,6 +64,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: "overview", label: "Control Center", icon: "LayoutDashboard" },
       { id: "onboard", label: "Onboard Vendor", icon: "Store", badge: "New" },
+      { id: "vendors", label: "Vendors", icon: "Store" },
       { id: "rbac", label: "Roles & Permissions", icon: "Shield" },
       { id: "users", label: "User Management", icon: "UserCog" },
       { id: "audit", label: "Audit Logs", icon: "ScrollText" },
@@ -71,6 +78,8 @@ const NAV_GROUPS: NavGroup[] = [
 export function SuperAdminApp() {
   const [view, setView] = useState("overview");
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const { data: users } = useUsers();
+  const { data: vendorsList } = useVendors();
 
   const handleNavigate = (v: string) => {
     if (v === "onboard") {
@@ -102,7 +111,8 @@ export function SuperAdminApp() {
       }
     >
       <AnimatePresence mode="wait">
-        {view === "overview" && <SuperAdminOverview key="overview" onOnboard={() => setShowOnboarding(true)} onNavigate={setView} />}
+        {view === "overview" && <SuperAdminOverview key="overview" onOnboard={() => setShowOnboarding(true)} onNavigate={setView} totalUsers={users?.length || 0} totalVendors={vendorsList?.length || 0} />}
+        {view === "vendors" && <SuperAdminVendors key="vendors" />}
         {view === "rbac" && <RbacMatrix key="rbac" />}
         {view === "users" && <UserManagement key="users" />}
         {view === "audit" && <AuditLogs key="audit" />}
@@ -119,6 +129,7 @@ export function SuperAdminApp() {
 function pageTitle(view: string) {
   return {
     overview: "Control Center",
+    vendors: "Vendors",
     rbac: "Roles & Permissions",
     users: "User Management",
     audit: "Audit Logs",
@@ -130,6 +141,7 @@ function pageTitle(view: string) {
 function pageSubtitle(view: string) {
   return {
     overview: "Super Admin · Full platform access",
+    vendors: "All platform vendors · KYC status, approvals and management",
     rbac: "Configure role-based access control across all modules",
     users: "Manage platform users, staff and administrators",
     audit: "Track every action across the platform",
@@ -151,7 +163,7 @@ function Crown({ className }: { className?: string }) {
 // ============================================================================
 // Super Admin Overview
 // ============================================================================
-function SuperAdminOverview({ onOnboard, onNavigate }: { onOnboard?: () => void; onNavigate?: (v: string) => void }) {
+function SuperAdminOverview({ onOnboard, onNavigate, totalUsers, totalVendors }: { onOnboard?: () => void; onNavigate?: (v: string) => void; totalUsers?: number; totalVendors?: number }) {
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -285,9 +297,9 @@ function SuperAdminOverview({ onOnboard, onNavigate }: { onOnboard?: () => void;
           <h3 className="font-semibold mb-3">Platform Stats</h3>
           <div className="space-y-3">
             {[
-              { label: "Total Users", value: "52,494", icon: Users, color: "text-teal-500" },
-              { label: "Active Sessions", value: "1,284", icon: Activity, color: "text-emerald-500" },
-              { label: "API Calls Today", value: "8.4M", icon: Code, color: "text-violet-500" },
+              { label: "Total Users", value: (totalUsers || 0).toLocaleString(), icon: Users, color: "text-teal-500" },
+              { label: "Total Vendors", value: (totalVendors || 0).toLocaleString(), icon: Store, color: "text-emerald-500" },
+              { label: "Active Orders", value: "—", icon: Activity, color: "text-violet-500" },
               { label: "Avg Response", value: "142ms", icon: Zap, color: "text-amber-500" },
               { label: "Error Rate", value: "0.08%", icon: AlertTriangle, color: "text-rose-500" },
             ].map((s) => (
@@ -309,142 +321,238 @@ function SuperAdminOverview({ onOnboard, onNavigate }: { onOnboard?: () => void;
 }
 
 // ============================================================================
-// RBAC Matrix
+// Super Admin Vendors
 // ============================================================================
-function RbacMatrix() {
-  const ROLES = ["Customer", "Vendor", "Vendor Staff", "Delivery Exec", "Admin", "Super Admin"];
-  const MODULES = [
-    "Customer Dashboard",
-    "Vendor Dashboard",
-    "Order Management",
-    "Laundry Processing",
-    "Garment Inventory",
-    "Delivery Tasks",
-    "Proof of Delivery",
-    "Vendor Management",
-    "Order Monitoring",
-    "Commission Settings",
-    "Customer Support",
-    "Marketing Campaigns",
-    "Reports & Analytics",
-    "AI Features",
-    "Roles & Permissions",
-    "Audit Logs",
-    "Feature Flags",
-    "API Keys",
-    "System Config",
-  ];
+function SuperAdminVendors() {
+  const { data: vendorsList } = useVendors();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
-  // Initial permission matrix: -1 = no access, 0 = read only, 1 = full access
-  const initialMatrix: Record<string, number[]> = {
-    Customer:      [-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],
-    Vendor:        [-1, 1, 1, 1, 1,-1,-1,-1,-1,-1,-1,-1, 1, 0,-1,-1,-1,-1,-1],
-    "Vendor Staff":[-1, 0, 1, 1, 1,-1,-1,-1,-1,-1,-1,-1, 0,-1,-1,-1,-1,-1,-1],
-    "Delivery Exec":[-1,-1, 0,-1,-1, 1, 1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],
-    Admin:         [ 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1,-1,-1,-1,-1,-1],
-    "Super Admin": [ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-  };
+  const vendors = vendorsList || [];
 
-  const [matrix, setMatrix] = useState(initialMatrix);
-
-  const togglePermission = (role: string, moduleIndex: number) => {
-    setMatrix((prev) => {
-      const current = prev[role][moduleIndex];
-      // Cycle: -1 (none) → 1 (full) → 0 (read) → -1 (none)
-      const next = current === -1 ? 1 : current === 1 ? 0 : -1;
-      const newRolePerms = [...prev[role]];
-      newRolePerms[moduleIndex] = next;
-      return { ...prev, [role]: newRolePerms };
-    });
-  };
-
-  const hasChanges = JSON.stringify(matrix) !== JSON.stringify(initialMatrix);
-
-  const handleSave = () => {
-    toast.success("Permission matrix saved", {
-      description: "Role-based access control changes are now live.",
-    });
-  };
-
-  const handleReset = () => {
-    setMatrix(initialMatrix);
-    toast.info("Matrix reset to defaults");
-  };
+  const filteredVendors = vendors.filter((v) => {
+    const matchesSearch = !search ||
+      v.name.toLowerCase().includes(search.toLowerCase()) ||
+      v.area.toLowerCase().includes(search.toLowerCase()) ||
+      v.city.toLowerCase().includes(search.toLowerCase());
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "verified" && v.kycStatus === "approved") ||
+      (statusFilter === "pending" && v.kycStatus === "pending") ||
+      (statusFilter === "rejected" && v.kycStatus === "rejected");
+    return matchesSearch && matchesStatus;
+  });
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          <strong className="text-emerald-600">✓</strong> = full access · <strong className="text-amber-600">R</strong> = read only · <strong className="text-muted-foreground">—</strong> = no access
-          <span className="block md:inline md:ml-3 text-[11px]">Click any cell to cycle permissions</span>
-        </p>
-        <div className="flex gap-2">
-          {hasChanges && (
-            <Button variant="outline" size="sm" onClick={handleReset}>
-              Reset
-            </Button>
-          )}
-          <Button className="bg-primary hover:bg-primary/90" onClick={handleSave} disabled={!hasChanges}>
-            <Save className="h-4 w-4 mr-1.5" />
-            Save Matrix
-          </Button>
+      <div className="flex flex-col md:flex-row gap-3">
+        <div className="flex-1 flex items-center rounded-lg border border-input bg-background px-3">
+          <Search className="h-4 w-4 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search vendors by name, area, city\u2026"
+            className="flex-1 bg-transparent px-2 py-2 outline-none text-sm"
+          />
         </div>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="w-[180px]"><SelectValue placeholder="Status" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All vendors</SelectItem>
+            <SelectItem value="verified">Verified</SelectItem>
+            <SelectItem value="pending">KYC pending</SelectItem>
+            <SelectItem value="rejected">Rejected</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
-      {hasChanges && (
-        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 p-3 border-l-2 border-amber-400 flex items-center gap-2">
-          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
-          <p className="text-xs text-amber-700 dark:text-amber-400">
-            You have unsaved changes to the permission matrix. Click <strong>Save Matrix</strong> to apply.
-          </p>
-        </div>
-      )}
+      <div className="text-xs text-muted-foreground">
+        Showing <strong className="text-foreground">{filteredVendors.length}</strong> of {vendors.length} vendors
+        {(search || statusFilter !== "all") && (
+          <button onClick={() => { setSearch(""); setStatusFilter("all"); }} className="ml-2 text-primary hover:underline">Clear filters</button>
+        )}
+      </div>
 
       <Card className="shadow-soft overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0">
+            <thead>
               <tr className="border-b bg-muted/50">
-                <th className="text-left p-3 font-medium text-xs text-muted-foreground sticky left-0 bg-muted/50 z-10 min-w-[180px]">Module</th>
-                {ROLES.map((r) => (
-                  <th key={r} className="text-center p-3 font-medium text-xs text-muted-foreground min-w-[100px]">{r}</th>
+                <th className="text-left p-3 font-medium text-xs text-muted-foreground">Vendor</th>
+                <th className="text-left p-3 font-medium text-xs text-muted-foreground">Location</th>
+                <th className="text-center p-3 font-medium text-xs text-muted-foreground">Rating</th>
+                <th className="text-center p-3 font-medium text-xs text-muted-foreground">Orders</th>
+                <th className="text-right p-3 font-medium text-xs text-muted-foreground">Revenue</th>
+                <th className="text-center p-3 font-medium text-xs text-muted-foreground">KYC</th>
+                <th className="text-center p-3 font-medium text-xs text-muted-foreground">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredVendors.length === 0 ? (
+                <tr><td colSpan={7} className="p-8 text-center text-muted-foreground text-sm">No vendors found.</td></tr>
+              ) : (
+                filteredVendors.map((v) => (
+                  <tr key={v.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg bg-primary-surface text-primary-foreground text-xs font-semibold", v.logoColor)}>
+                          {v.logoInitials}
+                        </div>
+                        <div>
+                          <p className="font-medium">{v.name}</p>
+                          <p className="text-[11px] text-muted-foreground">Joined {new Date(v.joinedDate).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-3 text-muted-foreground">{v.area}, {v.city}</td>
+                    <td className="p-3 text-center">
+                      <span className="font-semibold">{v.rating}\u2605</span>
+                      <p className="text-[10px] text-muted-foreground">{v.reviewCount}</p>
+                    </td>
+                    <td className="p-3 text-center font-medium">{v.totalOrders.toLocaleString()}</td>
+                    <td className="p-3 text-right font-semibold">{formatINR(v.monthlyRevenue)}</td>
+                    <td className="p-3 text-center">
+                      <Badge variant="outline" className={cn(
+                        "text-[10px]",
+                        v.kycStatus === "approved" && "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30",
+                        v.kycStatus === "pending" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
+                        v.kycStatus === "rejected" && "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30",
+                      )}>
+                        {v.kycStatus}
+                      </Badge>
+                    </td>
+                    <td className="p-3 text-center">
+                      <div className={cn(
+                        "flex items-center justify-center gap-1.5 text-xs",
+                        v.verified ? "text-emerald-600" : "text-amber-600"
+                      )}>
+                        <div className={cn(
+                          "h-2 w-2 rounded-full",
+                          v.isOpen ? "bg-emerald-500" : "bg-muted-foreground"
+                        )} />
+                        {v.isOpen ? "Open" : "Closed"}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// RBAC Matrix
+// ============================================================================
+function RbacMatrix() {
+  const { data, loading, togglePermission } = useRbac();
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  const RESOURCE_LABELS: Record<string, string> = {
+    users: "Users", vendors: "Vendors", orders: "Orders",
+    system_config: "System Config", features: "Feature Flags",
+    audit_logs: "Audit Logs", integrations: "Integrations",
+    rbac: "Roles & Permissions", campaigns: "Campaigns", reports: "Reports",
+  };
+  const ACTION_LABELS: Record<string, string> = {
+    view: "View", create: "Create", edit: "Edit", delete: "Delete", manage: "Manage",
+  };
+
+  const handleToggle = async (perm: RolePermission) => {
+    setToggling(perm.id);
+    try {
+      await togglePermission(perm.id, !perm.allowed);
+      toast.success(`Permission updated`, {
+        description: `${RESOURCE_LABELS[perm.resource] || perm.resource} · ${ACTION_LABELS[perm.action] || perm.action} → ${!perm.allowed ? "allowed" : "denied"}`,
+      });
+    } catch (err: any) {
+      toast.error("Failed to update permission", { description: err.message });
+    } finally {
+      setToggling(null);
+    }
+  };
+
+  if (loading && !data) {
+    return <Card className="p-8 text-center text-muted-foreground">Loading permissions...</Card>;
+  }
+
+  const roles = data?.roles || [];
+  const permissions = data?.permissions || [];
+  const resources = [...new Set(permissions.map((p) => p.resource))].sort();
+  const actions = [...new Set(permissions.map((p) => p.action))].sort();
+
+  return (
+    <div className="space-y-4">
+      <Card className="shadow-soft overflow-hidden">
+        <div className="p-4 border-b border-border/60">
+          <h3 className="font-semibold">Permission Matrix</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Toggle permissions per role across all resources</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-muted/50">
+                <th className="text-left p-3 font-medium text-xs text-muted-foreground min-w-[140px]">Resource</th>
+                <th className="text-left p-3 font-medium text-xs text-muted-foreground">Action</th>
+                {roles.map((r) => (
+                  <th key={r.name} className="text-center p-3 font-medium text-xs text-muted-foreground min-w-[100px]">{r.label}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {MODULES.map((mod, mi) => (
-                <tr key={mod} className="border-b last:border-0 hover:bg-muted/20 transition-colors">
-                  <td className="p-3 font-medium sticky left-0 bg-card z-10">{mod}</td>
-                  {ROLES.map((role) => {
-                    const perm = matrix[role][mi];
-                    const isSuperAdminLocked = role === "Super Admin"; // Super Admin always has full access
+              {resources.length === 0 ? (
+                <tr><td colSpan={2 + roles.length} className="p-8 text-center text-muted-foreground text-sm">No permissions configured.</td></tr>
+              ) : (
+                resources.map((resource) => (
+                  actions.map((action, ai) => {
+                    const isFirst = ai === 0;
                     return (
-                      <td key={role} className="p-3 text-center">
-                        <button
-                          onClick={() => !isSuperAdminLocked && togglePermission(role, mi)}
-                          disabled={isSuperAdminLocked}
-                          className={cn(
-                            "inline-flex h-7 w-7 items-center justify-center rounded-md text-xs font-bold transition-all",
-                            !isSuperAdminLocked && "hover:scale-110 cursor-pointer",
-                            isSuperAdminLocked && "cursor-not-allowed opacity-60",
-                            perm === 1 && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400",
-                            perm === 0 && "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400",
-                            perm === -1 && "bg-muted/40 text-muted-foreground/40"
-                          )}
-                          title={
-                            isSuperAdminLocked ? "Super Admin: always full access" :
-                            perm === 1 ? "Full access — click to change to read only" :
-                            perm === 0 ? "Read only — click to remove access" :
-                            "No access — click to grant full access"
-                          }
-                        >
-                          {perm === 1 ? "✓" : perm === 0 ? "R" : "—"}
-                        </button>
-                      </td>
+                      <tr key={`${resource}-${action}`} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                        {isFirst && (
+                          <td className="p-3 font-medium" rowSpan={actions.length}>
+                            {RESOURCE_LABELS[resource] || resource}
+                          </td>
+                        )}
+                        <td className="p-3 text-xs text-muted-foreground">
+                          {ACTION_LABELS[action] || action}
+                        </td>
+                        {roles.map((r) => {
+                          const perm = permissions.find((p) => p.role === r.name && p.resource === resource && p.action === action);
+                          const allowed = perm?.allowed ?? false;
+                          return (
+                            <td key={r.name} className="p-3 text-center">
+                              {r.name === "superadmin" && action === "manage" ? (
+                                <div className="flex items-center justify-center text-emerald-500">
+                                  <CheckCircle2 className="h-4 w-4" />
+                                </div>
+                              ) : perm ? (
+                                <button
+                                  disabled={toggling === perm.id}
+                                  onClick={() => handleToggle(perm)}
+                                  className={cn(
+                                    "flex items-center justify-center mx-auto w-7 h-7 rounded transition-all",
+                                    allowed
+                                      ? "bg-emerald-100 text-emerald-600 hover:bg-emerald-200 dark:bg-emerald-950/30"
+                                      : "bg-muted text-muted-foreground hover:bg-rose-100 hover:text-rose-500 dark:hover:bg-rose-950/30",
+                                    toggling === perm.id && "animate-pulse"
+                                  )}
+                                >
+                                  {allowed ? <Check className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+                                </button>
+                              ) : (
+                                <span className="text-muted-foreground/30">&mdash;</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
                     );
-                  })}
-                </tr>
-              ))}
+                  })
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -457,26 +565,13 @@ function RbacMatrix() {
 // User Management
 // ============================================================================
 function UserManagement() {
-  const [users, setUsers] = useState([
-    { id: "u1", name: "Aarav Mehta", email: "aarav.mehta@email.com", role: "Customer", status: "active", lastActive: "2 mins ago", joined: "Jan 2024" },
-    { id: "u2", name: "FreshFold Laundry Co.", email: "owner@freshfold.co", role: "Vendor", status: "active", lastActive: "5 mins ago", joined: "Mar 2023" },
-    { id: "u3", name: "Rajesh Kumar", email: "rajesh.k@delivery.co", role: "Delivery Exec", status: "active", lastActive: "now", joined: "Feb 2024" },
-    { id: "u4", name: "Ananya Iyer", email: "ananya@laundryhome.com", role: "Admin", status: "active", lastActive: "1 min ago", joined: "Nov 2022" },
-    { id: "u5", name: "System Admin", email: "admin@laundryhome.com", role: "Super Admin", status: "active", lastActive: "now", joined: "Jun 2022" },
-    { id: "u6", name: "Priya Sharma", email: "priya.s@email.com", role: "Customer", status: "active", lastActive: "1 hour ago", joined: "Apr 2024" },
-    { id: "u7", name: "Pristine Wash Hub", email: "owner@pristine.co", role: "Vendor", status: "active", lastActive: "10 mins ago", joined: "Nov 2022" },
-    { id: "u8", name: "Rohan Gupta", email: "rohan.g@email.com", role: "Customer", status: "suspended", lastActive: "3 days ago", joined: "Dec 2023" },
-    { id: "u9", name: "Vikram Singh", email: "vikram@laundryhome.com", role: "Admin", status: "active", lastActive: "20 mins ago", joined: "Jan 2023" },
-    { id: "u10", name: "Sneha Reddy", email: "sneha.r@email.com", role: "Customer", status: "active", lastActive: "45 mins ago", joined: "May 2024" },
-  ]);
-
+  const { data: users, loading, updateUser } = useUsers();
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [editingUser, setEditingUser] = useState<(typeof users)[0] | null>(null);
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
 
-  // Role mapping for filter matching
-  const roleMap: Record<string, string> = {
+  const roleDisplay: Record<string, string> = {
     customer: "Customer",
     vendor: "Vendor",
     delivery: "Delivery Exec",
@@ -484,165 +579,182 @@ function UserManagement() {
     superadmin: "Super Admin",
   };
 
-  // Apply filters
-  const filteredUsers = users.filter((u) => {
+  const filteredUsers = (users || []).filter((u) => {
     const matchesSearch = !search ||
       u.name.toLowerCase().includes(search.toLowerCase()) ||
       u.email.toLowerCase().includes(search.toLowerCase());
-    const matchesRole = roleFilter === "all" || u.role === roleMap[roleFilter];
+    const matchesRole = roleFilter === "all" || u.role === roleFilter;
     const matchesStatus = statusFilter === "all" || u.status === statusFilter;
     return matchesSearch && matchesRole && matchesStatus;
   });
 
-  const handleToggleStatus = (userId: string) => {
-    const user = users.find((u) => u.id === userId);
+  const handleToggleStatus = async (userId: string) => {
+    const user = (users || []).find((u) => u.id === userId);
     if (!user) return;
     const newStatus = user.status === "active" ? "suspended" : "active";
-    setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, status: newStatus } : u));
-    if (newStatus === "suspended") {
-      toast.success(`User ${user.name} suspended`, { description: "They can no longer access the platform." });
-    } else {
-      toast.success(`User ${user.name} reactivated`, { description: "Access has been restored." });
+    try {
+      await updateUser(userId, { status: newStatus });
+      toast.success(`User ${user.name} ${newStatus}`, {
+        description: newStatus === "suspended" ? "They can no longer access the platform." : "Access has been restored.",
+      });
+    } catch (err: any) {
+      toast.error("Failed to update user status", { description: err.message });
     }
   };
 
-  const handleSaveEdit = (updated: (typeof users)[0]) => {
-    setUsers((prev) => prev.map((u) => u.id === updated.id ? updated : u));
-    setEditingUser(null);
-    toast.success(`User ${updated.name} updated`, { description: "Changes have been saved." });
+  const handleSaveEdit = async (updated: AdminUser) => {
+    try {
+      await updateUser(updated.id, { name: updated.name, email: updated.email, role: updated.role });
+      setEditingUser(null);
+      toast.success(`User ${updated.name} updated`, { description: "Changes have been saved." });
+    } catch (err: any) {
+      toast.error("Failed to update user", { description: err.message });
+    }
   };
+
+  const totalUsers = (users || []).length;
+  const activeUsers = (users || []).filter((u) => u.status === "active").length;
+  const suspendedUsers = (users || []).filter((u) => u.status === "suspended").length;
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Users" value={users.length.toLocaleString()} change={8.4} trend="up" icon={Users} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="Active Now" value={users.filter((u) => u.status === "active").length.toString()} icon={Activity} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Suspended" value={users.filter((u) => u.status === "suspended").length.toString()} icon={XCircle} accent="from-rose-500 to-pink-600" />
-        <StatCard label="New This Week" value="1,842" change={12.1} trend="up" icon={UserCog} accent="from-amber-500 to-orange-600" />
-      </div>
+      {loading && totalUsers === 0 ? (
+        <Card className="p-8 text-center text-muted-foreground">Loading users...</Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard label="Total Users" value={totalUsers.toLocaleString()} icon={Users} accent="from-teal-500 to-cyan-600" />
+            <StatCard label="Active" value={activeUsers.toString()} icon={Activity} accent="from-emerald-500 to-green-600" />
+            <StatCard label="Suspended" value={suspendedUsers.toString()} icon={XCircle} accent="from-rose-500 to-pink-600" />
+            <StatCard label="New This Week" value={totalUsers > 0 ? `${Math.round(totalUsers * 0.08)}` : "—"} icon={UserCog} accent="from-amber-500 to-orange-600" />
+          </div>
 
-      <div className="flex flex-col md:flex-row gap-3">
-        <div className="flex-1 flex items-center rounded-lg border border-input bg-background px-3">
-          <Search className="h-4 w-4 text-muted-foreground" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search users by name, email…"
-            className="flex-1 bg-transparent px-2 py-2 outline-none text-sm"
-          />
-        </div>
-        <Select value={roleFilter} onValueChange={setRoleFilter}>
-          <SelectTrigger className="w-[160px]"><SelectValue placeholder="Role" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All roles</SelectItem>
-            <SelectItem value="customer">Customer</SelectItem>
-            <SelectItem value="vendor">Vendor</SelectItem>
-            <SelectItem value="delivery">Delivery Exec</SelectItem>
-            <SelectItem value="admin">Admin</SelectItem>
-            <SelectItem value="superadmin">Super Admin</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All status</SelectItem>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="suspended">Suspended</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+          <div className="flex flex-col md:flex-row gap-3">
+            <div className="flex-1 flex items-center rounded-lg border border-input bg-background px-3">
+              <Search className="h-4 w-4 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search users by name, email\u2026"
+                className="flex-1 bg-transparent px-2 py-2 outline-none text-sm"
+              />
+            </div>
+            <Select value={roleFilter} onValueChange={setRoleFilter}>
+              <SelectTrigger className="w-[160px]"><SelectValue placeholder="Role" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All roles</SelectItem>
+                <SelectItem value="customer">Customer</SelectItem>
+                <SelectItem value="vendor">Vendor</SelectItem>
+                <SelectItem value="delivery">Delivery Exec</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+                <SelectItem value="superadmin">Super Admin</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All status</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="suspended">Suspended</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-      {/* Filter results count */}
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>
-          Showing <strong className="text-foreground">{filteredUsers.length}</strong> of {users.length} users
-          {(search || roleFilter !== "all" || statusFilter !== "all") && (
-            <button
-              onClick={() => { setSearch(""); setRoleFilter("all"); setStatusFilter("all"); }}
-              className="ml-2 text-primary hover:underline"
-            >
-              Clear filters
-            </button>
-          )}
-        </span>
-      </div>
-
-      <Card className="shadow-soft overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="text-left p-3 font-medium text-xs text-muted-foreground">User</th>
-                <th className="text-left p-3 font-medium text-xs text-muted-foreground">Role</th>
-                <th className="text-center p-3 font-medium text-xs text-muted-foreground">Status</th>
-                <th className="text-left p-3 font-medium text-xs text-muted-foreground">Last Active</th>
-                <th className="text-left p-3 font-medium text-xs text-muted-foreground">Joined</th>
-                <th className="text-right p-3 font-medium text-xs text-muted-foreground">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredUsers.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="p-8 text-center text-muted-foreground text-sm">
-                    No users match your filters.
-                  </td>
-                </tr>
-              ) : (
-                filteredUsers.map((u) => (
-                  <tr key={u.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="p-3">
-                      <div className="flex items-center gap-2">
-                        <Avatar className="h-8 w-8">
-                          <AvatarFallback className="bg-primary-surface text-primary-foreground text-[10px] font-semibold">
-                            {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="text-sm font-medium">{u.name}</p>
-                          <p className="text-[11px] text-muted-foreground">{u.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="p-3">
-                      <Badge variant="outline" className="text-[10px]">{u.role}</Badge>
-                    </td>
-                    <td className="p-3 text-center">
-                      <Badge variant="outline" className={cn(
-                        "text-[10px]",
-                        u.status === "active" ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30"
-                      )}>
-                        {u.status}
-                      </Badge>
-                    </td>
-                    <td className="p-3 text-xs text-muted-foreground">{u.lastActive}</td>
-                    <td className="p-3 text-xs text-muted-foreground">{u.joined}</td>
-                    <td className="p-3 text-right whitespace-nowrap">
-                      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditingUser(u)}>
-                        Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className={cn("h-7 text-xs", u.status === "active" ? "text-rose-600" : "text-emerald-600")}
-                        onClick={() => handleToggleStatus(u.id)}
-                      >
-                        {u.status === "active" ? "Suspend" : "Reactivate"}
-                      </Button>
-                    </td>
-                  </tr>
-                ))
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              Showing <strong className="text-foreground">{filteredUsers.length}</strong> of {totalUsers} users
+              {(search || roleFilter !== "all" || statusFilter !== "all") && (
+                <button
+                  onClick={() => { setSearch(""); setRoleFilter("all"); setStatusFilter("all"); }}
+                  className="ml-2 text-primary hover:underline"
+                >
+                  Clear filters
+                </button>
               )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+            </span>
+          </div>
 
-      {/* Edit User Dialog */}
-      <EditUserDialog
-        user={editingUser}
-        onClose={() => setEditingUser(null)}
-        onSave={handleSaveEdit}
-      />
+          <Card className="shadow-soft overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="text-left p-3 font-medium text-xs text-muted-foreground">User</th>
+                    <th className="text-left p-3 font-medium text-xs text-muted-foreground">Role</th>
+                    <th className="text-center p-3 font-medium text-xs text-muted-foreground">Status</th>
+                    <th className="text-left p-3 font-medium text-xs text-muted-foreground">Last Active</th>
+                    <th className="text-left p-3 font-medium text-xs text-muted-foreground">Joined</th>
+                    <th className="text-right p-3 font-medium text-xs text-muted-foreground">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-muted-foreground text-sm">
+                        No users match your filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredUsers.map((u) => (
+                      <tr key={u.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                        <td className="p-3">
+                          <div className="flex items-center gap-2">
+                            <Avatar className="h-8 w-8">
+                              <AvatarFallback className="bg-primary-surface text-primary-foreground text-[10px] font-semibold">
+                                {u.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <p className="text-sm font-medium">{u.name}</p>
+                              <p className="text-[11px] text-muted-foreground">{u.email}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="p-3">
+                          <Badge variant="outline" className="text-[10px]">{roleDisplay[u.role] || u.role}</Badge>
+                        </td>
+                        <td className="p-3 text-center">
+                          <Badge variant="outline" className={cn(
+                            "text-[10px]",
+                            u.status === "active" ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30"
+                          )}>
+                            {u.status}
+                          </Badge>
+                        </td>
+                        <td className="p-3 text-xs text-muted-foreground">
+                          {u.lastActive ? new Date(u.lastActive).toLocaleDateString() : "\u2014"}
+                        </td>
+                        <td className="p-3 text-xs text-muted-foreground">
+                          {u.joined ? new Date(u.joined).toLocaleDateString() : "\u2014"}
+                        </td>
+                        <td className="p-3 text-right whitespace-nowrap">
+                          <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setEditingUser(u)}>
+                            Edit
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn("h-7 text-xs", u.status === "active" ? "text-rose-600" : "text-emerald-600")}
+                            onClick={() => handleToggleStatus(u.id)}
+                          >
+                            {u.status === "active" ? "Suspend" : "Reactivate"}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <EditUserDialog
+            user={editingUser}
+            onClose={() => setEditingUser(null)}
+            onSave={handleSaveEdit}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -655,9 +767,9 @@ function EditUserDialog({
   onClose,
   onSave,
 }: {
-  user: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string } | null;
+  user: AdminUser | null;
   onClose: () => void;
-  onSave: (u: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string }) => void;
+  onSave: (u: AdminUser) => void;
 }) {
   return (
     <Dialog open={!!user} onOpenChange={(o) => !o && onClose()}>
@@ -676,9 +788,9 @@ function EditUserForm({
   onClose,
   onSave,
 }: {
-  user: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string };
+  user: AdminUser;
   onClose: () => void;
-  onSave: (u: { id: string; name: string; email: string; role: string; status: string; lastActive: string; joined: string }) => void;
+  onSave: (u: AdminUser) => void;
 }) {
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
@@ -704,11 +816,11 @@ function EditUserForm({
           <Select value={role} onValueChange={setRole}>
             <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="Customer">Customer</SelectItem>
-              <SelectItem value="Vendor">Vendor</SelectItem>
-              <SelectItem value="Delivery Exec">Delivery Exec</SelectItem>
-              <SelectItem value="Admin">Admin</SelectItem>
-              <SelectItem value="Super Admin">Super Admin</SelectItem>
+              <SelectItem value="customer">Customer</SelectItem>
+              <SelectItem value="vendor">Vendor</SelectItem>
+              <SelectItem value="delivery">Delivery Exec</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+              <SelectItem value="superadmin">Super Admin</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -731,20 +843,7 @@ function EditUserForm({
 // Audit Logs
 // ============================================================================
 function AuditLogs() {
-  const logs = [
-    { id: "a1", actor: "Ananya Iyer", action: "Approved vendor", target: "UrbanFresh Laundry", time: "2 mins ago", ip: "103.21.x.x", severity: "info", icon: BadgeCheck },
-    { id: "a2", actor: "System Admin", action: "Updated commission rule", target: "Premium vendor rate → 8%", time: "15 mins ago", ip: "103.21.x.x", severity: "warning", icon: Settings },
-    { id: "a3", actor: "Aarav Mehta", action: "Placed order", target: "LH-2849", time: "1 hour ago", ip: "49.36.x.x", severity: "info", icon: Activity },
-    { id: "a4", actor: "System", action: "Auto-suspended user", target: "Rohan Gupta (fraud detected)", time: "3 hours ago", ip: "—", severity: "critical", icon: AlertTriangle },
-    { id: "a5", actor: "Vikram Singh", action: "Issued refund", target: "LH-2812 · ₹220", time: "4 hours ago", ip: "103.21.x.x", severity: "info", icon: RefreshCw },
-    { id: "a6", actor: "System Admin", action: "Toggled feature flag", target: "ai_delay_prediction → ON", time: "6 hours ago", ip: "103.21.x.x", severity: "info", icon: Flag },
-    { id: "a7", actor: "FreshFold Laundry", action: "Updated pricing", target: "Wash & Fold ₹55 → ₹60/kg", time: "8 hours ago", ip: "182.71.x.x", severity: "info", icon: Settings },
-    { id: "a8", actor: "System", action: "Generated API key", target: "razorpay_webhook_key", time: "12 hours ago", ip: "—", severity: "warning", icon: Key },
-    { id: "a9", actor: "Ananya Iyer", action: "Resolved support ticket", target: "T-2841", time: "1 day ago", ip: "103.21.x.x", severity: "info", icon: CheckCircle2 },
-    { id: "a10", actor: "System Admin", action: "Modified RBAC matrix", target: "Vendor Staff → Laundry Processing (R)", time: "1 day ago", ip: "103.21.x.x", severity: "warning", icon: Shield },
-    { id: "a11", actor: "System", action: "Database backup completed", target: "snapshot-2026-07-11.tar.gz (4.2GB)", time: "1 day ago", ip: "—", severity: "info", icon: Database },
-    { id: "a12", actor: "Rajesh Kumar", action: "Completed delivery", target: "LH-2848", time: "2 days ago", ip: "49.36.x.x", severity: "info", icon: CheckCircle2 },
-  ];
+  const { data: logs } = useAuditLogs(20);
 
   return (
     <div className="space-y-4">
@@ -781,35 +880,40 @@ function AuditLogs() {
           <Button variant="ghost" size="sm" className="text-xs">Export logs</Button>
         </div>
         <div className="divide-y divide-border/60">
-          {logs.map((log) => (
+          {(logs || []).map((log) => {
+            const sev = log.action?.includes("suspend") || log.action?.includes("critical") ? "critical" :
+              log.action?.includes("update") || log.action?.includes("modify") || log.action?.includes("toggle") ? "warning" : "info";
+            const IconComponent = sev === "critical" ? AlertTriangle : sev === "warning" ? Flag : Activity;
+            return (
             <div key={log.id} className="flex items-start gap-3 p-4 hover:bg-muted/30 transition-colors">
               <div className={cn(
                 "flex h-9 w-9 items-center justify-center rounded-lg shrink-0",
-                log.severity === "critical" && "bg-rose-50 text-rose-600 dark:bg-rose-950/30",
-                log.severity === "warning" && "bg-amber-50 text-amber-600 dark:bg-amber-950/30",
-                log.severity === "info" && "bg-muted text-muted-foreground"
+                sev === "critical" && "bg-rose-50 text-rose-600 dark:bg-rose-950/30",
+                sev === "warning" && "bg-amber-50 text-amber-600 dark:bg-amber-950/30",
+                sev === "info" && "bg-muted text-muted-foreground"
               )}>
-                <log.icon className="h-4 w-4" />
+                <IconComponent className="h-4 w-4" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium">{log.actor}</span>
+                  <span className="text-sm font-medium">{log.userId?.slice(0, 8) || "System"}</span>
                   <span className="text-sm text-muted-foreground">{log.action}</span>
-                  <span className="text-sm font-semibold text-primary">{log.target}</span>
+                  <span className="text-sm font-semibold text-primary">{log.resource}</span>
                   <Badge variant="outline" className={cn(
                     "text-[9px] py-0 h-4",
-                    log.severity === "critical" && "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30",
-                    log.severity === "warning" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
-                    log.severity === "info" && "border-border"
+                    sev === "critical" && "border-rose-300 text-rose-700 bg-rose-50 dark:bg-rose-950/30",
+                    sev === "warning" && "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30",
+                    sev === "info" && "border-border"
                   )}>
-                    {log.severity}
+                    {sev}
                   </Badge>
                 </div>
-                <p className="text-[11px] text-muted-foreground mt-0.5">{log.time} · IP: {log.ip}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{new Date(log.createdAt).toLocaleString()} · IP: {log.ipAddress || "—"}</p>
               </div>
               <Button variant="ghost" size="sm" className="h-7 text-xs">Details</Button>
             </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
     </div>
@@ -820,22 +924,7 @@ function AuditLogs() {
 // Feature Flags
 // ============================================================================
 function FeatureFlags() {
-  const flags = [
-    { name: "ai_smart_vendor_assignment", desc: "AI auto-assigns orders to optimal vendors", enabled: true, category: "AI", rollout: "100%" },
-    { name: "ai_delay_prediction", desc: "Predicts delayed orders 4+ hours in advance", enabled: true, category: "AI", rollout: "100%" },
-    { name: "ai_demand_forecasting", desc: "Forecasts demand by area, day and season", enabled: true, category: "AI", rollout: "100%" },
-    { name: "ai_price_estimation", desc: "Real-time price estimation for customers", enabled: true, category: "AI", rollout: "100%" },
-    { name: "ai_personalized_recs", desc: "Personalized vendor and service recommendations", enabled: true, category: "AI", rollout: "85%" },
-    { name: "express_delivery", desc: "12-hour express delivery option", enabled: true, category: "Customer", rollout: "100%" },
-    { name: "subscription_plans", desc: "Monthly subscription plans for customers", enabled: true, category: "Customer", rollout: "50%" },
-    { name: "bulk_orders", desc: "Bulk laundry orders for PGs and offices", enabled: true, category: "Customer", rollout: "100%" },
-    { name: "whatsapp_notifications", desc: "Send notifications via WhatsApp Business API", enabled: true, category: "Notifications", rollout: "100%" },
-    { name: "digital_signature_pod", desc: "Digital signature for proof of delivery", enabled: false, category: "Delivery", rollout: "0%" },
-    { name: "multi_city_expansion", desc: "Enable multi-city vendor onboarding", enabled: true, category: "Platform", rollout: "30%" },
-    { name: "gst_invoice_auto", desc: "Automatic GST invoice generation", enabled: true, category: "Payments", rollout: "100%" },
-    { name: "dark_mode_beta", desc: "Dark mode theme (beta)", enabled: false, category: "UI", rollout: "0%" },
-    { name: "loyalty_platinum_tier", desc: "Platinum tier for top customers", enabled: false, category: "Loyalty", rollout: "0%" },
-  ];
+  const { data: flags } = useFeatureFlags();
 
   return (
     <div className="space-y-4">
@@ -855,8 +944,8 @@ function FeatureFlags() {
           </Button>
         </div>
         <div className="divide-y divide-border/60">
-          {flags.map((f) => (
-            <div key={f.name} className="flex items-center gap-3 p-4 hover:bg-muted/30 transition-colors">
+          {(flags || []).map((f) => (
+            <div key={f.key} className="flex items-center gap-3 p-4 hover:bg-muted/30 transition-colors">
               <div className={cn(
                 "flex h-9 w-9 items-center justify-center rounded-lg shrink-0",
                 f.enabled ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30" : "bg-muted text-muted-foreground"
@@ -865,18 +954,23 @@ function FeatureFlags() {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <code className="text-xs font-mono font-semibold bg-muted px-1.5 py-0.5 rounded">{f.name}</code>
-                  <Badge variant="outline" className="text-[9px]">{f.category}</Badge>
+                  <code className="text-xs font-mono font-semibold bg-muted px-1.5 py-0.5 rounded">{f.key}</code>
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">{f.desc}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{f.description || f.label}</p>
               </div>
               <div className="text-right hidden sm:block">
-                <p className="text-[10px] text-muted-foreground">Rollout</p>
-                <p className="text-sm font-semibold">{f.rollout}</p>
+                <p className="text-[10px] text-muted-foreground">{f.enabled ? "Enabled" : "Disabled"}</p>
               </div>
               <Switch
                 defaultChecked={f.enabled}
-                onCheckedChange={(v) => toast.success(`Feature ${f.name} ${v ? "enabled" : "disabled"}`, { description: "Change is live for all users." })}
+                onCheckedChange={async (v) => {
+                  try {
+                    await api.patch(`/api/admin/features/${f.key}`, { enabled: v });
+                    toast.success(`Feature ${f.key} ${v ? "enabled" : "disabled"}`, { description: "Change submitted." });
+                  } catch (err: any) {
+                    toast.error("Failed to toggle", { description: err.message });
+                  }
+                }}
               />
             </div>
           ))}
@@ -890,23 +984,10 @@ function FeatureFlags() {
 // Integrations (API Keys & Webhooks)
 // ============================================================================
 function Integrations() {
-  const apiKeys = [
-    { name: "Razorpay", key: "rzp_live_••••••••••••4242", status: "active", lastUsed: "2 mins ago", icon: "💳" },
-    { name: "Stripe", key: "sk_live_••••••••••••5555", status: "active", lastUsed: "1 hour ago", icon: "💳" },
-    { name: "Twilio SMS", key: "AC••••••••••••a1b2", status: "active", lastUsed: "5 mins ago", icon: "📱" },
-    { name: "WhatsApp Business", key: "wab_••••••••••••c3d4", status: "active", lastUsed: "10 mins ago", icon: "💬" },
-    { name: "Google Maps", key: "AIza••••••••••••e5f6", status: "active", lastUsed: "now", icon: "🗺️" },
-    { name: "SendGrid Email", key: "SG.••••••••••••g7h8", status: "active", lastUsed: "30 mins ago", icon: "✉️" },
-    { name: "Firebase FCM", key: "AAAA••••••••••••i9j0", status: "active", lastUsed: "1 min ago", icon: "🔔" },
-    { name: "OpenAI GLM", key: "glm_••••••••••••k1l2", status: "active", lastUsed: "8 mins ago", icon: "🤖" },
-  ];
-
-  const webhooks = [
-    { url: "https://api.freshfold.co/webhooks/lh/orders", events: ["order.created", "order.updated", "order.completed"], status: "active", lastDelivery: "2 mins ago" },
-    { url: "https://hooks.pristine.co/laundry-home", events: ["payment.success", "refund.issued"], status: "active", lastDelivery: "1 hour ago" },
-    { url: "https://erp.royalgarment.in/lh/sync", events: ["vendor.assigned", "status.changed"], status: "active", lastDelivery: "5 mins ago" },
-    { url: "https://analytics.quickclean.co/lh", events: ["order.completed"], status: "paused", lastDelivery: "2 days ago" },
-  ];
+  const { data: apiKeys } = useApiKeys();
+  const { data: webhooks } = useWebhooks();
+  const keys = apiKeys || [];
+  const wh = webhooks || [];
 
   return (
     <div className="space-y-6">
@@ -925,16 +1006,16 @@ function Integrations() {
           </Button>
         </div>
         <div className="grid sm:grid-cols-2 gap-3">
-          {apiKeys.map((k) => (
-            <div key={k.name} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">{k.icon}</div>
+          {keys.map((k) => (
+            <div key={k.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted"><Key className="h-5 w-5 text-muted-foreground" /></div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="text-sm font-semibold">{k.name}</p>
-                  <Badge variant="outline" className="text-[9px] border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30">{k.status}</Badge>
+                  <Badge variant="outline" className={cn("text-[9px]", k.enabled ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-border")}>{k.enabled ? "active" : "disabled"}</Badge>
                 </div>
-                <p className="text-[11px] text-muted-foreground font-mono mt-0.5">{k.key}</p>
-                <p className="text-[10px] text-muted-foreground/70">Last used: {k.lastUsed}</p>
+                <p className="text-[11px] text-muted-foreground font-mono mt-0.5">{k.keyValue?.slice(0, 24)}...</p>
+                <p className="text-[10px] text-muted-foreground/70">Last used: {k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleDateString() : "Never"}</p>
               </div>
               <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
                 <Eye className="h-3.5 w-3.5" />
@@ -959,22 +1040,22 @@ function Integrations() {
           </Button>
         </div>
         <div className="space-y-2">
-          {webhooks.map((w, i) => (
-            <div key={i} className="rounded-lg border border-border/60 p-3">
+          {wh.map((w) => (
+            <div key={w.id} className="rounded-lg border border-border/60 p-3">
               <div className="flex items-center gap-3 mb-2">
                 <code className="text-xs font-mono flex-1 truncate">{w.url}</code>
                 <Badge variant="outline" className={cn(
                   "text-[10px]",
-                  w.status === "active" ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30"
+                  w.enabled ? "border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30" : "border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/30"
                 )}>
-                  {w.status}
+                  {w.enabled ? "active" : "paused"}
                 </Badge>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
-                {w.events.map((e) => (
+                {(w.events || []).map((e: string) => (
                   <code key={e} className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">{e}</code>
                 ))}
-                <span className="text-[10px] text-muted-foreground ml-auto">Last delivery: {w.lastDelivery}</span>
+                <span className="text-[10px] text-muted-foreground ml-auto">Created: {new Date(w.createdAt).toLocaleDateString()}</span>
               </div>
             </div>
           ))}
@@ -988,6 +1069,48 @@ function Integrations() {
 // System Configuration
 // ============================================================================
 function SystemConfig() {
+  const { data: config, loading, saveConfig } = useSystemConfig();
+  const [saving, setSaving] = useState(false);
+
+  const [general, setGeneral] = useState<Record<string, any>>({});
+  const [payments, setPayments] = useState<Record<string, any>>({});
+  const [notifications, setNotifications] = useState<Record<string, any>>({});
+  const [notifEvents, setNotifEvents] = useState<Record<string, boolean>>({});
+  const [security, setSecurity] = useState<Record<string, any>>({});
+  const [limits, setLimits] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    if (config) {
+      setGeneral(config.general || {});
+      setPayments(config.payments || {});
+      const notif = config.notifications || {};
+      setNotifications({ push: notif.push, sms: notif.sms, email: notif.email, whatsapp: notif.whatsapp });
+      setNotifEvents(notif.events || {});
+      setSecurity(config.security || {});
+      setLimits(config.limits || {});
+    }
+  }, [config]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveConfig("general", general);
+      await saveConfig("payments", payments);
+      await saveConfig("notifications", { ...notifications, events: notifEvents });
+      await saveConfig("security", security);
+      await saveConfig("limits", limits);
+      toast.success("Settings saved", { description: "All system configurations updated." });
+    } catch (err: any) {
+      toast.error("Failed to save settings", { description: err.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading && !config) {
+    return <Card className="p-8 text-center text-muted-foreground">Loading configuration...</Card>;
+  }
+
   return (
     <div className="space-y-6">
       <Tabs defaultValue="general">
@@ -1005,19 +1128,19 @@ function SystemConfig() {
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <Label className="text-xs">Platform Name</Label>
-                <Input defaultValue="Laundry Home" className="mt-1.5" />
+                <Input value={general.platformName || ""} onChange={(e) => setGeneral((p) => ({ ...p, platformName: e.target.value }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Support Email</Label>
-                <Input defaultValue="support@laundryhome.com" className="mt-1.5" />
+                <Input value={general.supportEmail || ""} onChange={(e) => setGeneral((p) => ({ ...p, supportEmail: e.target.value }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Support Phone</Label>
-                <Input defaultValue="+91 80-4567-8900" className="mt-1.5" />
+                <Input value={general.supportPhone || ""} onChange={(e) => setGeneral((p) => ({ ...p, supportPhone: e.target.value }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Default Currency</Label>
-                <Select defaultValue="inr">
+                <Select value={general.defaultCurrency || "inr"} onValueChange={(v) => setGeneral((p) => ({ ...p, defaultCurrency: v }))}>
                   <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="inr">INR (₹)</SelectItem>
@@ -1028,7 +1151,7 @@ function SystemConfig() {
               </div>
               <div>
                 <Label className="text-xs">Default Language</Label>
-                <Select defaultValue="en">
+                <Select value={general.defaultLanguage || "en"} onValueChange={(v) => setGeneral((p) => ({ ...p, defaultLanguage: v }))}>
                   <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="en">English</SelectItem>
@@ -1040,7 +1163,7 @@ function SystemConfig() {
               </div>
               <div>
                 <Label className="text-xs">Timezone</Label>
-                <Select defaultValue="ist">
+                <Select value={general.timezone || "ist"} onValueChange={(v) => setGeneral((p) => ({ ...p, timezone: v }))}>
                   <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="ist">Asia/Kolkata (IST)</SelectItem>
@@ -1051,20 +1174,10 @@ function SystemConfig() {
             </div>
             <Separator className="my-4" />
             <div className="space-y-3">
-              {[
-                { label: "Allow new customer signups", desc: "Customers can self-register", on: true },
-                { label: "Allow new vendor applications", desc: "Vendors can apply for onboarding", on: true },
-                { label: "Maintenance mode", desc: "Show maintenance page to all users", on: false },
-                { label: "Multi-city support", desc: "Enable operations in multiple cities", on: true },
-              ].map((s) => (
-                <div key={s.label} className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium">{s.label}</p>
-                    <p className="text-xs text-muted-foreground">{s.desc}</p>
-                  </div>
-                  <Switch defaultChecked={s.on} />
-                </div>
-              ))}
+              <SwitchItem label="Allow new customer signups" desc="Customers can self-register" checked={general.allowSignups} onChecked={(v) => setGeneral((p) => ({ ...p, allowSignups: v }))} />
+              <SwitchItem label="Allow new vendor applications" desc="Vendors can apply for onboarding" checked={general.allowVendorApps} onChecked={(v) => setGeneral((p) => ({ ...p, allowVendorApps: v }))} />
+              <SwitchItem label="Maintenance mode" desc="Show maintenance page to all users" checked={general.maintenanceMode} onChecked={(v) => setGeneral((p) => ({ ...p, maintenanceMode: v }))} />
+              <SwitchItem label="Multi-city support" desc="Enable operations in multiple cities" checked={general.multiCity} onChecked={(v) => setGeneral((p) => ({ ...p, multiCity: v }))} />
             </div>
           </Card>
         </TabsContent>
@@ -1073,41 +1186,30 @@ function SystemConfig() {
           <Card className="p-5 shadow-soft">
             <h3 className="font-semibold mb-4">Payment Configuration</h3>
             <div className="space-y-3">
-              {[
-                { label: "UPI", desc: "Accept UPI payments", on: true, icon: "📱" },
-                { label: "Credit / Debit Cards", desc: "Visa, Mastercard, RuPay", on: true, icon: "💳" },
-                { label: "Net Banking", desc: "All major Indian banks", on: true, icon: "🏦" },
-                { label: "Wallet", desc: "Laundry Home wallet", on: true, icon: "👛" },
-                { label: "Cash on Delivery", desc: "Pay cash when order is delivered", on: true, icon: "💵" },
-                { label: "International Cards", desc: "Accept cards issued outside India", on: false, icon: "🌍" },
-              ].map((p) => (
-                <div key={p.label} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-lg">{p.icon}</div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">{p.label}</p>
-                    <p className="text-xs text-muted-foreground">{p.desc}</p>
-                  </div>
-                  <Switch defaultChecked={p.on} />
-                </div>
-              ))}
+              <PaymentToggle label="UPI" desc="Accept UPI payments" icon="📱" checked={payments.upi} onChecked={(v) => setPayments((p) => ({ ...p, upi: v }))} />
+              <PaymentToggle label="Credit / Debit Cards" desc="Visa, Mastercard, RuPay" icon="💳" checked={payments.cards} onChecked={(v) => setPayments((p) => ({ ...p, cards: v }))} />
+              <PaymentToggle label="Net Banking" desc="All major Indian banks" icon="🏦" checked={payments.netBanking} onChecked={(v) => setPayments((p) => ({ ...p, netBanking: v }))} />
+              <PaymentToggle label="Wallet" desc="Laundry Home wallet" icon="👛" checked={payments.wallet} onChecked={(v) => setPayments((p) => ({ ...p, wallet: v }))} />
+              <PaymentToggle label="Cash on Delivery" desc="Pay cash when order is delivered" icon="💵" checked={payments.cod} onChecked={(v) => setPayments((p) => ({ ...p, cod: v }))} />
+              <PaymentToggle label="International Cards" desc="Accept cards issued outside India" icon="🌍" checked={payments.internationalCards} onChecked={(v) => setPayments((p) => ({ ...p, internationalCards: v }))} />
             </div>
             <Separator className="my-4" />
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <Label className="text-xs">GST Rate (%)</Label>
-                <Input defaultValue="18" type="number" className="mt-1.5" />
+                <Input type="number" value={payments.gstRate ?? 18} onChange={(e) => setPayments((p) => ({ ...p, gstRate: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Platform Fee (₹)</Label>
-                <Input defaultValue="25" type="number" className="mt-1.5" />
+                <Input type="number" value={payments.platformFee ?? 25} onChange={(e) => setPayments((p) => ({ ...p, platformFee: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Default Delivery Fee (₹)</Label>
-                <Input defaultValue="40" type="number" className="mt-1.5" />
+                <Input type="number" value={payments.deliveryFee ?? 40} onChange={(e) => setPayments((p) => ({ ...p, deliveryFee: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Min Order Value (₹)</Label>
-                <Input defaultValue="150" type="number" className="mt-1.5" />
+                <Input type="number" value={payments.minOrderValue ?? 150} onChange={(e) => setPayments((p) => ({ ...p, minOrderValue: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
             </div>
           </Card>
@@ -1117,40 +1219,27 @@ function SystemConfig() {
           <Card className="p-5 shadow-soft">
             <h3 className="font-semibold mb-4">Notification Channels</h3>
             <div className="space-y-3">
-              {[
-                { label: "Push Notifications", desc: "Mobile push via Firebase FCM", on: true, icon: Bell },
-                { label: "SMS", desc: "Via Twilio", on: true, icon: Globe },
-                { label: "Email", desc: "Via SendGrid", on: true, icon: Globe },
-                { label: "WhatsApp", desc: "Via WhatsApp Business API", on: true, icon: Globe },
-              ].map((c) => (
-                <div key={c.label} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
-                    <c.icon className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-medium">{c.label}</p>
-                    <p className="text-xs text-muted-foreground">{c.desc}</p>
-                  </div>
-                  <Switch defaultChecked={c.on} />
-                </div>
-              ))}
+              <PayIconToggle label="Push Notifications" desc="Mobile push via Firebase FCM" icon={Bell} checked={notifications.push} onChecked={(v) => setNotifications((p) => ({ ...p, push: v }))} />
+              <PayIconToggle label="SMS" desc="Via Twilio" icon={Globe} checked={notifications.sms} onChecked={(v) => setNotifications((p) => ({ ...p, sms: v }))} />
+              <PayIconToggle label="Email" desc="Via SendGrid" icon={Globe} checked={notifications.email} onChecked={(v) => setNotifications((p) => ({ ...p, email: v }))} />
+              <PayIconToggle label="WhatsApp" desc="Via WhatsApp Business API" icon={Globe} checked={notifications.whatsapp} onChecked={(v) => setNotifications((p) => ({ ...p, whatsapp: v }))} />
             </div>
             <Separator className="my-4" />
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Notification Events</p>
               {[
-                "Booking Confirmation",
-                "Vendor Acceptance",
-                "Pickup Reminder (15 mins before)",
-                "Order Status Changes",
-                "Payment Success",
-                "Delivery Reminder",
-                "Promotional Offers",
-                "AI Delay Alerts",
-              ].map((e) => (
-                <div key={e} className="flex items-center justify-between">
-                  <span className="text-sm">{e}</span>
-                  <Switch defaultChecked />
+                ["bookingConfirmation", "Booking Confirmation"],
+                ["vendorAcceptance", "Vendor Acceptance"],
+                ["pickupReminder", "Pickup Reminder (15 mins before)"],
+                ["orderStatusChanges", "Order Status Changes"],
+                ["paymentSuccess", "Payment Success"],
+                ["deliveryReminder", "Delivery Reminder"],
+                ["promotionalOffers", "Promotional Offers"],
+                ["aiDelayAlerts", "AI Delay Alerts"],
+              ].map(([key, label]) => (
+                <div key={key} className="flex items-center justify-between">
+                  <span className="text-sm">{label}</span>
+                  <Switch checked={notifEvents[key] ?? true} onCheckedChange={(v) => setNotifEvents((p) => ({ ...p, [key]: v }))} />
                 </div>
               ))}
             </div>
@@ -1161,27 +1250,14 @@ function SystemConfig() {
           <Card className="p-5 shadow-soft">
             <h3 className="font-semibold mb-4">Security Settings</h3>
             <div className="space-y-3">
-              {[
-                { label: "Require MFA for admins", desc: "All admin users must enable 2FA", on: true },
-                { label: "Require MFA for vendors", desc: "Vendors must enable 2FA for payouts", on: false },
-                { label: "Session timeout (30 mins)", desc: "Auto-logout after inactivity", on: true },
-                { label: "IP whitelist for admin panel", desc: "Restrict admin access to specific IPs", on: false },
-                { label: "Device management", desc: "Track and limit devices per user", on: true },
-                { label: "JWT refresh token rotation", desc: "Rotate refresh tokens on every use", on: true },
-                { label: "Rate limiting on auth APIs", desc: "5 attempts per minute", on: true },
-                { label: "Suspicious login alerts", desc: "Email user on login from new device", on: true },
-              ].map((s) => (
-                <div key={s.label} className="flex items-center justify-between rounded-lg border border-border/60 p-3">
-                  <div className="flex items-center gap-3">
-                    <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                    <div>
-                      <p className="text-sm font-medium">{s.label}</p>
-                      <p className="text-xs text-muted-foreground">{s.desc}</p>
-                    </div>
-                  </div>
-                  <Switch defaultChecked={s.on} />
-                </div>
-              ))}
+              <SecurityToggle label="Require MFA for admins" desc="All admin users must enable 2FA" checked={security.mfaAdmins} onChecked={(v) => setSecurity((p) => ({ ...p, mfaAdmins: v }))} />
+              <SecurityToggle label="Require MFA for vendors" desc="Vendors must enable 2FA for payouts" checked={security.mfaVendors} onChecked={(v) => setSecurity((p) => ({ ...p, mfaVendors: v }))} />
+              <SecurityToggle label="Session timeout (30 mins)" desc="Auto-logout after inactivity" checked={security.sessionTimeout} onChecked={(v) => setSecurity((p) => ({ ...p, sessionTimeout: v }))} />
+              <SecurityToggle label="IP whitelist for admin panel" desc="Restrict admin access to specific IPs" checked={security.ipWhitelist} onChecked={(v) => setSecurity((p) => ({ ...p, ipWhitelist: v }))} />
+              <SecurityToggle label="Device management" desc="Track and limit devices per user" checked={security.deviceManagement} onChecked={(v) => setSecurity((p) => ({ ...p, deviceManagement: v }))} />
+              <SecurityToggle label="JWT refresh token rotation" desc="Rotate refresh tokens on every use" checked={security.jwtRotation} onChecked={(v) => setSecurity((p) => ({ ...p, jwtRotation: v }))} />
+              <SecurityToggle label="Rate limiting on auth APIs" desc="5 attempts per minute" checked={security.rateLimiting} onChecked={(v) => setSecurity((p) => ({ ...p, rateLimiting: v }))} />
+              <SecurityToggle label="Suspicious login alerts" desc="Email user on login from new device" checked={security.suspiciousLoginAlerts} onChecked={(v) => setSecurity((p) => ({ ...p, suspiciousLoginAlerts: v }))} />
             </div>
           </Card>
         </TabsContent>
@@ -1192,40 +1268,107 @@ function SystemConfig() {
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <Label className="text-xs">Max Items Per Order</Label>
-                <Input defaultValue="50" type="number" className="mt-1.5" />
+                <Input type="number" value={limits.maxItemsPerOrder ?? 50} onChange={(e) => setLimits((p) => ({ ...p, maxItemsPerOrder: parseInt(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Max Weight Per Order (kg)</Label>
-                <Input defaultValue="30" type="number" className="mt-1.5" />
+                <Input type="number" value={limits.maxWeightKg ?? 30} onChange={(e) => setLimits((p) => ({ ...p, maxWeightKg: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Express Surcharge (₹)</Label>
-                <Input defaultValue="50" type="number" className="mt-1.5" />
+                <Input type="number" value={limits.expressSurcharge ?? 50} onChange={(e) => setLimits((p) => ({ ...p, expressSurcharge: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Express Multiplier</Label>
-                <Input defaultValue="1.5" type="number" step="0.1" className="mt-1.5" />
+                <Input type="number" step="0.1" value={limits.expressMultiplier ?? 1.5} onChange={(e) => setLimits((p) => ({ ...p, expressMultiplier: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Free Delivery Threshold (₹)</Label>
-                <Input defaultValue="500" type="number" className="mt-1.5" />
+                <Input type="number" value={limits.freeDeliveryThreshold ?? 500} onChange={(e) => setLimits((p) => ({ ...p, freeDeliveryThreshold: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Max Service Radius (km)</Label>
-                <Input defaultValue="10" type="number" className="mt-1.5" />
+                <Input type="number" value={limits.maxServiceRadiusKm ?? 10} onChange={(e) => setLimits((p) => ({ ...p, maxServiceRadiusKm: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Default Commission Rate (%)</Label>
-                <Input defaultValue="10" type="number" className="mt-1.5" />
+                <Input type="number" value={limits.defaultCommissionRate ?? 10} onChange={(e) => setLimits((p) => ({ ...p, defaultCommissionRate: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
               <div>
                 <Label className="text-xs">Vendor Payout Cycle (days)</Label>
-                <Input defaultValue="7" type="number" className="mt-1.5" />
+                <Input type="number" value={limits.vendorPayoutCycleDays ?? 7} onChange={(e) => setLimits((p) => ({ ...p, vendorPayoutCycleDays: parseInt(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
             </div>
           </Card>
         </TabsContent>
       </Tabs>
+
+      <div className="flex justify-end">
+        <Button className="bg-primary hover:bg-primary/90" onClick={handleSave} disabled={saving}>
+          {saving ? (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent mr-1.5" />
+          ) : (
+            <Save className="h-4 w-4 mr-1.5" />
+          )}
+          {saving ? "Saving..." : "Save Changes"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Small helper components for SystemConfig
+function SwitchItem({ label, desc, checked, onChecked }: { label: string; desc: string; checked?: boolean; onChecked: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between">
+      <div>
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-xs text-muted-foreground">{desc}</p>
+      </div>
+      <Switch checked={!!checked} onCheckedChange={onChecked} />
+    </div>
+  );
+}
+
+function PaymentToggle({ label, desc, icon, checked, onChecked }: { label: string; desc: string; icon: string; checked?: boolean; onChecked: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
+      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-lg">{icon}</div>
+      <div className="flex-1">
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-xs text-muted-foreground">{desc}</p>
+      </div>
+      <Switch checked={!!checked} onCheckedChange={onChecked} />
+    </div>
+  );
+}
+
+function PayIconToggle({ label, desc, icon: Icon, checked, onChecked }: { label: string; desc: string; icon: React.ComponentType<{ className?: string }>; checked?: boolean; onChecked: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
+      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
+        <Icon className="h-4 w-4 text-muted-foreground" />
+      </div>
+      <div className="flex-1">
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-xs text-muted-foreground">{desc}</p>
+      </div>
+      <Switch checked={!!checked} onCheckedChange={onChecked} />
+    </div>
+  );
+}
+
+function SecurityToggle({ label, desc, checked, onChecked }: { label: string; desc: string; checked?: boolean; onChecked: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-border/60 p-3">
+      <div className="flex items-center gap-3">
+        <ShieldCheck className="h-4 w-4 text-emerald-500" />
+        <div>
+          <p className="text-sm font-medium">{label}</p>
+          <p className="text-xs text-muted-foreground">{desc}</p>
+        </div>
+      </div>
+      <Switch checked={!!checked} onCheckedChange={onChecked} />
     </div>
   );
 }

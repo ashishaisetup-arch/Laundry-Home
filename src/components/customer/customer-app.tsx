@@ -1,6 +1,5 @@
-"use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
@@ -24,9 +23,11 @@ import {
   Zap,
   CheckCircle2,
   Filter,
-  Bike,
   FileText,
   Trash2,
+  User,
+  Smartphone,
+  Mail,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -51,18 +52,11 @@ import { OrderCard } from "@/components/shared/order-card";
 import { OrderTimeline } from "@/components/shared/order-timeline";
 import { ServiceIcon, getServiceMeta } from "@/components/shared/service-icon";
 import { useAppStore } from "@/lib/store";
-import {
-  ORDERS,
-  VENDORS,
-  SERVICES,
-  COUPONS,
-  ADDRESSES,
-  REVIEWS,
-  PICKUP_SLOTS,
-  DELIVERY_SLOTS,
-} from "@/lib/mock-data";
+import { useOrders, useVendors, useServices, useAddresses, useCoupons, useReviews, usePaymentMethods, useSubscriptionPlans, useFavoriteVendors } from "@/lib/hooks";
+import type { Order, Vendor, ServiceType } from "@/lib/types";
 import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
+import { api } from "@/lib/api/client";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { BookingFlow } from "./booking-flow";
 import { OrderTracking } from "./order-tracking";
@@ -72,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Customer",
     items: [
       { id: "dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+      { id: "profile", label: "My Profile", icon: "User" },
       { id: "discover", label: "Find Vendors", icon: "MapPin" },
       { id: "booking", label: "Book Pickup", icon: "Package", badge: "New" },
       { id: "orders", label: "My Orders", icon: "ClipboardList", badge: 3 },
@@ -85,21 +80,44 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 export function CustomerApp() {
-  const { walletBalance, loyaltyPoints } = useAppStore();
+  const { userId, walletBalance, loyaltyPoints } = useAppStore();
   const [view, setView] = useState("dashboard");
   const [showBooking, setShowBooking] = useState(false);
   const [trackingOrder, setTrackingOrder] = useState<string | null>(null);
+  const [discoverArea, setDiscoverArea] = useState<string | null>(null);
+  const [bookingLocation, setBookingLocation] = useState<{lat: number; lng: number} | null>(null);
+  const { data: orders, refetch: refetchOrders } = useOrders(userId ? { customerId: userId } : undefined);
 
+  // Browser back button → always go to dashboard
+  useEffect(() => {
+    const onPop = () => {
+      setView("dashboard");
+      // Push dashboard state so the next back also goes to dashboard
+      window.history.pushState({ view: "dashboard" }, "");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // Push history state when navigating to non-dashboard views
   const handleNavigate = (v: string) => {
     if (v === "booking") {
       setShowBooking(true);
       return;
     }
+    if (v !== "dashboard") {
+      window.history.pushState({ view: v }, "");
+    }
     setView(v);
   };
 
-  const activeOrders = ORDERS.filter((o) => !["completed", "cancelled"].includes(o.status));
-  const completedOrders = ORDERS.filter((o) => o.status === "completed");
+  const handleBookingClose = () => {
+    setShowBooking(false);
+    refetchOrders();
+  };
+
+  const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
+  const completedOrders = (orders || []).filter((o) => o.status === "completed");
 
   return (
     <AppShell
@@ -107,7 +125,7 @@ export function CustomerApp() {
       activeView={view}
       onNavigate={handleNavigate}
       pageTitle={pageTitle(view)}
-      pageSubtitle={pageSubtitle(view)}
+      pageSubtitle={pageSubtitle(view, discoverArea)}
       actions={
         view === "dashboard" || view === "discover" ? (
           <Button
@@ -124,7 +142,8 @@ export function CustomerApp() {
         {view === "dashboard" && (
           <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} />
         )}
-        {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} />}
+        {view === "profile" && <CustomerProfile key="pf" />}
+        {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
         {view === "orders" && (
           <CustomerOrders
             key="o"
@@ -141,7 +160,7 @@ export function CustomerApp() {
       </AnimatePresence>
 
       {/* Booking modal */}
-      <BookingFlow open={showBooking} onClose={() => setShowBooking(false)} />
+      <BookingFlow open={showBooking} onClose={handleBookingClose} location={bookingLocation} />
 
       {/* Order tracking modal */}
       <OrderTracking
@@ -155,6 +174,7 @@ export function CustomerApp() {
 function pageTitle(view: string) {
   return {
     dashboard: "Dashboard",
+    profile: "My Profile",
     discover: "Find Vendors",
     booking: "Book Pickup",
     orders: "My Orders",
@@ -165,9 +185,10 @@ function pageTitle(view: string) {
     reviews: "My Reviews",
   }[view] || "Dashboard";
 }
-function pageSubtitle(view: string) {
-  return {
+function pageSubtitle(view: string, discoverArea?: string | null) {
+  const subtitles: Record<string, string> = {
     dashboard: "Your laundry at a glance",
+    profile: "Manage your personal details",
     discover: "Discover verified vendors near you",
     booking: "Schedule a pickup in 30 seconds",
     orders: "Track and manage your laundry orders",
@@ -176,7 +197,11 @@ function pageSubtitle(view: string) {
     coupons: "Save more on every order",
     favorites: "Your go-to laundry vendors",
     reviews: "Reviews you've shared",
-  }[view];
+  };
+  if (view === "discover" && discoverArea) {
+    return `Verified laundry services near ${discoverArea}`;
+  }
+  return subtitles[view];
 }
 
 // ============================================================================
@@ -191,12 +216,10 @@ function CustomerDashboard({
   onBook: () => void;
   onNavigate: (view: string) => void;
 }) {
-  const { userName, walletBalance, loyaltyPoints } = useAppStore();
+  const { userId, userName, walletBalance, loyaltyPoints } = useAppStore();
   const firstName = userName.split(" ")[0];
-  const activeOrders = ORDERS.filter((o) => !["completed", "cancelled"].includes(o.status));
-  const [addresses, setAddresses] = useState(ADDRESSES);
-  const [showAddAddr, setShowAddAddr] = useState(false);
-  const [newAddr, setNewAddr] = useState({ label: "", line: "", area: "", city: "", pincode: "" });
+  const { data: orders } = useOrders(userId ? { customerId: userId } : undefined);
+  const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
 
   return (
     <div className="space-y-6">
@@ -241,7 +264,7 @@ function CustomerDashboard({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: "Book Pickup", icon: Plus, color: "from-teal-500 to-cyan-600", onClick: onBook },
-          { label: "Track Order", icon: Navigation, color: "from-emerald-500 to-green-600", onClick: () => onTrack("o1") },
+          { label: "Track Order", icon: Navigation, color: "from-emerald-500 to-green-600", onClick: () => activeOrders[0] ? onTrack(activeOrders[0].id) : toast("No active orders") },
           { label: "Find Vendors", icon: MapPin, color: "from-violet-500 to-purple-600", onClick: () => onNavigate("discover") },
           { label: "Offers", icon: Ticket, color: "from-amber-500 to-orange-600", onClick: () => onNavigate("coupons") },
         ].map((a) => (
@@ -278,213 +301,131 @@ function CustomerDashboard({
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Orders" value="47" change={12.5} trend="up" icon={ShoppingBag} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="Total Spent" value={formatINR(28450)} change={8.2} trend="up" icon={Wallet} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Avg Rating Given" value="4.6★" change={2.1} trend="up" icon={Star} accent="from-amber-500 to-orange-600" />
-        <StatCard label="Money Saved" value={formatINR(3240)} change={15.8} trend="up" icon={Ticket} accent="from-violet-500 to-purple-600" />
-      </div>
 
-      {/* Two columns: upcoming + recommended */}
-      <div className="grid lg:grid-cols-3 gap-4">
-        {/* Upcoming pickups */}
-        <Card className="lg:col-span-2 p-5 shadow-soft">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold">Upcoming Pickups & Deliveries</h3>
-            <Badge variant="secondary" className="text-xs">Next 7 days</Badge>
-          </div>
-          <div className="space-y-3">
-            {[
-              { type: "Pickup", code: "LH-2849", vendor: "QuickClean Express", date: "Today, 2:00 PM", color: "bg-sky-500" },
-              { type: "Delivery", code: "LH-2848", vendor: "Pristine Wash Hub", date: "Today, 12:00 PM", color: "bg-emerald-500" },
-              { type: "Delivery", code: "LH-2847", vendor: "FreshFold Laundry Co.", date: "Tomorrow, 6:00 PM", color: "bg-teal-500" },
-            ].map((p) => (
-              <div key={p.code} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
-                <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg text-white", p.color)}>
-                  {p.type === "Pickup" ? <Package className="h-4 w-4" /> : <Bike className="h-4 w-4" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold">{p.type}</p>
-                    <span className="text-xs text-muted-foreground">·</span>
-                    <span className="text-xs font-mono">{p.code}</span>
-                  </div>
-                  <p className="text-xs text-muted-foreground truncate">{p.vendor}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-xs font-medium">{p.date}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
 
-        {/* AI recommendation */}
-        <Card className="p-5 shadow-soft bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30 border-teal-200 dark:border-teal-800">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-cyan-600">
-              <Sparkles className="h-4 w-4 text-white" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold">AI Recommendation</p>
-              <p className="text-[10px] text-muted-foreground">Based on your patterns</p>
-            </div>
-          </div>
-          <p className="text-sm text-foreground/90 leading-relaxed mb-3">
-            You usually order <strong>Wash & Iron</strong> on weekends. Save 15% with a monthly subscription!
-          </p>
-          <div className="rounded-lg bg-white dark:bg-card p-3 mb-3">
-            <p className="text-xs text-muted-foreground">Recommended plan</p>
-            <p className="text-sm font-bold mt-0.5">Monthly Essentials</p>
-            <p className="text-xs text-emerald-600 mt-1">₹1,499/mo · Save ₹350</p>
-          </div>
-          <Button size="sm" className="w-full bg-primary hover:bg-primary/90" onClick={() => onNavigate("subscriptions")}>
-            View Plans
-            <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
-          </Button>
-        </Card>
-      </div>
 
-      {/* Saved addresses */}
-      <Card className="p-5 shadow-soft">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold">Saved Addresses</h3>
-          <Button variant="ghost" size="sm" className="text-xs gap-1" onClick={() => setShowAddAddr(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            Add new
-          </Button>
-        </div>
-        <div className="grid md:grid-cols-3 gap-3">
-          {addresses.map((addr) => (
-            <div key={addr.id} className="group rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
-              <div className="flex items-center gap-2 mb-1">
-                <MapPin className="h-3.5 w-3.5 text-primary" />
-                <span className="text-sm font-semibold">{addr.label}</span>
-                {addr.isDefault && <Badge variant="secondary" className="text-[10px] py-0 h-4">Default</Badge>}
-                <button
-                  onClick={() => {
-                    setAddresses(addresses.filter((a) => a.id !== addr.id));
-                    toast.success("Address deleted", { description: `${addr.label} address removed.` });
-                  }}
-                  className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-rose-600"
-                  title="Delete address"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <p className="text-xs text-muted-foreground">{addr.line}</p>
-              <p className="text-xs text-muted-foreground">{addr.area}, {addr.city} - {addr.pincode}</p>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Add Address Dialog */}
-      <Dialog open={showAddAddr} onOpenChange={setShowAddAddr}>
-        <DialogContent className="max-w-md">
-          <DialogTitle className="sr-only">Add New Address</DialogTitle>
-          <div>
-            <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add New Address</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Save a new pickup/delivery address</p>
-          </div>
-          <div className="space-y-3 pt-2">
-            <div>
-              <Label className="text-xs">Label (e.g. Home, Work)</Label>
-              <Input value={newAddr.label} onChange={(e) => setNewAddr({ ...newAddr, label: e.target.value })} placeholder="Home" className="mt-1" />
-            </div>
-            <div>
-              <Label className="text-xs">Address Line</Label>
-              <Input value={newAddr.line} onChange={(e) => setNewAddr({ ...newAddr, line: e.target.value })} placeholder="Flat / House no, Street" className="mt-1" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">Area</Label>
-                <Input value={newAddr.area} onChange={(e) => setNewAddr({ ...newAddr, area: e.target.value })} placeholder="Indiranagar" className="mt-1" />
-              </div>
-              <div>
-                <Label className="text-xs">City</Label>
-                <Input value={newAddr.city} onChange={(e) => setNewAddr({ ...newAddr, city: e.target.value })} placeholder="Bengaluru" className="mt-1" />
-              </div>
-            </div>
-            <div>
-              <Label className="text-xs">Pincode</Label>
-              <Input value={newAddr.pincode} onChange={(e) => setNewAddr({ ...newAddr, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} placeholder="560038" className="mt-1" />
-            </div>
-          </div>
-          <div className="flex gap-2 pt-4">
-            <Button variant="outline" className="flex-1" onClick={() => setShowAddAddr(false)}>Cancel</Button>
-            <Button
-              className="flex-1"
-              disabled={!newAddr.label || !newAddr.line || !newAddr.area || !newAddr.city || newAddr.pincode.length < 6}
-              onClick={() => {
-                const id = `a${Date.now()}`;
-                setAddresses([...addresses, { ...newAddr, id, isDefault: false, lat: 12.97, lng: 77.64 }]);
-                setNewAddr({ label: "", line: "", area: "", city: "", pincode: "" });
-                setShowAddAddr(false);
-                toast.success("Address added", { description: "New address saved successfully." });
-              }}
-            >
-              Save Address
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
+// ============================================================================
+// Customer Discover (vendor discovery) — Browser Geolocation API + Nominatim
+// ============================================================================
 
-// ============================================================================
-// Customer Discover (vendor discovery)
-// ============================================================================
-function CustomerDiscover({ onBook }: { onBook: () => void }) {
+function CustomerDiscover({ onBook, onLocationChange, onLocationUpdate }: { onBook: () => void; onLocationChange?: (area: string | null) => void; onLocationUpdate?: (loc: { area: string; city: string; pincode: string; lat: number; lng: number } | null) => void }) {
+  const { data: addresses, refetch: refetchAddresses } = useAddresses();
+  const { data: services } = useServices();
+  const { isFavorited, toggleFavorite } = useFavoriteVendors();
+  const servicesData = services || [];
+
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [sortBy, setSortBy] = useState("distance");
-  const [selectedVendor, setSelectedVendor] = useState<typeof VENDORS[0] | null>(null);
+  const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null);
   const [showLocationChange, setShowLocationChange] = useState(false);
-  const [location, setLocation] = useState({ area: "Indiranagar", city: "Bengaluru", pincode: "560038" });
-  const [locationChanged, setLocationChanged] = useState(false);
 
-  let vendors = VENDORS.filter((v) =>
+  const [location, setLocation] = useState<{
+    area: string; city: string; pincode: string; lat: number; lng: number
+  } | null>(null);
+
+  const [geolocating, setGeolocating] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
+
+  // ---- Auto-detect: saved address first, then browser geolocation ----
+  useEffect(() => {
+    if (location || geolocating) return;
+
+    const defaultAddr = (addresses || []).find((a) => a.isDefault) || (addresses || [])[0];
+    if (defaultAddr?.lat && defaultAddr?.lng) {
+      setLocation({
+        area: defaultAddr.area,
+        city: defaultAddr.city,
+        pincode: defaultAddr.pincode,
+        lat: Number(defaultAddr.lat),
+        lng: Number(defaultAddr.lng),
+      });
+      return;
+    }
+
+    // No saved address → auto-fetch browser location
+    if (!navigator.geolocation) return;
+    setGeolocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const result = await api.get<{ area: string; city: string; pincode: string; lat: number; lng: number }>(
+            `/api/geocode/reverse?lat=${latitude}&lng=${longitude}`
+          );
+          if (result?.area) {
+            setLocation({ area: result.area, city: result.city, pincode: result.pincode, lat: result.lat, lng: result.lng });
+          }
+        } catch {
+          // silent — user can search manually
+        } finally {
+          setGeolocating(false);
+        }
+      },
+      () => setGeolocating(false),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
+  }, [addresses, location, geolocating]);
+
+  // ---- Notify parent of area change for dynamic subtitle ----
+  useEffect(() => {
+    onLocationChange?.(location?.area || null);
+    onLocationUpdate?.(location);
+  }, [location?.area, location, onLocationChange, onLocationUpdate]);
+
+  // ---- Dynamic search via Nominatim (debounced) ----
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<Array<{ label: string; area: string; city: string; pincode: string; lat: number; lng: number }>>([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (searchQuery.length < 2) { setSuggestions([]); return; }
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const results = await api.get<Array<{ label: string; area: string; city: string; pincode: string; lat: number; lng: number }>>(
+          `/api/geocode/search?q=${encodeURIComponent(searchQuery)}`
+        );
+        setSuggestions(results || []);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const selectSuggestion = (s: typeof suggestions[number]) => {
+    setLocation({ area: s.area, city: s.city, pincode: s.pincode, lat: s.lat, lng: s.lng });
+    setSuggestions([]);
+  };
+
+  // ---- Vendors query ----
+  const vendorsResult = useVendors(
+    location ? { lat: location.lat, lng: location.lng, radiusKm: 5 } : undefined
+  );
+  const vendorsList = vendorsResult.data;
+
+  let vendors = (vendorsList || []).filter((v) =>
     v.name.toLowerCase().includes(search.toLowerCase()) ||
     v.area.toLowerCase().includes(search.toLowerCase())
   );
-
-  // When location has been changed, prioritize vendors in the selected area
-  // If the area matches a vendor's area, show those first. Others still show but sorted further down.
-  if (locationChanged) {
-    // Sort vendors: matching area first, then by distance
-    vendors.sort((a, b) => {
-      const aMatch = a.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
-      const bMatch = b.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
-      if (aMatch !== bMatch) return aMatch - bMatch;
-      return a.distanceKm - b.distanceKm;
-    });
-  }
 
   if (filter === "open") vendors = vendors.filter((v) => v.isOpen);
   if (filter === "express") vendors = vendors.filter((v) => v.estimatedDeliveryHrs <= 12);
   if (filter === "top") vendors = vendors.filter((v) => v.rating >= 4.7);
   if (filter === "premium") vendors = vendors.filter((v) => v.priceLevel >= 3);
-  if (filter === "near") vendors = vendors.filter((v) => v.area.toLowerCase() === location.area.toLowerCase());
+  if (filter === "near" && location) vendors = vendors.filter((v) => v.area.toLowerCase() === location.area.toLowerCase());
 
   const sortedVendors = [...vendors];
-  if (sortBy === "distance") sortedVendors.sort((a, b) => {
-    // If location changed, keep area-matching vendors on top
-    if (locationChanged) {
-      const aMatch = a.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
-      const bMatch = b.area.toLowerCase() === location.area.toLowerCase() ? 0 : 1;
-      if (aMatch !== bMatch) return aMatch - bMatch;
-    }
-    return a.distanceKm - b.distanceKm;
-  });
+  if (sortBy === "distance") sortedVendors.sort((a, b) => a.distanceKm - b.distanceKm);
   if (sortBy === "rating") sortedVendors.sort((a, b) => b.rating - a.rating);
   if (sortBy === "delivery") sortedVendors.sort((a, b) => a.estimatedDeliveryHrs - b.estimatedDeliveryHrs);
   if (sortBy === "price") sortedVendors.sort((a, b) => a.priceLevel - b.priceLevel);
-
-  // Count how many vendors are in the current area
-  const vendorsInArea = VENDORS.filter((v) => v.area.toLowerCase() === location.area.toLowerCase()).length;
 
   return (
     <div className="space-y-6">
@@ -492,18 +433,20 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
       <Card className="p-5 shadow-soft">
         <div className="flex flex-col md:flex-row gap-3">
           <button
-            onClick={() => setShowLocationChange(true)}
-            className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 md:min-w-[200px] hover:bg-muted transition-colors text-left"
+            onClick={() => { setShowLocationChange(true); setGeoError(null); }}
+            className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 md:min-w-[220px] hover:bg-muted transition-colors text-left"
           >
-            <Navigation className="h-4 w-4 text-primary" />
-            <div className="text-sm">
-              <p className="font-medium leading-tight">{location.area}</p>
-              <p className="text-[10px] text-muted-foreground">{location.city}, {location.pincode}</p>
+            <Navigation className="h-4 w-4 text-primary shrink-0" />
+            <div className="text-sm min-w-0">
+              <p className="font-medium leading-tight truncate">{location?.area || "Your location"}</p>
+              {location && (
+                <p className="text-[10px] text-muted-foreground truncate">{location.city}, {location.pincode}</p>
+              )}
             </div>
-            <span className="ml-auto text-[10px] text-primary hover:underline">Change</span>
+            <span className="ml-auto text-[10px] text-primary hover:underline shrink-0">Change</span>
           </button>
           <div className="flex-1 flex items-center rounded-lg border border-input bg-background px-3">
-            <Search className="h-4 w-4 text-muted-foreground" />
+            <Search className="h-4 w-4 text-muted-foreground shrink-0" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -517,7 +460,7 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
         <div className="flex flex-wrap gap-2 mt-3">
           {[
             { id: "all", label: "All vendors" },
-            { id: "near", label: `Near ${location.area}` },
+            ...(location ? [{ id: "near" as const, label: `Near ${location.area}` }] : []),
             { id: "open", label: "Open now" },
             { id: "express", label: "Express delivery" },
             { id: "top", label: "Top rated" },
@@ -543,8 +486,7 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           <strong className="text-foreground">{sortedVendors.length}</strong> vendors found
-          {locationChanged && <span> near <strong className="text-foreground">{location.area}</strong></span>}
-          {filter === "near" && <span className="ml-1">({vendorsInArea} in your area)</span>}
+          {location ? <span> within 5 km of <strong className="text-foreground">{location.area}</strong></span> : ""}
           {(search || filter !== "all") && (
             <button
               onClick={() => { setSearch(""); setFilter("all"); }}
@@ -568,9 +510,64 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
       </div>
 
       {/* Vendor grid */}
-      {sortedVendors.length === 0 ? (
+      {!location ? (
         <Card className="p-8 text-center text-muted-foreground shadow-soft">
-          No vendors match your filters. Try clearing them.
+          {geolocating ? (
+            <>
+              <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin mx-auto mb-4" />
+              <p className="font-medium mb-1">Detecting your location…</p>
+              <p className="text-sm">Please allow location access when prompted</p>
+            </>
+          ) : (
+            <>
+              <Navigation className="h-8 w-8 mx-auto mb-3 text-muted-foreground/50" />
+              <p className="font-medium mb-1">Choose your location</p>
+              <p className="text-sm mb-4">Search for an area or enter a pincode to find nearby vendors</p>
+              <Button onClick={() => { setShowLocationChange(true); setGeoError(null); }}>Set Location</Button>
+            </>
+          )}
+        </Card>
+      ) : vendorsResult.loading ? (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Card key={i} className="p-5 shadow-soft animate-pulse">
+              <div className="flex items-start gap-3 mb-4">
+                <div className="h-12 w-12 rounded-xl bg-muted" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-2/3 bg-muted rounded" />
+                  <div className="h-3 w-1/3 bg-muted rounded" />
+                </div>
+              </div>
+              <div className="h-3 w-full bg-muted rounded mb-2" />
+              <div className="h-3 w-4/5 bg-muted rounded mb-4" />
+              <div className="h-8 w-full bg-muted rounded" />
+            </Card>
+          ))}
+        </div>
+      ) : sortedVendors.length === 0 ? (
+        <Card className="p-8 text-center shadow-soft">
+          <div className="flex items-center justify-center h-14 w-14 rounded-full bg-amber-50 dark:bg-amber-950/30 mx-auto mb-4">
+            <Navigation className="h-7 w-7 text-amber-500" />
+          </div>
+          <h3 className="text-lg font-semibold mb-1">We don't serve {location.area} yet</h3>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto mb-2">
+            There are no vendors within 5 km of your location. We're expanding to new areas regularly.
+          </p>
+          {search || filter !== "all" ? (
+            <p className="text-xs text-muted-foreground mb-4">
+              Try clearing filters or searching for a different area.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground mb-4">
+              Try a nearby area like Indiranagar, Koramangala, or HSR Layout.
+            </p>
+          )}
+          <div className="flex gap-2 justify-center">
+            <Button variant="outline" onClick={() => { setShowLocationChange(true); setGeoError(null); }}>Try another area</Button>
+            {search || filter !== "all" ? (
+              <Button variant="outline" onClick={() => { setSearch(""); setFilter("all"); }}>Clear Filters</Button>
+            ) : null}
+          </div>
         </Card>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -580,18 +577,19 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
               vendor={v}
               onBook={onBook}
               onView={() => setSelectedVendor(v)}
+              isFavorited={isFavorited(v.id)}
+              onToggleFavorite={() => toggleFavorite(v.id)}
             />
           ))}
         </div>
       )}
 
-      {/* Vendor Detail Dialog — shows services and prices */}
+      {/* Vendor Detail Dialog — unchanged */}
       <Dialog open={!!selectedVendor} onOpenChange={(o) => !o && setSelectedVendor(null)}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogTitle className="sr-only">{selectedVendor?.name || "Vendor Details"}</DialogTitle>
           {selectedVendor && (
             <div className="space-y-4">
-              {/* Vendor header */}
               <div className="flex items-start gap-4">
                 <div className={cn("flex h-14 w-14 items-center justify-center rounded-xl bg-primary-surface text-primary-foreground font-semibold text-lg", selectedVendor.logoColor)}>
                   {selectedVendor.logoInitials}
@@ -618,19 +616,15 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
                   </div>
                 </div>
               </div>
-
-              {/* Tags */}
               <div className="flex flex-wrap gap-1.5">
                 {selectedVendor.tags.map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-[10px]">{tag}</Badge>
                 ))}
               </div>
-
-              {/* Services with prices */}
               <div>
                 <h3 className="text-sm font-semibold mb-2">Services & Pricing</h3>
                 <div className="space-y-1.5">
-                  {SERVICES.filter((s) => selectedVendor.servicesOffered.includes(s.key)).map((s) => (
+                  {servicesData.filter((s) => selectedVendor.servicesOffered.includes(s.key)).map((s) => (
                     <div key={s.key} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
                       <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg bg-tonal-accent text-primary")}>
                         <ServiceIcon serviceKey={s.key} className="h-4 w-4" />
@@ -647,8 +641,6 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
                   ))}
                 </div>
               </div>
-
-              {/* Stats */}
               <div className="grid grid-cols-3 gap-2 pt-2">
                 <div className="rounded-lg bg-muted/40 p-3 text-center">
                   <p className="text-[10px] text-muted-foreground">Capacity</p>
@@ -663,8 +655,6 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
                   <p className="text-sm font-semibold">{selectedVendor.totalOrders.toLocaleString()}</p>
                 </div>
               </div>
-
-              {/* Actions */}
               <div className="flex gap-2 pt-2">
                 <Button variant="outline" className="flex-1" onClick={() => setSelectedVendor(null)}>Close</Button>
                 <Button
@@ -680,63 +670,151 @@ function CustomerDiscover({ onBook }: { onBook: () => void }) {
         </DialogContent>
       </Dialog>
 
-      {/* Change Location Dialog */}
-      <Dialog open={showLocationChange} onOpenChange={setShowLocationChange}>
+      {/* Change Location Dialog with Geolocation + Nominatim search */}
+      <Dialog open={showLocationChange} onOpenChange={(o) => { setShowLocationChange(o); if (!o) { setSuggestions([]); setGeoError(null); } }}>
         <DialogContent className="max-w-md">
           <DialogTitle className="sr-only">Change Location</DialogTitle>
           <div>
             <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Change Location</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Set your area to find nearby vendors</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Enter an area or pincode to find vendors nearby</p>
           </div>
           <div className="space-y-3 pt-2">
+
+            {/* Saved addresses */}
+            {addresses && addresses.length > 0 && (
+              <div>
+                <p className="text-[11px] text-muted-foreground mb-1.5">Your saved addresses</p>
+                <div className="space-y-1.5">
+                  {addresses.map((addr) => {
+                    const selected = location?.lat === Number(addr.lat) && location?.lng === Number(addr.lng);
+                    const hasCoords = addr.lat && addr.lng;
+                    return (
+                      <button
+                        key={addr.id}
+                        type="button"
+                        onClick={async () => {
+                          if (hasCoords) {
+                            setLocation({
+                              area: addr.area,
+                              city: addr.city,
+                              pincode: addr.pincode,
+                              lat: Number(addr.lat),
+                              lng: Number(addr.lng),
+                            });
+                          } else {
+                            // Geocode the area to get coordinates
+                            try {
+                              const results = await api.get<Array<{ label: string; area: string; city: string; pincode: string; lat: number; lng: number }>>(
+                                `/api/geocode/search?q=${encodeURIComponent(addr.area)}`
+                              );
+                              if (results && results.length > 0) {
+                                const best = results[0];
+                                setLocation({
+                                  area: best.area || addr.area,
+                                  city: best.city || addr.city,
+                                  pincode: best.pincode || addr.pincode,
+                                  lat: best.lat,
+                                  lng: best.lng,
+                                });
+                              }
+                            } catch {
+                              // silent
+                            }
+                          }
+                        }}
+                        className={cn(
+                          "w-full text-left rounded-lg border p-3 transition-colors hover:bg-muted/30",
+                          selected
+                            ? "border-primary bg-primary/5"
+                            : "border-border/60"
+                        )}
+                      >
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <MapPin className={cn("h-3.5 w-3.5 shrink-0", selected ? "text-primary" : "text-muted-foreground")} />
+                          <span className="text-xs font-semibold">{addr.label}</span>
+                          {addr.isDefault && (
+                            <span className="text-[9px] bg-primary/10 text-primary px-1.5 rounded-full font-medium">Default</span>
+                          )}
+                          {!hasCoords && (
+                            <span className="text-[9px] text-amber-600 font-medium">Resolving…</span>
+                          )}
+                          {selected && (
+                            <span className="ml-auto text-[9px] text-primary font-medium">Selected</span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground ml-5.5">{addr.line}, {addr.area}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Dynamic search input + suggestions */}
             <div>
-              <Label className="text-xs">Area / Locality</Label>
-              <Input value={location.area} onChange={(e) => setLocation({ ...location, area: e.target.value })} className="mt-1" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label className="text-xs">City</Label>
-                <Input value={location.city} onChange={(e) => setLocation({ ...location, city: e.target.value })} className="mt-1" />
+              <Label className="text-xs">Area / Locality or Pincode</Label>
+              <div className="relative mt-1">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10" />
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Type area name or enter pincode..."
+                  className="pl-8"
+                />
+                {searching && (
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                    <div className="h-3.5 w-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                  </div>
+                )}
               </div>
-              <div>
-                <Label className="text-xs">Pincode</Label>
-                <Input value={location.pincode} onChange={(e) => setLocation({ ...location, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} className="mt-1" />
-              </div>
+
+              {/* Suggestions dropdown */}
+              {suggestions.length > 0 && (
+                <div className="mt-1 border border-border rounded-lg bg-background shadow-lg max-h-48 overflow-y-auto z-20">
+                  {suggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 transition-colors flex items-center gap-2"
+                      onClick={() => {
+                        selectSuggestion(s);
+                        setSearchQuery("");
+                        setSuggestions([]);
+                      }}
+                    >
+                      <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{s.area}</p>
+                        <p className="text-[11px] text-muted-foreground truncate">{s.label !== s.area ? s.label : `${s.city}${s.pincode ? `, ${s.pincode}` : ""}`}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            <p className="text-[11px] text-muted-foreground">Popular areas: Indiranagar, Koramangala, HSR Layout, Whitefield, Jayanagar</p>
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {["Indiranagar", "Koramangala", "HSR Layout", "Jayanagar", "Whitefield", "BTM Layout"].map((area) => (
-                <button
-                  key={area}
-                  onClick={() => {
-                    const vendorInArea = VENDORS.find((v) => v.area === area);
-                    setLocation({
-                      area,
-                      city: vendorInArea?.city || "Bengaluru",
-                      pincode: vendorInArea ? "560038" : "560038",
-                    });
-                  }}
-                  className={cn(
-                    "rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors",
-                    location.area === area
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground hover:bg-muted/70"
-                  )}
-                >
-                  {area}
-                </button>
-              ))}
-            </div>
+
+
+
+            {location?.lat ? (
+              <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                <Navigation className="h-3 w-3" />
+                Showing vendors within 5 km of {location.area}{location.pincode ? `, ${location.pincode}` : ""}
+              </p>
+            ) : location?.area && !location.lat ? (
+              <p className="text-[11px] text-amber-600 flex items-center gap-1">
+                <MapPin className="h-3 w-3" />
+                Select an area from search suggestions above to get exact coordinates
+              </p>
+            ) : null}
           </div>
           <div className="flex gap-2 pt-4">
             <Button variant="outline" className="flex-1" onClick={() => setShowLocationChange(false)}>Cancel</Button>
-            <Button className="flex-1" onClick={() => {
+            <Button className="flex-1" disabled={!location?.lat} onClick={() => {
               setShowLocationChange(false);
-              setLocationChanged(true);
-              setFilter("near");
-              toast.success("Location updated", { description: `Showing vendors near ${location.area}, ${location.pincode}` });
+              setFilter("all");
+              toast.success("Location set", { description: `Showing vendors within 5 km of ${location?.area}` });
             }}>
-              Update Location
+              Find Vendors
             </Button>
           </div>
         </DialogContent>
@@ -753,8 +831,8 @@ function CustomerOrders({
   completedOrders,
   onTrack,
 }: {
-  activeOrders: typeof ORDERS;
-  completedOrders: typeof ORDERS;
+  activeOrders: Order[];
+  completedOrders: Order[];
   onTrack: (id: string) => void;
 }) {
   return (
@@ -793,37 +871,18 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
   const [showTopUp, setShowTopUp] = useState(false);
   const [topUpAmount, setTopUpAmount] = useState("");
   const [balance, setBalance] = useState(walletBalance);
+  const { data: paymentMethods } = usePaymentMethods();
 
-  const transactions = [
-    { id: "t1", desc: "Order LH-2847 payment", amount: -525.2, method: "UPI", date: "Today, 12:30 PM", status: "success" },
-    { id: "t2", desc: "Wallet top-up", amount: 1000, method: "UPI", date: "Yesterday", status: "success" },
-    { id: "t3", desc: "Order LH-2848 payment", amount: -1069.2, method: "Credit Card", date: "Yesterday", status: "success" },
-    { id: "t4", desc: "Refund — LH-2812", amount: 220, method: "Wallet", date: "3 days ago", status: "success" },
-    { id: "t5", desc: "Order LH-2821 payment", amount: -795.4, method: "UPI", date: "5 days ago", status: "success" },
-    { id: "t6", desc: "Order LH-2810 payment", amount: -1197.8, method: "Credit Card", date: "1 week ago", status: "success" },
-    { id: "t7", desc: "Wallet top-up", amount: 500, method: "UPI", date: "1 week ago", status: "success" },
-    { id: "t8", desc: "Subscription — Premium", amount: -1499, method: "UPI", date: "2 weeks ago", status: "success" },
-  ];
+  const transactions: Array<{ id: string; desc: string; amount: number; method: string; date: string; status: string }> = [];
 
-  const paymentMethods = [
-    { id: "pm1", type: "UPI", label: "aarav@okhdfcbank", icon: "📱", isDefault: true },
-    { id: "pm2", type: "Visa", label: "•••• 4242", icon: "💳", isDefault: false },
-    { id: "pm3", type: "Mastercard", label: "•••• 5555", icon: "💳", isDefault: false },
-  ];
-
-  const invoices = [
-    { id: "inv1", code: "LH-2847", vendor: "FreshFold Laundry Co.", date: "Today", amount: 525.2, gst: "29AABCL1234M1Z5" },
-    { id: "inv2", code: "LH-2848", vendor: "Pristine Wash Hub", date: "Yesterday", amount: 1069.2, gst: "29AABCP5678N1Z2" },
-    { id: "inv3", code: "LH-2821", vendor: "FreshFold Laundry Co.", date: "5 days ago", amount: 795.4, gst: "29AABCL1234M1Z5" },
-    { id: "inv4", code: "LH-2810", vendor: "Royal Garment Care", date: "1 week ago", amount: 1197.8, gst: "29AABCR9012K1Z9" },
-  ];
+  const invoices: Array<{ id: string; code: string; vendor: string; date: string; amount: number; gst: string }> = [];
 
   return (
     <div className="space-y-6">
       <div className="grid md:grid-cols-3 gap-4">
         <StatCard label="Wallet Balance" value={formatINR(balance)} icon={Wallet} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="Total Spent (6mo)" value={formatINR(28450)} change={8.2} trend="up" icon={TrendingUp} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Money Saved" value={formatINR(3240)} change={15.8} trend="up" icon={Ticket} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Total Spent (6mo)" value={formatINR(0)} icon={TrendingUp} accent="from-emerald-500 to-green-600" />
+        <StatCard label="Money Saved" value={formatINR(0)} icon={Ticket} accent="from-amber-500 to-orange-600" />
       </div>
 
       {/* Tabs */}
@@ -863,7 +922,7 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
                 <Button variant="ghost" size="sm" className="text-xs" onClick={() => setActiveTab("methods")}>View all</Button>
               </div>
               <div className="space-y-2">
-                {paymentMethods.map((pm) => (
+                {(paymentMethods || []).map((pm) => (
                   <div key={pm.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-xl">
                       {pm.icon}
@@ -925,7 +984,7 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
               </Button>
             </div>
             <div className="space-y-2">
-              {paymentMethods.map((pm) => (
+              {(paymentMethods || []).map((pm) => (
                 <div key={pm.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-4 hover:bg-muted/30 transition-colors">
                   <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-muted text-2xl">
                     {pm.icon}
@@ -1004,12 +1063,17 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
             <Button
               className="flex-1"
               disabled={!topUpAmount || Number(topUpAmount) <= 0}
-              onClick={() => {
+              onClick={async () => {
                 const amt = Number(topUpAmount);
-                setBalance(balance + amt);
-                setTopUpAmount("");
-                setShowTopUp(false);
-                toast.success("Wallet topped up", { description: `${formatINR(amt)} added to your wallet.` });
+                try {
+                  await api.post("/api/wallet", { amount: amt, method: "UPI" });
+                  setBalance(balance + amt);
+                  setTopUpAmount("");
+                  setShowTopUp(false);
+                  toast.success("Wallet topped up", { description: `${formatINR(amt)} added to your wallet.` });
+                } catch (err: any) {
+                  toast.error("Top-up failed", { description: err.message });
+                }
               }}
             >
               Add {topUpAmount ? formatINR(Number(topUpAmount)) : "Money"}
@@ -1025,6 +1089,8 @@ function CustomerPayments({ walletBalance }: { walletBalance: number }) {
 // Customer Coupons
 // ============================================================================
 function CustomerCoupons({ loyaltyPoints }: { loyaltyPoints: number }) {
+  const { data: coupons } = useCoupons();
+  const couponsData = coupons || [];
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   return (
@@ -1066,7 +1132,7 @@ function CustomerCoupons({ loyaltyPoints }: { loyaltyPoints: number }) {
       <div>
         <h3 className="text-lg font-semibold mb-3">Available Coupons</h3>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {COUPONS.map((c) => (
+          {couponsData.map((c) => (
             <motion.div key={c.code} whileHover={{ y: -2 }}>
               <Card className="overflow-hidden shadow-soft hover:shadow-lift transition-shadow">
                 <div className="relative bg-primary-surface p-4 text-white">
@@ -1114,11 +1180,47 @@ function CustomerCoupons({ loyaltyPoints }: { loyaltyPoints: number }) {
 // Customer Favorites
 // ============================================================================
 function CustomerFavorites({ onBook }: { onBook: () => void }) {
-  const favVendors = VENDORS.slice(0, 4);
+  const { vendorList, loading, toggleFavorite, isFavorited } = useFavoriteVendors();
+
+  if (loading) {
+    return (
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i} className="p-5 shadow-soft">
+            <div className="h-4 w-3/4 bg-muted rounded animate-pulse mb-3" />
+            <div className="h-3 w-1/2 bg-muted rounded animate-pulse" />
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
+  if (vendorList.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <Heart className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
+        <h3 className="text-lg font-semibold mb-1">No favorites yet</h3>
+        <p className="text-sm text-muted-foreground mb-4">
+          Tap the heart icon on any vendor to save them here
+        </p>
+        <Button variant="outline" onClick={() => {}}>
+          <MapPin className="h-4 w-4 mr-1.5" />
+          Find Vendors
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {favVendors.map((v) => (
-        <VendorCard key={v.id} vendor={v} onBook={onBook} />
+      {vendorList.map((v) => (
+        <VendorCard
+          key={v.id}
+          vendor={v}
+          onBook={onBook}
+          isFavorited={isFavorited(v.id)}
+          onToggleFavorite={() => toggleFavorite(v.id)}
+        />
       ))}
     </div>
   );
@@ -1128,9 +1230,44 @@ function CustomerFavorites({ onBook }: { onBook: () => void }) {
 // Customer Reviews
 // ============================================================================
 function CustomerReviews() {
+  const { data: reviews, loading } = useReviews();
+  const reviewsData = reviews || [];
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Card key={i} className="p-5 shadow-soft">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="h-10 w-10 rounded-full bg-muted animate-pulse" />
+              <div className="space-y-2 flex-1">
+                <div className="h-3 w-1/3 bg-muted rounded animate-pulse" />
+                <div className="h-2 w-1/4 bg-muted rounded animate-pulse" />
+              </div>
+            </div>
+            <div className="h-3 w-full bg-muted rounded animate-pulse mb-2" />
+            <div className="h-3 w-2/3 bg-muted rounded animate-pulse" />
+          </Card>
+        ))}
+      </div>
+    );
+  }
+
+  if (reviewsData.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <Star className="h-12 w-12 mx-auto text-muted-foreground/40 mb-4" />
+        <h3 className="text-lg font-semibold mb-1">No reviews yet</h3>
+        <p className="text-sm text-muted-foreground">
+          Reviews you leave after orders will appear here
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      {REVIEWS.map((r) => (
+      {reviewsData.map((r) => (
         <Card key={r.id} className="p-5 shadow-soft">
           <div className="flex items-start justify-between gap-3 mb-3">
             <div className="flex items-center gap-3">
@@ -1161,10 +1298,10 @@ function CustomerReviews() {
           {/* Rating breakdown */}
           <div className="grid grid-cols-4 gap-2 mt-3 pt-3 border-t border-border/60">
             {[
-              { label: "Vendor", v: r.vendor },
-              { label: "Pickup", v: r.pickup },
-              { label: "Laundry", v: r.laundry },
-              { label: "Delivery", v: r.delivery },
+              { label: "Vendor", v: r.vendorRating },
+              { label: "Pickup", v: r.pickupRating },
+              { label: "Laundry", v: r.laundryRating },
+              { label: "Delivery", v: r.deliveryRating },
             ].map((s) => (
               <div key={s.label} className="text-center">
                 <p className="text-[10px] text-muted-foreground">{s.label}</p>
@@ -1192,65 +1329,21 @@ function CustomerSubscriptions() {
   const [billing, setBilling] = useState<"monthly" | "yearly">("monthly");
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [subscribed, setSubscribed] = useState<string | null>(null);
+  const { data: plans, loading } = useSubscriptionPlans();
 
-  const plans = [
-    {
-      name: "Essentials",
-      tagline: "Perfect for daily laundry needs",
-      monthly: 999,
-      yearly: 9990,
-      color: "from-teal-500 to-cyan-600",
-      features: [
-        "20 kg Wash & Fold per month",
-        "10 pieces Wash & Iron per month",
-        "Free pickup & delivery (4x/month)",
-        "Standard 24-48hr delivery",
-        "Loyalty points 2× boost",
-      ],
-      popular: false,
-    },
-    {
-      name: "Premium",
-      tagline: "Best value for families",
-      monthly: 1499,
-      yearly: 14990,
-      color: "from-violet-500 to-purple-600",
-      features: [
-        "40 kg Wash & Fold per month",
-        "25 pieces Wash & Iron per month",
-        "5 pieces Dry Cleaning per month",
-        "Unlimited free pickup & delivery",
-        "Express 12hr delivery (2x/month)",
-        "Loyalty points 3× boost",
-        "Priority customer support",
-      ],
-      popular: true,
-    },
-    {
-      name: "Ultimate",
-      tagline: "Complete laundry freedom",
-      monthly: 2499,
-      yearly: 24990,
-      color: "from-amber-500 to-orange-600",
-      features: [
-        "Unlimited Wash & Fold",
-        "Unlimited Wash & Iron",
-        "15 pieces Dry Cleaning per month",
-        "5 pieces Premium Garment Care",
-        "Unlimited express delivery",
-        "Loyalty points 5× boost + Platinum tier",
-        "Dedicated laundry concierge",
-        "Free garment damage protection",
-      ],
-      popular: false,
-    },
-  ];
-
-  const handleSubscribe = (planName: string) => {
-    setSubscribed(planName);
-    toast.success(`Subscribed to ${planName}!`, {
-      description: `Your ${billing} plan is now active. Welcome to hassle-free laundry.`,
-    });
+  const handleSubscribe = async (plan: { id: string; name: string }) => {
+    try {
+      await api.post("/api/subscriptions", {
+        plan_id: plan.id,
+        billing_interval: billing,
+      });
+      setSubscribed(plan.name);
+      toast.success(`Subscribed to ${plan.name}!`, {
+        description: `Your ${billing} plan is now active. Welcome to hassle-free laundry.`,
+      });
+    } catch (err: any) {
+      toast.error("Subscription failed", { description: err.message });
+    }
   };
 
   return (
@@ -1301,13 +1394,29 @@ function CustomerSubscriptions() {
       </div>
 
       {/* Plans grid */}
+      {loading ? (
+        <div className="grid md:grid-cols-3 gap-4">
+          {[1, 2, 3].map((i) => (
+            <Card key={i} className="p-6 shadow-soft animate-pulse">
+              <div className="h-11 w-11 rounded-xl bg-muted mb-3" />
+              <div className="h-5 w-24 bg-muted rounded mb-2" />
+              <div className="h-3 w-40 bg-muted rounded mb-4" />
+              <div className="h-8 w-20 bg-muted rounded mb-4" />
+              <div className="h-9 w-full bg-muted rounded mb-4" />
+              <div className="space-y-2">
+                {[1, 2, 3].map((j) => <div key={j} className="h-3 w-full bg-muted rounded" />)}
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : (
       <div className="grid md:grid-cols-3 gap-4">
-        {plans.map((plan) => {
+        {(plans || []).map((plan) => {
           const isSelected = selectedPlan === plan.name;
           const isSubscribed = subscribed === plan.name;
           return (
             <motion.div
-              key={plan.name}
+              key={plan.id}
               whileHover={{ y: -4 }}
               className={cn(plan.popular && "md:-mt-4")}
               onClick={() => setSelectedPlan(plan.name)}
@@ -1335,7 +1444,7 @@ function CustomerSubscriptions() {
                 <p className="text-xs text-muted-foreground">{plan.tagline}</p>
                 <div className="mt-4 mb-4">
                   <span className="text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-                    ₹{billing === "monthly" ? plan.monthly : plan.yearly}
+                    ₹{billing === "monthly" ? plan.monthlyPrice : plan.yearlyPrice}
                   </span>
                   <span className="text-sm text-muted-foreground">/{billing === "monthly" ? "month" : "year"}</span>
                 </div>
@@ -1343,13 +1452,13 @@ function CustomerSubscriptions() {
                   className={cn("w-full", isSubscribed ? "bg-emerald-500 hover:bg-emerald-600" : plan.popular || isSelected ? "bg-primary hover:bg-primary/90" : "")}
                   variant={plan.popular || isSelected ? "default" : "outline"}
                   disabled={isSubscribed}
-                  onClick={(e) => { e.stopPropagation(); handleSubscribe(plan.name); }}
+                  onClick={(e) => { e.stopPropagation(); handleSubscribe(plan); }}
                 >
                   {isSubscribed ? "✓ Subscribed" : isSelected ? `Subscribe to ${plan.name}` : `Choose ${plan.name}`}
                 </Button>
                 <Separator className="my-4" />
                 <ul className="space-y-2">
-                  {plan.features.map((f) => (
+                  {plan.features.map((f: string) => (
                     <li key={f} className="flex items-start gap-2 text-xs">
                       <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
                       <span>{f}</span>
@@ -1361,6 +1470,7 @@ function CustomerSubscriptions() {
           );
         })}
       </div>
+      )}
 
       {/* Comparison / FAQ */}
       <Card className="p-5 shadow-soft">
@@ -1383,6 +1493,334 @@ function CustomerSubscriptions() {
           ))}
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// Customer Profile
+// ============================================================================
+function CustomerProfile() {
+  const { userName, userEmail, userPhone, userAvatar, role: userRole, setProfile } = useAppStore();
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(userName);
+  const [phone, setPhone] = useState(userPhone);
+  const [saving, setSaving] = useState(false);
+
+  const { data: addresses, refetch: refetchAddresses } = useAddresses();
+  const addrList = addresses || [];
+  const [showAddAddr, setShowAddAddr] = useState(false);
+  const [newAddr, setNewAddr] = useState({ label: "", line: "", area: "", city: "", pincode: "" });
+  const [profileAddrCoords, setProfileAddrCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [geocodingProfileAddr, setGeocodingProfileAddr] = useState(false);
+
+  const detectForProfileAddress = useCallback(async () => {
+    if (!navigator.geolocation) return;
+    setGeocodingProfileAddr(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const result = await api.get<{ area: string; city: string; pincode: string; lat: number; lng: number }>(
+            `/api/geocode/reverse?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`
+          );
+          if (result?.area) {
+            setNewAddr((prev) => ({ ...prev, area: result.area, city: result.city, pincode: result.pincode }));
+            setAddrSearchQuery(result.area);
+            setProfileAddrCoords({ lat: result.lat, lng: result.lng });
+          }
+        } catch {
+          // silent — user can type manually
+        } finally {
+          setGeocodingProfileAddr(false);
+        }
+      },
+      () => setGeocodingProfileAddr(false),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (showAddAddr && !newAddr.area) detectForProfileAddress();
+  }, [showAddAddr, newAddr.area, detectForProfileAddress]);
+
+  // ---- Dynamic area search with suggestions ----
+  const [addrSearchQuery, setAddrSearchQuery] = useState("");
+  const [addrSuggestions, setAddrSuggestions] = useState<Array<{ label: string; area: string; city: string; pincode: string; lat: number; lng: number }>>([]);
+  const [addrSearching, setAddrSearching] = useState(false);
+  const addrTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!showAddAddr) { setAddrSearchQuery(""); setAddrSuggestions([]); return; }
+  }, [showAddAddr]);
+
+  useEffect(() => {
+    if (addrSearchQuery.length < 2) { setAddrSuggestions([]); return; }
+    setAddrSearching(true);
+    if (addrTimerRef.current) clearTimeout(addrTimerRef.current);
+    addrTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await api.get<Array<{ label: string; area: string; city: string; pincode: string; lat: number; lng: number }>>(
+          `/api/geocode/search?q=${encodeURIComponent(addrSearchQuery)}`
+        );
+        setAddrSuggestions(results || []);
+      } catch {
+        setAddrSuggestions([]);
+      } finally {
+        setAddrSearching(false);
+      }
+    }, 300);
+    return () => { if (addrTimerRef.current) clearTimeout(addrTimerRef.current); };
+  }, [addrSearchQuery]);
+
+  const selectAddrSuggestion = (s: typeof addrSuggestions[number]) => {
+    setNewAddr((prev) => ({ ...prev, area: s.area, city: s.city, pincode: s.pincode }));
+    setProfileAddrCoords({ lat: s.lat, lng: s.lng });
+    setAddrSearchQuery(s.area);
+    setAddrSuggestions([]);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await setProfile(name, phone);
+      setEditing(false);
+      toast.success("Profile updated");
+    } catch (e: any) {
+      toast.error("Failed to update profile", { description: e.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setName(userName);
+    setPhone(userPhone);
+    setEditing(false);
+  };
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      {/* Profile card */}
+      <Card className="p-6 shadow-soft">
+        <div className="flex items-center gap-4 mb-6">
+          <Avatar className="h-16 w-16">
+            <AvatarFallback className="text-lg bg-primary text-primary-foreground">
+              {userAvatar}
+            </AvatarFallback>
+          </Avatar>
+          <div>
+            <h2 className="text-xl font-bold">{userName}</h2>
+            <p className="text-sm text-muted-foreground">{userRole}</p>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <Label className="text-xs text-muted-foreground">Email</Label>
+            <p className="text-sm font-medium mt-0.5 flex items-center gap-2">
+              <Mail className="h-4 w-4 text-muted-foreground" />
+              {userEmail || "—"}
+            </p>
+          </div>
+
+          <div>
+            <Label className="text-xs text-muted-foreground">Name</Label>
+            {editing ? (
+              <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
+            ) : (
+              <p className="text-sm font-medium mt-0.5 flex items-center gap-2">
+                <User className="h-4 w-4 text-muted-foreground" />
+                {userName}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <Label className="text-xs text-muted-foreground">Phone</Label>
+            {editing ? (
+              <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Enter your phone number" className="mt-1" />
+            ) : (
+              <p className="text-sm font-medium mt-0.5 flex items-center gap-2">
+                <Smartphone className="h-4 w-4 text-muted-foreground" />
+                {userPhone || "—"}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-3 mt-6">
+          {editing ? (
+            <>
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? "Saving..." : "Save"}
+              </Button>
+              <Button variant="outline" onClick={handleCancel}>Cancel</Button>
+            </>
+          ) : (
+            <Button onClick={() => setEditing(true)}>
+              <User className="h-4 w-4 mr-1.5" />
+              Edit Profile
+            </Button>
+          )}
+        </div>
+      </Card>
+
+      {/* Saved addresses */}
+      <Card className="p-5 shadow-soft">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">Saved Addresses</h3>
+          <Button variant="ghost" size="sm" className="text-xs gap-1" onClick={() => setShowAddAddr(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            Add new
+          </Button>
+        </div>
+        <div className="grid md:grid-cols-3 gap-3">
+          {addrList.map((addr) => (
+            <div key={addr.id} className="group rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
+              <div className="flex items-center gap-2 mb-1">
+                <MapPin className="h-3.5 w-3.5 text-primary" />
+                <span className="text-sm font-semibold">{addr.label}</span>
+                {addr.isDefault && <Badge variant="secondary" className="text-[10px] py-0 h-4">Default</Badge>}
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.delete(`/api/addresses/${addr.id}`);
+                      refetchAddresses();
+                      toast.success("Address deleted", { description: `${addr.label} address removed.` });
+                    } catch (err: any) {
+                      toast.error("Failed to delete address", { description: err.message });
+                    }
+                  }}
+                  className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-rose-600"
+                  title="Delete address"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">{addr.line}</p>
+              <p className="text-xs text-muted-foreground">{addr.area}, {addr.city} - {addr.pincode}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Add Address Dialog */}
+      <Dialog open={showAddAddr} onOpenChange={(o) => { setShowAddAddr(o); if (!o) { setProfileAddrCoords(null); setAddrSearchQuery(""); setAddrSuggestions([]); } }}>
+        <DialogContent className="max-w-md">
+          <DialogTitle className="sr-only">Add New Address</DialogTitle>
+          <div>
+            <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add New Address</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Save a new pickup/delivery address</p>
+          </div>
+          <div className="space-y-3 pt-2">
+            {/* ═══ Location ═══ */}
+            <div>
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Location</p>
+
+              {/* Auto-detect button */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full gap-2 mb-2"
+                onClick={detectForProfileAddress}
+                disabled={geocodingProfileAddr}
+              >
+                {geocodingProfileAddr ? (
+                  <div className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                ) : (
+                  <Navigation className="h-3.5 w-3.5" />
+                )}
+                {geocodingProfileAddr ? "Detecting…" : "Auto-fill my current location"}
+              </Button>
+
+              {/* Dynamic search */}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground z-10" />
+                <Input
+                  value={addrSearchQuery}
+                  onChange={(e) => setAddrSearchQuery(e.target.value)}
+                  placeholder="Search area or enter pincode..."
+                  className="pl-8"
+                />
+                {addrSearching && (
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                    <div className="h-3.5 w-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                  </div>
+                )}
+              </div>
+
+              {/* Suggestions dropdown */}
+              {addrSuggestions.length > 0 && (
+                <div className="mt-1 border border-border rounded-lg bg-background shadow-lg max-h-48 overflow-y-auto z-20">
+                  {addrSuggestions.map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 transition-colors flex items-center gap-2"
+                      onClick={() => selectAddrSuggestion(s)}
+                    >
+                      <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{s.area}</p>
+                        <p className="text-[11px] text-muted-foreground truncate">{s.label !== s.area ? s.label : `${s.city}${s.pincode ? `, ${s.pincode}` : ""}`}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+
+            </div>
+
+            {/* ═══ Address Details ═══ */}
+            <div>
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Address Details</p>
+              <div>
+                <Label className="text-xs">Label</Label>
+                <Input value={newAddr.label} onChange={(e) => setNewAddr({ ...newAddr, label: e.target.value })} placeholder="Home, Work, etc." className="mt-1" />
+              </div>
+              <div className="mt-2">
+                <Label className="text-xs">Address Line</Label>
+                <Input value={newAddr.line} onChange={(e) => setNewAddr({ ...newAddr, line: e.target.value })} placeholder="Flat / House no, Street" className="mt-1" />
+              </div>
+              <div className="grid grid-cols-2 gap-3 mt-2">
+                <div>
+                  <Label className="text-xs">City</Label>
+                  <Input value={newAddr.city} onChange={(e) => setNewAddr({ ...newAddr, city: e.target.value })} placeholder="Bengaluru" className="mt-1" />
+                </div>
+                <div>
+                  <Label className="text-xs">Pincode</Label>
+                  <Input value={newAddr.pincode} onChange={(e) => setNewAddr({ ...newAddr, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} placeholder="560038" className="mt-1" />
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 pt-4">
+            <Button variant="outline" className="flex-1" onClick={() => setShowAddAddr(false)}>Cancel</Button>
+            <Button
+              className="flex-1"
+              disabled={!newAddr.label || !newAddr.line || !newAddr.area || !newAddr.city || newAddr.pincode.length < 6}
+              onClick={async () => {
+                try {
+                  const payload = profileAddrCoords
+                    ? { ...newAddr, lat: profileAddrCoords.lat, lng: profileAddrCoords.lng }
+                    : newAddr;
+                  await api.post("/api/addresses", payload);
+                  refetchAddresses();
+                  setNewAddr({ label: "", line: "", area: "", city: "", pincode: "" });
+                  setProfileAddrCoords(null);
+                  setShowAddAddr(false);
+                  toast.success("Address added", { description: "New address saved successfully." });
+                } catch (err: any) {
+                  toast.error("Failed to add address", { description: err.message });
+                }
+              }}
+            >
+              Save Address
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

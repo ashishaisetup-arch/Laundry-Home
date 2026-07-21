@@ -1,10 +1,9 @@
-"use client";
 
 import { motion } from "framer-motion";
 import { Check, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Order } from "@/lib/types";
-import { ORDER_STAGE_FLOW } from "@/lib/mock-data";
+import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 
 // Lucide icon resolver for stage icons
 import {
@@ -115,7 +114,7 @@ export function OrderTimeline({ order, variant = "full", className }: OrderTimel
           const done = i < currentIndex;
           const active = i === currentIndex;
           const Icon = STAGE_ICONS[stage.icon] || Circle;
-          const event = order.stages[i];
+          const event = order.stages?.[i];
 
           return (
             <motion.div

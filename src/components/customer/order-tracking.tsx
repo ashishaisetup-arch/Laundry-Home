@@ -1,6 +1,5 @@
-"use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bike,
@@ -15,6 +14,7 @@ import {
   Sparkles,
   Shield,
   XCircle,
+  PenLine,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -39,9 +39,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { OrderTimeline } from "@/components/shared/order-timeline";
 import { ServiceIcon } from "@/components/shared/service-icon";
-import { ORDERS, ORDER_STAGE_FLOW } from "@/lib/mock-data";
+import { LeafletMap } from "@/components/shared/leaflet-map";
+import { useOrder } from "@/lib/hooks";
+import { useLiveLocation } from "@/lib/hooks/useLiveLocation";
+import { api } from "@/lib/api/client";
+import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 import { cn, formatINRDecimal, formatDateTime } from "@/lib/utils";
 import { toast } from "sonner";
+import { ReviewDialog } from "./review-dialog";
 
 interface OrderTrackingProps {
   orderId: string | null;
@@ -50,23 +55,61 @@ interface OrderTrackingProps {
 
 export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
   const [cancelled, setCancelled] = useState(false);
-  const order = ORDERS.find((o) => o.id === orderId);
-  if (!order) return null;
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const { data: order, loading } = useOrder(orderId || "");
+  const liveLoc = useLiveLocation(order?.deliveryExecutiveId || null);
+  const [route, setRoute] = useState<{ coordinates: [number, number][]; distance: number; duration: number } | null>(null);
+
+  useEffect(() => {
+    if (!orderId || loading || !order) return;
+    const origin = liveLoc?.lat != null ? { lat: liveLoc.lat, lng: liveLoc.lng } : null;
+    const dest = order.deliveryLat != null ? { lat: order.deliveryLat, lng: order.deliveryLng } : null;
+    if (!origin || !dest) { setRoute(null); return; }
+    let cancelledFetch = false;
+    fetch(`/api/routing/directions?start_lat=${origin.lat}&start_lng=${origin.lng}&end_lat=${dest.lat}&end_lng=${dest.lng}&profile=driving-car`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelledFetch) return;
+        const coords = data?.features?.[0]?.geometry?.coordinates;
+        if (coords && coords.length >= 2) {
+          const summary = data.features[0].properties?.summary;
+          setRoute({
+            coordinates: coords.map((c: number[]) => [c[1], c[0]] as [number, number]),
+            distance: summary?.distance || 0,
+            duration: summary?.duration || 0,
+          });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelledFetch = true; };
+  }, [orderId, loading, order, liveLoc?.lat, liveLoc?.lng, order?.deliveryLat, order?.deliveryLng]);
+
+  if (!orderId || loading || !order) return null;
 
   const currentStage = ORDER_STAGE_FLOW[order.currentStageIndex];
+  const hasPickup = order.pickupLat != null && order.pickupLng != null;
+  const hasDelivery = order.deliveryLat != null && order.deliveryLng != null;
+  const hasExec = liveLoc?.lat != null && liveLoc?.lng != null;
   const isCancellable = !["completed", "cancelled", "delivered", "out_for_delivery"].includes(order.status) && !cancelled;
+  const isCompleted = ["completed", "delivered"].includes(order.status) && !cancelled;
+  const milestoneIndices = [0, Math.floor(ORDER_STAGE_FLOW.length / 3), Math.floor(ORDER_STAGE_FLOW.length * 2 / 3), ORDER_STAGE_FLOW.length - 1];
 
-  const handleCancel = () => {
-    setCancelled(true);
-    toast.success(`Order ${order.code} cancelled`, {
-      description: `Refund of ${formatINRDecimal(order.total)} will be processed in 3-5 business days.`,
-    });
+  const handleCancel = async () => {
+    try {
+      await api.post(`/api/orders/${orderId}/cancel`);
+      setCancelled(true);
+      toast.success(`Order ${order.code || order.id?.slice(0, 8)} cancelled`, {
+        description: `Refund of ${formatINRDecimal(order.total || 0)} will be processed in 3-5 business days.`,
+      });
+    } catch (err: any) {
+      toast.error("Cancel failed", { description: err.message });
+    }
   };
 
   return (
     <Dialog open={!!orderId} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto p-0">
-        <DialogTitle className="sr-only">Track order {order.code}</DialogTitle>
+        <DialogTitle className="sr-only">Track order {order.code || order.id?.slice(0, 8)}</DialogTitle>
 
         {/* Header with live status */}
         <div className="relative overflow-hidden bg-primary-surface p-5 text-primary-foreground">
@@ -79,16 +122,16 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
                   <span className="flex h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
                 </div>
                 <h2 className="text-2xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-                  {order.code}
+                  {order.code || `Order #${order.id?.slice(0, 8)}`}
                 </h2>
-                <p className="text-sm text-white/80 mt-0.5">{order.vendorName}</p>
+                <p className="text-sm text-white/80 mt-0.5">{order.vendorName || "Vendor assigned"}</p>
               </div>
               <div className="text-right">
                 <p className="text-xs text-white/80">Current stage</p>
-                <p className="text-lg font-semibold">{currentStage?.label}</p>
+                <p className="text-lg font-semibold">{currentStage?.label || order.status}</p>
                 <p className="text-xs text-white/80 mt-0.5">
                   <Clock className="inline h-3 w-3 mr-0.5" />
-                  ETA {formatDateTime(order.estimatedDeliveryAt)}
+                  ETA {order.estimatedDeliveryAt ? formatDateTime(order.estimatedDeliveryAt) : "Calculating..."}
                 </p>
               </div>
             </div>
@@ -104,10 +147,9 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
                 />
               </div>
               <div className="flex justify-between text-[10px] text-white/80 mt-1">
-                <span>Placed</span>
-                <span>Processing</span>
-                <span>Delivery</span>
-                <span>Completed</span>
+                {milestoneIndices.map((i) => (
+                  <span key={i}>{ORDER_STAGE_FLOW[i]?.label}</span>
+                ))}
               </div>
             </div>
           </div>
@@ -122,85 +164,68 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
               <OrderTimeline order={order} />
             </Card>
 
-            {/* Map placeholder */}
+            {/* Map */}
             <Card className="p-0 overflow-hidden shadow-soft">
-              <div className="relative h-48 bg-gradient-to-br from-teal-100 via-emerald-100 to-cyan-100 dark:from-teal-950/40 dark:via-emerald-950/40 dark:to-cyan-950/40">
-                {/* Faux map grid */}
-                <div className="absolute inset-0 opacity-30" style={{
-                  backgroundImage: `
-                    linear-gradient(oklch(0.62 0.13 180 / 0.15) 1px, transparent 1px),
-                    linear-gradient(90deg, oklch(0.62 0.13 180 / 0.15) 1px, transparent 1px)
-                  `,
-                  backgroundSize: "30px 30px",
-                }} />
-                {/* Route line */}
-                <svg className="absolute inset-0 w-full h-full" viewBox="0 0 400 200" preserveAspectRatio="none">
-                  <motion.path
-                    d="M 60 150 Q 150 50 200 100 T 340 60"
-                    stroke="oklch(0.62 0.13 180)"
-                    strokeWidth="3"
-                    strokeDasharray="6 4"
-                    fill="none"
-                    strokeLinecap="round"
-                    initial={{ pathLength: 0 }}
-                    animate={{ pathLength: 1 }}
-                    transition={{ duration: 2, repeat: Infinity, repeatType: "reverse" }}
-                  />
-                </svg>
-                {/* Pickup marker */}
-                <div className="absolute bottom-12 left-12 flex flex-col items-center">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-white shadow-lg ring-4 ring-white">
-                    <MapPin className="h-4 w-4" />
-                  </div>
-                  <span className="text-[10px] font-semibold mt-1 bg-white/80 px-1.5 rounded">Pickup</span>
+              {(hasPickup || hasDelivery) ? (
+                <LeafletMap
+                  markers={[
+                    ...(hasPickup ? [{ lat: order.pickupLat!, lng: order.pickupLng!, label: "Pickup", color: "#14b8a6", type: "pickup" as const }] : []),
+                    ...(hasDelivery ? [{ lat: order.deliveryLat!, lng: order.deliveryLng!, label: order.vendorName || "Vendor", color: order.vendorLogoColor || "#8b5cf6", type: "vendor" as const }] : []),
+                    ...(hasExec ? [{ lat: liveLoc!.lat, lng: liveLoc!.lng, label: order.deliveryExecutiveName || "Exec", color: "#10b981", type: "exec" as const }] : []),
+                  ]}
+                  center={hasPickup ? [order.pickupLat!, order.pickupLng!] : hasDelivery ? [order.deliveryLat!, order.deliveryLng!] : [12.9719, 77.6413]}
+                  zoom={13}
+                  height="h-48"
+                  route={route ? { coordinates: route.coordinates, color: "#10b981", dashArray: "6 4" } : undefined}
+                />
+              ) : (
+                <div className="h-48 bg-muted/20 flex items-center justify-center">
+                  <MapPin className="h-8 w-8 text-muted-foreground/40" />
                 </div>
-                {/* Vendor marker */}
-                <div className="absolute top-12 right-16 flex flex-col items-center">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-violet-500 text-white shadow-lg ring-4 ring-white">
-                    <span className="text-xs font-bold">{order.vendorLogoInitials}</span>
-                  </div>
-                  <span className="text-[10px] font-semibold mt-1 bg-white/80 px-1.5 rounded">Vendor</span>
-                </div>
-                {/* Delivery exec moving */}
-                <motion.div
-                  className="absolute flex flex-col items-center"
-                  animate={{
-                    left: ["15%", "40%", "60%", "80%"],
-                    top: ["70%", "45%", "30%", "25%"],
-                  }}
-                  transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-                >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg ring-4 ring-white">
-                    <Bike className="h-4 w-4" />
-                  </div>
-                </motion.div>
-              </div>
+              )}
               <div className="p-3 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs">
                   <Navigation className="h-3.5 w-3.5 text-primary" />
-                  <span className="font-medium">Rajesh is on the way</span>
+                  {hasExec && route ? (
+                    <span className="font-medium">
+                      {order.deliveryExecutiveName} · {(route.distance / 1000).toFixed(1)} km · {Math.round(route.duration / 60)} mins
+                    </span>
+                  ) : (
+                    <span className="font-medium">
+                      {order.deliveryExecutiveName ? `${order.deliveryExecutiveName} is on the way` : "Waiting for delivery partner"}
+                    </span>
+                  )}
                 </div>
-                <Button variant="outline" size="sm" className="h-7 text-xs">
-                  Open in Maps
-                </Button>
+                {(hasPickup || hasDelivery) && (
+                  <Button
+                    variant="outline" size="sm" className="h-7 text-xs"
+                    onClick={() => {
+                      const lat = order.pickupLat || order.deliveryLat!;
+                      const lng = order.pickupLng || order.deliveryLng!;
+                      window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, "_blank");
+                    }}
+                  >
+                    Open in Maps
+                  </Button>
+                )}
               </div>
             </Card>
 
-            {/* Items */}
+              {/* Items */}
             <Card className="p-5 shadow-soft">
               <h3 className="font-semibold mb-3">Order Items</h3>
               <div className="space-y-2">
-                {order.items.map((item, i) => (
+                {(order.items || []).map((item: any, i: number) => (
                   <div key={i} className="flex items-center gap-3 rounded-lg bg-muted/40 p-2.5">
                     <ServiceIcon serviceKey={item.serviceKey} className="h-4 w-4 text-primary" />
                     <div className="flex-1">
-                      <p className="text-sm font-medium">{item.serviceName}</p>
+                      <p className="text-sm font-medium">{item.serviceName || "Item"}</p>
                       <p className="text-xs text-muted-foreground">
-                        {item.qty} {item.unit} × ₹{item.unitPrice}
+                        {item.qty || 0} {item.unit || "pc"} × ₹{item.unitPrice || 0}
                         {item.express && <Badge variant="outline" className="ml-1 text-[9px] py-0 h-3.5 border-amber-400 text-amber-600">Express</Badge>}
                       </p>
                     </div>
-                    <p className="text-sm font-semibold">{formatINRDecimal(item.qty * item.unitPrice * (item.express ? 1.5 : 1))}</p>
+                    <p className="text-sm font-semibold">{formatINRDecimal((item.qty || 0) * (item.unitPrice || 0) * (item.express ? 1.5 : 1))}</p>
                   </div>
                 ))}
               </div>
@@ -218,30 +243,37 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
             {/* Delivery exec */}
             <Card className="p-4 shadow-soft">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Delivery Executive</p>
-              <div className="flex items-center gap-3">
-                <Avatar className="h-12 w-12">
-                  <AvatarFallback className="bg-gradient-to-br from-emerald-500 to-cyan-600 text-white">
-                    RK
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <p className="text-sm font-semibold">{order.deliveryExecutiveName || "Rajesh Kumar"}</p>
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                    4.9 · 1,240 deliveries
+              {order.deliveryExecutiveName ? (
+                <div className="flex items-center gap-3">
+                  <Avatar className="h-12 w-12">
+                    <AvatarFallback className="bg-gradient-to-br from-emerald-500 to-cyan-600 text-white">
+                      {order.deliveryExecutiveName.charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold">{order.deliveryExecutiveName}</p>
+                    <p className="text-xs text-muted-foreground">{order.pickupArea ? `${order.pickupArea} · ` : ""}Delivery partner</p>
                   </div>
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-2 mt-3">
-                <Button variant="outline" size="sm" className="h-9">
-                  <Phone className="h-3.5 w-3.5 mr-1.5" />
-                  Call
-                </Button>
-                <Button variant="outline" size="sm" className="h-9">
-                  <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
-                  Chat
-                </Button>
-              </div>
+              ) : (
+                <div className="text-center py-3 text-muted-foreground">
+                  <Truck className="h-8 w-8 mx-auto mb-1 opacity-40" />
+                  <p className="text-sm">Not yet assigned</p>
+                  <p className="text-xs mt-0.5">A delivery partner will be assigned soon</p>
+                </div>
+              )}
+              {order.deliveryExecutiveName && (
+                <div className="grid grid-cols-2 gap-2 mt-3">
+                  <Button variant="outline" size="sm" className="h-9">
+                    <Phone className="h-3.5 w-3.5 mr-1.5" />
+                    Call
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-9">
+                    <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
+                    Chat
+                  </Button>
+                </div>
+              )}
             </Card>
 
             {/* Vendor */}
@@ -250,13 +282,13 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
               <div className="flex items-center gap-3">
                 <div className={cn(
                   "flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white text-sm font-bold",
-                  order.vendorLogoColor
+                  order.vendorLogoColor || "bg-primary"
                 )}>
-                  {order.vendorLogoInitials}
+                  {order.vendorLogoInitials || "LH"}
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm font-semibold">{order.vendorName}</p>
-                  <p className="text-xs text-muted-foreground">{order.pickupArea}</p>
+                  <p className="text-sm font-semibold">{order.vendorName || "Assigning vendor..."}</p>
+                  <p className="text-xs text-muted-foreground">{order.pickupArea || "—"}</p>
                 </div>
               </div>
             </Card>
@@ -306,19 +338,19 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
             <Card className="p-4 shadow-soft">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Payment</p>
               <div className="space-y-1 text-sm">
-                <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span>{formatINRDecimal(order.amount)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Taxes</span><span>{formatINRDecimal(order.taxes)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Platform fee</span><span>{formatINRDecimal(order.platformFee)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Delivery</span><span>{formatINRDecimal(order.deliveryFee)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Amount</span><span>{formatINRDecimal(order.amount || 0)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Taxes</span><span>{formatINRDecimal(order.taxes || 0)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Platform fee</span><span>{formatINRDecimal(order.platformFee || 0)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Delivery</span><span>{formatINRDecimal(order.deliveryFee || 0)}</span></div>
                 <Separator className="my-1.5" />
                 <div className="flex justify-between font-bold">
                   <span>Total</span>
-                  <span>{formatINRDecimal(order.total)}</span>
+                  <span>{formatINRDecimal(order.total || 0)}</span>
                 </div>
                 <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/60">
-                  <span className="text-xs text-muted-foreground">{order.paymentMethod}</span>
+                  <span className="text-xs text-muted-foreground">{order.paymentMethod || "Wallet"}</span>
                   <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50 dark:bg-emerald-950/30">
-                    {order.paymentStatus}
+                    {order.paymentStatus || "pending"}
                   </Badge>
                 </div>
               </div>
@@ -337,6 +369,16 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
                   Report an issue
                 </button>
               </div>
+              {isCompleted && (
+                <Button
+                  variant="default"
+                  className="w-full mt-3"
+                  onClick={() => setReviewOpen(true)}
+                >
+                  <PenLine className="h-4 w-4 mr-1.5" />
+                  Write a Review
+                </Button>
+              )}
               {isCancellable && (
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
@@ -375,6 +417,12 @@ export function OrderTracking({ orderId, onClose }: OrderTrackingProps) {
             </Card>
           </div>
         </div>
+
+        <ReviewDialog
+          order={order}
+          open={reviewOpen}
+          onOpenChange={setReviewOpen}
+        />
       </DialogContent>
     </Dialog>
   );

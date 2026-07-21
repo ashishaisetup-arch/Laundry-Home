@@ -1,6 +1,5 @@
-"use client";
 
-import { useState, type ReactNode } from "react";
+import { useState, useRef, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bell,
@@ -48,7 +47,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore } from "@/lib/store";
 import { BrandLockup, LogoMark } from "./brand";
 import { cn } from "@/lib/utils";
-import { RoleSwitcher } from "./role-switcher";
 import { AiAssistant } from "@/components/ai/ai-assistant";
 
 export interface NavItem {
@@ -158,6 +156,7 @@ export function AppShell({
   pageSubtitle,
   actions,
 }: AppShellProps) {
+  const [searchQuery, setSearchQuery] = useState("");
   const {
     sidebarOpen,
     setSidebar,
@@ -294,6 +293,19 @@ export function AppShell({
             <input
               placeholder="Search orders, vendors…"
               className="flex-1 bg-transparent outline-none placeholder:text-muted-foreground/70 text-[13px]"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && searchQuery.trim()) {
+                  const q = searchQuery.trim();
+                  setSearchQuery("");
+                  if (role === "customer") onNavigate("discover");
+                  else if (role === "vendor") onNavigate("orders");
+                  else if (role === "admin") onNavigate("orders");
+                  else if (role === "delivery") onNavigate("pickups");
+                  toggleAi();
+                }
+              }}
             />
             <kbd className="ml-2 hidden lg:inline rounded bg-background px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/60">⌘K</kbd>
           </div>
@@ -368,7 +380,7 @@ export function AppShell({
               <Button variant="ghost" className="gap-2 px-2">
                 <Avatar className="h-8 w-8">
                   <AvatarFallback className="bg-primary-surface text-primary-foreground text-xs font-semibold">
-                    {userAvatar}
+                    {userAvatar || userName?.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase() || "?"}
                   </AvatarFallback>
                 </Avatar>
                 <div className="hidden md:block text-left">
@@ -394,10 +406,6 @@ export function AppShell({
                 <Settings className="mr-2 h-4 w-4" />
                 Settings
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <div className="px-2 py-1.5">
-                <RoleSwitcher />
-              </div>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={logout} className="text-rose-600 focus:text-rose-700">
                 <LogOut className="mr-2 h-4 w-4" />

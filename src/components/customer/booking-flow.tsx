@@ -1,26 +1,21 @@
-"use client";
-
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
   ArrowRight,
-  Calendar,
   Check,
   CheckCircle2,
-  Clock,
   MapPin,
   Package,
   Sparkles,
   Star,
   Store,
   Truck,
-  Zap,
-  Camera,
   Plus,
   Minus,
   Wallet,
   Tag,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -39,66 +34,132 @@ import {
   RadioGroup,
   RadioGroupItem,
 } from "@/components/ui/radio-group";
-import { Checkbox } from "@/components/ui/checkbox";
-import { ServiceIcon, getServiceMeta } from "@/components/shared/service-icon";
-import { SERVICES, VENDORS, ADDRESSES, PICKUP_SLOTS, DELIVERY_SLOTS } from "@/lib/mock-data";
-import type { ServiceKey } from "@/lib/types";
+import { ServiceIcon } from "@/components/shared/service-icon";
+import { useServices, useVendors, useAddresses, useOrders } from "@/lib/hooks";
+import { api } from "@/lib/api/client";
+import type { ServiceKey, Address } from "@/lib/types";
+import type { Slot } from "@/lib/hooks/useSlots";
 import { cn, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
+
+const PICKUP_SLOTS: Slot[] = [
+  { id: "p1", slot: "7:00 AM - 9:00 AM", available: true, premium: false },
+  { id: "p2", slot: "9:00 AM - 11:00 AM", available: true, premium: false },
+  { id: "p3", slot: "11:00 AM - 1:00 PM", available: true, premium: false },
+  { id: "p4", slot: "1:00 PM - 3:00 PM", available: true, premium: true },
+  { id: "p5", slot: "3:00 PM - 5:00 PM", available: true, premium: false },
+  { id: "p6", slot: "5:00 PM - 7:00 PM", available: true, premium: false },
+];
+
+const DELIVERY_SLOTS: Slot[] = [
+  { id: "d1", slot: "7:00 AM - 9:00 AM", available: true },
+  { id: "d2", slot: "9:00 AM - 11:00 AM", available: true },
+  { id: "d3", slot: "11:00 AM - 1:00 PM", available: true },
+  { id: "d4", slot: "1:00 PM - 3:00 PM", available: true },
+  { id: "d5", slot: "3:00 PM - 5:00 PM", available: true },
+  { id: "d6", slot: "5:00 PM - 7:00 PM", available: true },
+];
 
 interface BookingFlowProps {
   open: boolean;
   onClose: () => void;
+  location?: { lat: number; lng: number } | null;
 }
 
 type Step = "services" | "schedule" | "vendor" | "review" | "confirmed";
 
-export function BookingFlow({ open, onClose }: BookingFlowProps) {
+function resolveDate(label: string): string {
+  const d = new Date();
+  if (label === "Tomorrow") d.setDate(d.getDate() + 1);
+  else if (label === "Day after") d.setDate(d.getDate() + 2);
+  else if (label === "3 days") d.setDate(d.getDate() + 3);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function BookingFlow({ open, onClose, location: externalLocation }: BookingFlowProps) {
+  const { data: services } = useServices();
+  const [detectedLocation, setDetectedLocation] = useState<{lat: number; lng: number} | null>(null);
+
+  useEffect(() => {
+    if (externalLocation) return;
+    if (!open) return;
+    if (detectedLocation) return;
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const result = await api.get<{ lat: number; lng: number }>(
+            `/api/geocode/reverse?lat=${pos.coords.latitude}&lng=${pos.coords.longitude}`
+          );
+          if (result?.lat) setDetectedLocation({ lat: result.lat, lng: result.lng });
+          else setDetectedLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        } catch {
+          setDetectedLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
+  }, [open, externalLocation, detectedLocation]);
+
+  const activeLocation = externalLocation || detectedLocation;
+
+  const { data: vendorsList } = useVendors(
+    activeLocation ? { lat: activeLocation.lat, lng: activeLocation.lng, radiusKm: 5 } : undefined
+  );
+  const { data: addresses, refetch: refetchAddresses } = useAddresses();
+  const { refetch: refetchOrders } = useOrders();
+
+  const servicesData = services || [];
+  const addrList = addresses || [];
+
   const [step, setStep] = useState<Step>("services");
-  const [selectedServices, setSelectedServices] = useState<Record<ServiceKey, { qty: number; express: boolean }>>({} as never);
-  const [pickupAddr, setPickupAddr] = useState("a1");
+  const [selectedServices, setSelectedServices] = useState<Partial<Record<ServiceKey, { qty: number; express: boolean }>>>({});
+  const [pickupAddr, setPickupAddr] = useState("");
   const [pickupDate, setPickupDate] = useState("Today");
   const [pickupSlot, setPickupSlot] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("Tomorrow");
   const [deliverySlot, setDeliverySlot] = useState("");
+
   const [vendorMode, setVendorMode] = useState<"auto" | "manual">("auto");
-  const [selectedVendor, setSelectedVendor] = useState("v1");
+  const [selectedVendor, setSelectedVendor] = useState("");
   const [notes, setNotes] = useState("");
   const [couponCode, setCouponCode] = useState("");
+  const [showAddAddr, setShowAddAddr] = useState(false);
+  const [newAddr, setNewAddr] = useState({ label: "", line: "", area: "", city: "", pincode: "" });
+  const [placing, setPlacing] = useState(false);
+  const [confirmedOrder, setConfirmedOrder] = useState<{
+    code: string;
+    total: number;
+    pickupDate: string;
+    pickupSlot: string;
+    deliveryDate: string;
+    deliverySlot: string;
+    vendorName: string;
+  } | null>(null);
 
-  const steps: { id: Step; label: string; icon: typeof Package }[] = [
-    { id: "services", label: "Services", icon: Package },
-    { id: "schedule", label: "Schedule", icon: Calendar },
-    { id: "vendor", label: "Vendor", icon: Store },
-    { id: "review", label: "Review", icon: Check },
+  const steps: { id: Step; label: string }[] = [
+    { id: "services", label: "Services" },
+    { id: "schedule", label: "Schedule" },
+    { id: "vendor", label: "Vendor" },
+    { id: "review", label: "Review" },
   ];
   const stepIndex = steps.findIndex((s) => s.id === step);
 
-  const reset = () => {
-    setStep("services");
-    setSelectedServices({} as never);
-    setPickupSlot("");
-    setDeliverySlot("");
-    setNotes("");
-    setCouponCode("");
-  };
+  const selectedServiceList = Object.entries(selectedServices).filter(([, v]) => v.qty > 0) as [ServiceKey, NonNullable<typeof selectedServices[ServiceKey]>][];
 
-  const handleClose = () => {
-    onClose();
-    setTimeout(reset, 300);
-  };
-
-  const selectedServiceList = Object.entries(selectedServices).filter(([, v]) => v.qty > 0) as [ServiceKey, { qty: number; express: boolean }][];
-
-  // Calculate pricing
   let subtotal = 0;
   selectedServiceList.forEach(([key, v]) => {
-    const meta = getServiceMeta(key);
-    let price = meta.basePrice * v.qty;
-    if (v.express) price *= meta.expressMultiplier;
+    const svc = servicesData.find((s) => s.key === key);
+    if (!svc) return;
+    let price = svc.basePrice * v.qty;
+    if (v.express) price *= svc.expressMultiplier;
     subtotal += price;
   });
-  const taxes = subtotal * 0.18;
+  const taxes = Math.round(subtotal * 0.18);
   const platformFee = 25;
   const deliveryFee = 40;
   const expressSurcharge = selectedServiceList.some(([, v]) => v.express) ? 50 : 0;
@@ -107,22 +168,108 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
   else if (couponCode === "WEEKEND25") discount = Math.min(100, subtotal * 0.25);
   const total = subtotal + taxes + platformFee + deliveryFee + expressSurcharge - discount;
 
+  const DAY_OFFSET: Record<string, number> = { "Today": 0, "Tomorrow": 1, "Day after": 2, "3 days": 3 };
+  function parseSlotStartHour(slot: string): number {
+    const start = slot.split("–")[0]?.split("-")[0]?.trim() || "";
+    const match = start.match(/(\d+):?(\d*)?\s*(AM|PM)/i);
+    if (!match) return 0;
+    let h = parseInt(match[1]);
+    if (match[3]?.toUpperCase() === "PM" && h !== 12) h += 12;
+    if (match[3]?.toUpperCase() === "AM" && h === 12) h = 0;
+    return h;
+  }
+  function isDeliverySlotValid(pDate: string, pSlot: string, dDate: string, dSlot: string): boolean {
+    if (!pSlot || !dSlot) return true;
+    const po = DAY_OFFSET[pDate], doff = DAY_OFFSET[dDate];
+    if (po === undefined || doff === undefined) return true;
+    const dayGap = doff - po;
+    if (dayGap > 1) return true;
+    if (dayGap < 1) return false;
+    const ph = parseSlotStartHour(pSlot);
+    const dh = parseSlotStartHour(dSlot);
+    return 24 + dh - ph >= 24;
+  }
+  const isExpress = expressSurcharge > 0;
+  const gapWarnings: string[] = [];
+  if (!isExpress && pickupSlot && deliverySlot && deliveryDate && pickupDate) {
+    if (!isDeliverySlotValid(pickupDate, pickupSlot, deliveryDate, deliverySlot)) {
+      gapWarnings.push("A minimum 24-hour gap is required between pickup and delivery. Select a later delivery slot or enable Express delivery.");
+    }
+  }
+
   const canProceed = () => {
     if (step === "services") return selectedServiceList.length > 0;
-    if (step === "schedule") return !!pickupSlot && !!deliverySlot;
+    if (step === "schedule") return !!pickupAddr && !!pickupSlot && !!deliverySlot && gapWarnings.length === 0;
     if (step === "vendor") return vendorMode === "auto" || !!selectedVendor;
     return true;
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (step === "services") setStep("schedule");
     else if (step === "schedule") setStep("vendor");
     else if (step === "vendor") setStep("review");
     else if (step === "review") {
-      setStep("confirmed");
-      toast.success("Booking confirmed!", {
-        description: `Order LH-2853 placed. Pickup scheduled for ${pickupDate}, ${pickupSlot}.`,
-      });
+      setPlacing(true);
+      try {
+        const items = selectedServiceList.map(([key, v]) => {
+          const svc = servicesData.find((s) => s.key === key);
+          return {
+            serviceKey: key,
+            serviceName: svc?.name || key,
+            qty: v.qty,
+            unit: svc?.pricingType === "per_kg" ? "kg" : "piece",
+            unitPrice: svc?.basePrice || 0,
+            express: v.express,
+          };
+        });
+
+        const chosenVendor = vendorMode === "auto"
+          ? vendorsList?.[0]
+          : vendorsList?.find((v) => v.id === selectedVendor);
+
+        const orderPayload = {
+          vendor_id: chosenVendor?.id || null,
+          vendor_name: chosenVendor?.name || vendorMode === "auto" ? "AI-assigned Vendor" : "Selected Vendor",
+          vendor_logo_initials: chosenVendor?.logoInitials || "LH",
+          vendor_logo_color: chosenVendor?.logoColor || "bg-primary",
+          items,
+          pickup_address: addrList.find((a) => a.id === pickupAddr)?.line || "",
+          pickup_area: addrList.find((a) => a.id === pickupAddr)?.area || "",
+          pickup_date: resolveDate(pickupDate),
+          pickup_slot: pickupSlot,
+          delivery_date: resolveDate(deliveryDate),
+          delivery_slot: deliverySlot,
+          amount: subtotal,
+          taxes,
+          platform_fee: platformFee,
+          delivery_fee: deliveryFee,
+          total,
+          express: selectedServiceList.some(([, v]) => v.express),
+          notes,
+        };
+
+        const newOrder = await api.post<{ code: string; total: number }>("/api/orders", orderPayload);
+
+        setConfirmedOrder({
+          code: newOrder.code,
+          total: newOrder.total,
+          pickupDate,
+          pickupSlot,
+          deliveryDate,
+          deliverySlot,
+          vendorName: chosenVendor?.name || "AI-assigned Vendor",
+        });
+
+        setStep("confirmed");
+        refetchOrders();
+        toast.success("Booking confirmed!", {
+          description: `Order ${newOrder.code} placed. Pickup scheduled for ${pickupDate}, ${pickupSlot}.`,
+        });
+      } catch (err: any) {
+        toast.error("Booking failed", { description: err.message });
+      } finally {
+        setPlacing(false);
+      }
     }
   };
 
@@ -130,6 +277,68 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
     if (step === "schedule") setStep("services");
     else if (step === "vendor") setStep("schedule");
     else if (step === "review") setStep("vendor");
+  };
+
+  const handleClose = () => {
+    setStep("services");
+    setSelectedServices({} as never);
+    setPickupAddr("");
+    setPickupDate("Today");
+    setPickupSlot("");
+    setDeliveryDate("Tomorrow");
+    setDeliverySlot("");
+    setVendorMode("auto");
+    setSelectedVendor("");
+    setNotes("");
+    setCouponCode("");
+    setConfirmedOrder(null);
+    setShowAddAddr(false);
+    setNewAddr({ label: "", line: "", area: "", city: "", pincode: "" });
+    onClose();
+  };
+
+  const handleAddAddress = async () => {
+    try {
+      const newAddress = await api.post<Address>("/api/addresses", newAddr);
+      refetchAddresses();
+      setPickupAddr(newAddress.id);
+      setShowAddAddr(false);
+      setNewAddr({ label: "", line: "", area: "", city: "", pincode: "" });
+      toast.success("Address added");
+    } catch (err: any) {
+      toast.error("Failed to add address", { description: err.message });
+    }
+  };
+
+  const toggleService = (key: ServiceKey) => {
+    setSelectedServices((prev) => {
+      const current = prev[key];
+      if (!current || current.qty === 0) {
+        return { ...prev, [key]: { qty: 1, express: false } };
+      }
+      return { ...prev, [key]: { ...current, qty: current.qty + 1 } };
+    });
+  };
+
+  const updateQty = (key: ServiceKey, delta: number) => {
+    setSelectedServices((prev) => {
+      const current = prev[key];
+      if (!current) return prev;
+      const newQty = Math.max(0, current.qty + delta);
+      if (newQty === 0) {
+        const { [key]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [key]: { ...current, qty: newQty } };
+    });
+  };
+
+  const toggleExpress = (key: ServiceKey) => {
+    setSelectedServices((prev) => {
+      const current = prev[key];
+      if (!current) return prev;
+      return { ...prev, [key]: { ...current, express: !current.express } };
+    });
   };
 
   return (
@@ -140,15 +349,16 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
         </DialogHeader>
 
         <AnimatePresence mode="wait">
-          {step === "confirmed" ? (
+          {step === "confirmed" && confirmedOrder ? (
             <BookingConfirmed
               key="confirmed"
-              total={total}
-              pickupDate={pickupDate}
-              pickupSlot={pickupSlot}
-              deliveryDate={deliveryDate}
-              deliverySlot={deliverySlot}
-              vendorName={vendorMode === "auto" ? "AI-assigned (FreshFold Laundry Co.)" : VENDORS.find((v) => v.id === selectedVendor)?.name || ""}
+              code={confirmedOrder.code}
+              total={confirmedOrder.total}
+              pickupDate={confirmedOrder.pickupDate}
+              pickupSlot={confirmedOrder.pickupSlot}
+              deliveryDate={confirmedOrder.deliveryDate}
+              deliverySlot={confirmedOrder.deliverySlot}
+              vendorName={confirmedOrder.vendorName}
               onClose={handleClose}
             />
           ) : (
@@ -174,329 +384,315 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
                       </div>
                       <span className={cn(
                         "text-sm font-medium hidden sm:inline",
-                        i === stepIndex ? "text-foreground" : "text-muted-foreground"
-                      )}>
-                        {s.label}
-                      </span>
-                      {i < steps.length - 1 && (
-                        <div className={cn("flex-1 h-0.5 mx-2 rounded", i < stepIndex ? "bg-primary" : "bg-muted")} />
-                      )}
+                        i <= stepIndex ? "text-foreground" : "text-muted-foreground"
+                      )}>{s.label}</span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="p-5 space-y-4 min-h-[400px]">
-                {/* === STEP 1: SERVICES === */}
+              {/* Content */}
+              <div className="p-5 space-y-5">
                 {step === "services" && (
-                  <>
-                    <div>
-                      <h3 className="text-lg font-semibold">Select laundry services</h3>
-                      <p className="text-sm text-muted-foreground mt-0.5">Choose services and quantities. Toggle Express for faster delivery.</p>
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-lg font-semibold">Choose services</h3>
+                        <p className="text-sm text-muted-foreground mt-0.5">Select quantity for each service needed.</p>
+                      </div>
+                      <Badge variant="secondary" className="text-xs">{selectedServiceList.length} selected</Badge>
                     </div>
-                    <div className="space-y-3">
-                      {SERVICES.map((s) => {
-                        const selected = selectedServices[s.key]?.qty || 0;
-                        const express = selectedServices[s.key]?.express || false;
+                    <div className="grid md:grid-cols-2 gap-3">
+                      {servicesData.map((s) => {
+                        const sel = selectedServices[s.key as ServiceKey];
+                        const count = sel?.qty || 0;
                         return (
-                          <Card key={s.key} className={cn("p-4 transition-all", selected > 0 && "ring-1 ring-primary")}>
-                            <div className="flex items-center gap-3">
-                              <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br text-white shrink-0", s.gradient)}>
-                                <ServiceIcon serviceKey={s.key} className="h-5 w-5" />
+                          <Card
+                            key={s.key}
+                            className={cn(
+                              "p-4 shadow-soft cursor-pointer transition-all",
+                              count > 0 && "ring-2 ring-primary bg-primary/5"
+                            )}
+                            onClick={() => toggleService(s.key as ServiceKey)}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-tonal-accent text-primary shrink-0">
+                                <ServiceIcon serviceKey={s.key as ServiceKey} className="h-5 w-5" />
                               </div>
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm font-semibold">{s.name}</p>
                                 <p className="text-xs text-muted-foreground line-clamp-1">{s.description}</p>
-                                <p className="text-xs font-medium text-primary mt-0.5">
-                                  ₹{s.basePrice}{s.pricingType === "per_kg" ? "/kg" : "/piece"}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  className="h-8 w-8"
-                                  disabled={selected === 0}
-                                  onClick={() => {
-                                    setSelectedServices((prev) => {
-                                      const next = { ...prev };
-                                      const cur = next[s.key]?.qty || 0;
-                                      if (cur <= 1) delete next[s.key];
-                                      else next[s.key] = { ...next[s.key], qty: cur - 1 };
-                                      return next;
-                                    });
-                                  }}
-                                >
-                                  <Minus className="h-3.5 w-3.5" />
-                                </Button>
-                                <span className="w-8 text-center text-sm font-semibold">{selected}</span>
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  className="h-8 w-8"
-                                  onClick={() => {
-                                    setSelectedServices((prev) => ({
-                                      ...prev,
-                                      [s.key]: { qty: (prev[s.key]?.qty || 0) + 1, express: prev[s.key]?.express || false },
-                                    }));
-                                  }}
-                                >
-                                  <Plus className="h-3.5 w-3.5" />
-                                </Button>
+                                <div className="flex items-center gap-2 mt-1.5">
+                                  <span className="text-xs font-semibold">₹{s.basePrice}<span className="text-[10px] text-muted-foreground">/{s.pricingType === "per_kg" ? "kg" : "piece"}</span></span>
+                                  <span className="text-[10px] text-amber-600">×{s.expressMultiplier}x express</span>
+                                </div>
                               </div>
                             </div>
-                            {selected > 0 && (
-                              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} className="mt-3 pt-3 border-t border-border/60">
-                                <label className="flex items-center gap-2 text-sm cursor-pointer">
-                                  <Checkbox
-                                    checked={express}
-                                    onCheckedChange={(v) => {
-                                      setSelectedServices((prev) => ({
-                                        ...prev,
-                                        [s.key]: { ...prev[s.key], express: !!v },
-                                      }));
-                                    }}
-                                  />
-                                  <Zap className="h-3.5 w-3.5 text-amber-500" />
-                                  Express delivery ({s.expressMultiplier}× price)
-                                </label>
-                              </motion.div>
+                            {count > 0 && (
+                              <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/60">
+                                <div className="flex items-center gap-1">
+                                  <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={(e) => { e.stopPropagation(); updateQty(s.key as ServiceKey, -1); }}>
+                                    <Minus className="h-3 w-3" />
+                                  </Button>
+                                  <span className="text-sm font-semibold w-6 text-center">{count}</span>
+                                  <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={(e) => { e.stopPropagation(); updateQty(s.key as ServiceKey, 1); }}>
+                                    <Plus className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); toggleExpress(s.key as ServiceKey); }}
+                                    className={cn(
+                                      "text-[10px] font-medium px-2 py-0.5 rounded transition-colors",
+                                      sel?.express
+                                        ? "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400"
+                                        : "text-muted-foreground hover:bg-muted"
+                                    )}
+                                  >
+                                    {sel?.express ? "⚡ Express" : "Express?"}
+                                  </button>
+                                  <span className="text-xs font-semibold">₹{formatINRDecimal(
+                                    s.basePrice * count * (sel?.express ? s.expressMultiplier : 1)
+                                  )}</span>
+                                </div>
+                              </div>
                             )}
                           </Card>
                         );
                       })}
                     </div>
-
-                    {/* Notes & photos */}
-                    <div className="rounded-lg border border-dashed border-border p-4">
-                      <Label className="text-xs font-semibold">Special instructions (optional)</Label>
-                      <Textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        placeholder="e.g. Use mild detergent for baby clothes. Stain on collar of white shirt."
-                        className="mt-1.5 resize-none"
-                        rows={2}
-                      />
-                      <button className="mt-2 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-border">
-                          <Camera className="h-4 w-4" />
-                        </div>
-                        Add garment photos (optional)
-                      </button>
-                    </div>
-                  </>
+                  </div>
                 )}
 
-                {/* === STEP 2: SCHEDULE === */}
                 {step === "schedule" && (
-                  <>
-                    <div>
-                      <h3 className="text-lg font-semibold">Schedule pickup & delivery</h3>
-                      <p className="text-sm text-muted-foreground mt-0.5">Pick a time that works for you.</p>
-                    </div>
+                  <div>
+                    <h3 className="text-lg font-semibold mb-1">Schedule pickup & delivery</h3>
+                    <p className="text-sm text-muted-foreground mb-4">When should we pick up and deliver your laundry?</p>
 
-                    {/* Pickup address */}
-                    <div>
-                      <Label className="text-xs font-semibold mb-2 block">Pickup Address</Label>
-                      <RadioGroup value={pickupAddr} onValueChange={setPickupAddr}>
-                        <div className="space-y-2">
-                          {ADDRESSES.map((a) => (
-                            <label key={a.id} htmlFor={a.id} className={cn(
-                              "flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-all",
-                              pickupAddr === a.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:bg-muted/30"
-                            )}>
-                              <RadioGroupItem value={a.id} id={a.id} className="mt-1" />
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <MapPin className="h-3.5 w-3.5 text-primary" />
-                                  <p className="text-sm font-semibold">{a.label}</p>
-                                  {a.isDefault && <Badge variant="secondary" className="text-[10px] py-0 h-4">Default</Badge>}
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-0.5">{a.line}</p>
-                                <p className="text-xs text-muted-foreground">{a.area}, {a.city} - {a.pincode}</p>
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {/* Pickup Address */}
+                      <Card className="p-4 shadow-soft col-span-full">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                            <MapPin className="h-3.5 w-3.5" />
+                            Pickup Address
+                          </p>
+                          <Button variant="ghost" size="sm" className="text-xs gap-1 h-7" onClick={() => setShowAddAddr(true)}>
+                            <Plus className="h-3.5 w-3.5" />
+                            Add
+                          </Button>
+                        </div>
+                        {addrList.length === 0 ? (
+                          <div className="text-center py-6 text-muted-foreground">
+                            <MapPin className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                            <p className="text-sm">No saved addresses</p>
+                            <p className="text-xs mt-0.5">Add an address to continue booking.</p>
+                          </div>
+                        ) : (
+                        <div className="grid md:grid-cols-2 gap-2">
+                          {addrList.map((a) => (
+                            <label
+                              key={a.id}
+                              className={cn(
+                                "flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors",
+                                pickupAddr === a.id ? "border-primary bg-primary/5" : "border-border/60 hover:bg-muted/30"
+                              )}
+                              onClick={() => setPickupAddr(a.id)}
+                            >
+                              <input type="radio" name="pickupAddr" checked={pickupAddr === a.id} onChange={() => setPickupAddr(a.id)} className="mt-0.5 accent-primary" />
+                              <div className="flex-1">
+                                <p className="text-sm font-semibold">{a.label}</p>
+                                <p className="text-xs text-muted-foreground line-clamp-1">{a.line}</p>
+                                <p className="text-xs text-muted-foreground">{a.area}</p>
                               </div>
                             </label>
                           ))}
                         </div>
-                      </RadioGroup>
-                    </div>
-
-                    {/* Pickup slot */}
-                    <div>
-                      <Label className="text-xs font-semibold mb-2 block">Pickup Date & Slot</Label>
-                      <div className="flex gap-2 mb-2">
-                        {["Today", "Tomorrow", "Mon, 14 Jul"].map((d) => (
-                          <button
-                            key={d}
-                            onClick={() => setPickupDate(d)}
-                            className={cn(
-                              "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                              pickupDate === d ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/70"
-                            )}
-                          >
-                            {d}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {PICKUP_SLOTS.map((s) => (
-                          <button
-                            key={s.id}
-                            disabled={!s.available}
-                            onClick={() => setPickupSlot(s.label)}
-                            className={cn(
-                              "rounded-lg border px-3 py-2 text-xs font-medium transition-all",
-                              !s.available && "opacity-40 cursor-not-allowed line-through",
-                              pickupSlot === s.label ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/30"
-                            )}
-                          >
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Delivery slot */}
-                    <div>
-                      <Label className="text-xs font-semibold mb-2 block">Delivery Date & Slot</Label>
-                      <div className="flex gap-2 mb-2">
-                        {["Tomorrow", "Wed, 15 Jul", "Thu, 16 Jul"].map((d) => (
-                          <button
-                            key={d}
-                            onClick={() => setDeliveryDate(d)}
-                            className={cn(
-                              "rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                              deliveryDate === d ? "bg-primary text-primary-foreground" : "bg-muted hover:bg-muted/70"
-                            )}
-                          >
-                            {d}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {DELIVERY_SLOTS.map((s) => (
-                          <button
-                            key={s.id}
-                            disabled={!s.available}
-                            onClick={() => setDeliverySlot(s.label)}
-                            className={cn(
-                              "rounded-lg border px-3 py-2 text-xs font-medium transition-all",
-                              !s.available && "opacity-40 cursor-not-allowed line-through",
-                              deliverySlot === s.label ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-muted/30"
-                            )}
-                          >
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* === STEP 3: VENDOR === */}
-                {step === "vendor" && (
-                  <>
-                    <div>
-                      <h3 className="text-lg font-semibold">Choose vendor</h3>
-                      <p className="text-sm text-muted-foreground mt-0.5">Let AI pick the best vendor, or choose manually.</p>
-                    </div>
-
-                    <div className="grid sm:grid-cols-2 gap-3">
-                      <button
-                        onClick={() => setVendorMode("auto")}
-                        className={cn(
-                          "text-left rounded-xl border p-4 transition-all",
-                          vendorMode === "auto" ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:bg-muted/30"
                         )}
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-cyan-600">
-                            <Sparkles className="h-4 w-4 text-white" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold">Automatic Assignment</p>
-                            <p className="text-[11px] text-muted-foreground">AI-optimized</p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          Our AI picks the best vendor based on distance, capacity, ratings, and current workload.
-                        </p>
-                        {vendorMode === "auto" && (
-                          <div className="mt-3 rounded-lg bg-teal-50 dark:bg-teal-950/30 p-2.5">
-                            <p className="text-[11px] font-semibold text-primary">✨ Recommended: FreshFold Laundry Co.</p>
-                            <p className="text-[10px] text-muted-foreground mt-0.5">94% match · 1.2km · 24h delivery · 62% capacity</p>
-                          </div>
-                        )}
-                      </button>
+                      </Card>
 
-                      <button
-                        onClick={() => setVendorMode("manual")}
-                        className={cn(
-                          "text-left rounded-xl border p-4 transition-all",
-                          vendorMode === "manual" ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:bg-muted/30"
-                        )}
-                      >
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
-                            <Store className="h-4 w-4" />
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold">Manual Selection</p>
-                            <p className="text-[11px] text-muted-foreground">You choose</p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          Browse and pick from verified vendors near you.
-                        </p>
-                      </button>
-                    </div>
-
-                    {vendorMode === "manual" && (
-                      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-2">
-                        {VENDORS.filter((v) => v.isOpen).map((v) => (
-                          <label
-                            key={v.id}
-                            onClick={() => setSelectedVendor(v.id)}
-                            className={cn(
-                              "flex items-center gap-3 rounded-lg border p-3 cursor-pointer transition-all",
-                              selectedVendor === v.id ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:bg-muted/30"
-                            )}
-                          >
-                            <div className={cn(
-                              "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-all",
-                              selectedVendor === v.id ? "border-primary bg-primary" : "border-input bg-background"
-                            )}>
-                              {selectedVendor === v.id && (
-                                <div className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />
+                      {/* Pickup date */}
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold">Pickup Date</Label>
+                        <div className="flex gap-2">
+                          {["Today", "Tomorrow", "Day after"].map((d) => (
+                            <button
+                              key={d}
+                              onClick={() => setPickupDate(d)}
+                              className={cn(
+                                "flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                                pickupDate === d ? "border-primary bg-primary/5 text-primary" : "border-border/60 hover:bg-muted/30"
                               )}
-                            </div>
-                            <div className={cn(
-                              "flex h-10 w-10 items-center justify-center rounded-lg bg-primary-surface text-primary-foreground text-xs font-semibold",
-                              v.logoColor
-                            )}>
-                              {v.logoInitials}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-semibold truncate">{v.name}</p>
-                              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                                <span className="flex items-center gap-0.5">
-                                  <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-                                  {v.rating}
-                                </span>
-                                <span>·</span>
-                                <span>{v.distanceKm} km</span>
-                                <span>·</span>
-                                <span>{v.estimatedDeliveryHrs}h delivery</span>
-                              </div>
-                            </div>
-                          </label>
-                        ))}
-                      </motion.div>
-                    )}
-                  </>
+                            >
+                              {d}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Pickup slot */}
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold">Pickup Time</Label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {PICKUP_SLOTS.map((s) => (
+                            <button
+                              key={s.id}
+                              disabled={!s.available}
+                              onClick={() => setPickupSlot(s.slot)}
+                              className={cn(
+                                "rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors",
+                                !s.available && "opacity-40 cursor-not-allowed line-through",
+                                pickupSlot === s.slot ? "border-primary bg-primary/5 text-primary" : "border-border/60 hover:bg-muted/30"
+                              )}
+                            >
+                              {s.slot}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Delivery date */}
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold">Delivery Date</Label>
+                        <div className="flex gap-2">
+                          {["Tomorrow", "Day after", "3 days"].map((d) => (
+                            <button
+                              key={d}
+                              onClick={() => setDeliveryDate(d)}
+                              className={cn(
+                                "flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                                deliveryDate === d ? "border-primary bg-primary/5 text-primary" : "border-border/60 hover:bg-muted/30"
+                              )}
+                            >
+                              {d}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Delivery slot */}
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold">Delivery Time</Label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {DELIVERY_SLOTS.map((s) => {
+                            const gapViolation = !!(!isExpress && pickupSlot && pickupDate && !isDeliverySlotValid(pickupDate, pickupSlot, deliveryDate, s.slot));
+                            return (
+                            <button
+                              key={s.id}
+                              disabled={!s.available || gapViolation}
+                              onClick={() => setDeliverySlot(s.slot)}
+                              className={cn(
+                                "rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors",
+                                !s.available && "opacity-40 cursor-not-allowed line-through",
+                                gapViolation && "opacity-30 cursor-not-allowed",
+                                deliverySlot === s.slot ? "border-primary bg-primary/5 text-primary" : "border-border/60 hover:bg-muted/30"
+                              )}
+                            >
+                              {s.slot}
+                            </button>
+                          );
+                          })}
+                        </div>
+                        {gapWarnings.length > 0 && (
+                          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                            <span>{gapWarnings[0]}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <Label className="text-xs font-semibold">Special Instructions (optional)</Label>
+                      <Textarea
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        placeholder="E.g. fragile items, leave at door, etc."
+                        className="mt-1 h-20 resize-none"
+                      />
+                    </div>
+                  </div>
                 )}
 
-                {/* === STEP 4: REVIEW === */}
+                {step === "vendor" && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-lg font-semibold">Assign vendor</h3>
+                        <p className="text-sm text-muted-foreground mt-0.5">Choose how to assign your laundry vendor.</p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <Card
+                        className={cn(
+                          "p-4 shadow-soft cursor-pointer transition-all",
+                          vendorMode === "auto" && "ring-2 ring-primary bg-primary/5"
+                        )}
+                        onClick={() => setVendorMode("auto")}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-teal-500 to-cyan-600 text-white">
+                            <Sparkles className="h-5 w-5" />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-sm font-semibold">AI Auto-Assign (Recommended)</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">Our AI picks the best vendor based on distance, ratings, and availability.</p>
+                          </div>
+                          <input type="radio" checked={vendorMode === "auto"} readOnly className="accent-primary" />
+                        </div>
+                      </Card>
+
+                      <Card
+                        className={cn(
+                          "p-4 shadow-soft cursor-pointer transition-all",
+                          vendorMode === "manual" && "ring-2 ring-primary bg-primary/5"
+                        )}
+                        onClick={() => setVendorMode("manual")}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-tonal-accent text-primary">
+                            <Store className="h-5 w-5" />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-sm font-semibold">Choose manually</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">Pick from available vendors near you.</p>
+                          </div>
+                          <input type="radio" checked={vendorMode === "manual"} readOnly className="accent-primary" />
+                        </div>
+                      </Card>
+
+                      {vendorMode === "manual" && (
+                        <div className="grid md:grid-cols-2 gap-3 pl-2">
+                          {vendorsList?.map((v) => (
+                            <label
+                              key={v.id}
+                              className={cn(
+                                "flex items-center gap-3 rounded-lg border p-3 cursor-pointer transition-colors",
+                                selectedVendor === v.id ? "border-primary bg-primary/5" : "border-border/60 hover:bg-muted/30"
+                              )}
+                            >
+                              <input type="radio" name="vendor" checked={selectedVendor === v.id} onChange={() => setSelectedVendor(v.id)} className="accent-primary" />
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-surface text-primary-foreground text-xs font-semibold shrink-0">
+                                  {v.logoInitials}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium truncate">{v.name}</p>
+                                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                                    <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                                    {v.rating} · {v.distanceKm}km
+                                  </div>
+                                </div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {step === "review" && (
                   <>
                     <div>
@@ -510,13 +706,14 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
                         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Order Summary</p>
                         <div className="space-y-2">
                           {selectedServiceList.map(([key, v]) => {
-                            const meta = getServiceMeta(key);
-                            const linePrice = meta.basePrice * v.qty * (v.express ? meta.expressMultiplier : 1);
+                            const svc = servicesData.find((s) => s.key === key);
+                            if (!svc) return null;
+                            const linePrice = svc.basePrice * v.qty * (v.express ? svc.expressMultiplier : 1);
                             return (
                               <div key={key} className="flex items-start gap-2 text-sm">
                                 <ServiceIcon serviceKey={key} className="h-4 w-4 mt-0.5 text-muted-foreground" />
                                 <div className="flex-1">
-                                  <p className="font-medium">{meta.name} <span className="text-muted-foreground">× {v.qty}</span></p>
+                                  <p className="font-medium">{svc.name} <span className="text-muted-foreground">× {v.qty}</span></p>
                                   {v.express && <Badge variant="outline" className="text-[9px] py-0 h-4 mt-0.5 border-amber-400 text-amber-600 bg-amber-50">Express</Badge>}
                                 </div>
                                 <p className="font-semibold">{formatINRDecimal(linePrice)}</p>
@@ -553,7 +750,7 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
                               <Package className="h-4 w-4 mt-0.5 text-primary" />
                               <div className="flex-1">
                                 <p className="font-medium">Pickup: {pickupDate}, {pickupSlot}</p>
-                                <p className="text-xs text-muted-foreground">{ADDRESSES.find(a => a.id === pickupAddr)?.line}</p>
+                                <p className="text-xs text-muted-foreground">{addrList.find((a) => a.id === pickupAddr)?.line}</p>
                               </div>
                             </div>
                             <div className="flex items-start gap-2">
@@ -567,9 +764,30 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
 
                         <Card className="p-4 shadow-soft">
                           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Vendor</p>
-                          <p className="text-sm font-medium">
-                            {vendorMode === "auto" ? "AI-assigned (FreshFold Laundry Co.)" : VENDORS.find(v => v.id === selectedVendor)?.name}
-                          </p>
+                          {vendorMode === "auto" && vendorsList?.[0] ? (
+                            <div className="flex items-center gap-3">
+                              <div className={cn(
+                                "flex h-10 w-10 items-center justify-center rounded-xl text-white text-sm font-bold shrink-0",
+                                vendorsList[0].logoColor || "bg-primary"
+                              )}>
+                                {vendorsList[0].logoInitials}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold truncate">{vendorsList[0].name}</p>
+                                <p className="text-xs text-muted-foreground truncate">{vendorsList[0].area} · {vendorsList[0].distanceKm} km</p>
+                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                                  {vendorsList[0].rating}
+                                </div>
+                              </div>
+                            </div>
+                          ) : vendorMode === "manual" ? (
+                            <p className="text-sm font-medium">
+                              {(vendorsList || []).find((v) => v.id === selectedVendor)?.name || "Selected Vendor"}
+                            </p>
+                          ) : (
+                            <p className="text-sm font-medium text-muted-foreground">AI-assigned Vendor</p>
+                          )}
                           {vendorMode === "auto" && (
                             <p className="text-xs text-emerald-600 mt-0.5">✨ 94% AI match confidence</p>
                           )}
@@ -601,7 +819,7 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
                               {[
                                 { id: "upi", label: "UPI", icon: "📱" },
                                 { id: "card", label: "Credit/Debit Card", icon: "💳" },
-                                { id: "wallet", label: "Wallet (₹1,250)", icon: "👛" },
+                                { id: "wallet", label: `Wallet (₹1,250)`, icon: "👛" },
                                 { id: "cod", label: "Cash on Delivery", icon: "💵" },
                               ].map((p) => (
                                 <label key={p.id} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-muted/30">
@@ -620,8 +838,7 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
               </div>
 
               {/* Footer */}
-              {step !== "confirmed" && (
-                <div className="border-t border-border p-4 flex items-center justify-between bg-muted/30">
+              <div className="border-t border-border p-4 flex items-center justify-between bg-muted/30">
                   <div>
                     {selectedServiceList.length > 0 && (
                       <p className="text-xs text-muted-foreground">
@@ -641,27 +858,69 @@ export function BookingFlow({ open, onClose }: BookingFlowProps) {
                     )}
                     <Button
                       className="bg-primary hover:bg-primary/90"
-                      disabled={!canProceed()}
+                      disabled={!canProceed() || placing}
                       onClick={handleNext}
                     >
-                      {step === "review" ? "Confirm Booking" : "Continue"}
-                      <ArrowRight className="ml-1.5 h-4 w-4" />
+                      {placing ? "Placing..." : step === "review" ? "Confirm Booking" : "Continue"}
+                      {!placing && <ArrowRight className="ml-1.5 h-4 w-4" />}
                     </Button>
                   </div>
                 </div>
-              )}
             </motion.div>
           )}
         </AnimatePresence>
       </DialogContent>
+
+      {/* Add Address Dialog */}
+      <Dialog open={showAddAddr} onOpenChange={setShowAddAddr}>
+        <DialogContent className="max-w-md">
+          <DialogTitle className="sr-only">Add New Address</DialogTitle>
+          <div>
+            <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add New Address</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">Enter your pickup address details</p>
+          </div>
+          <div className="space-y-3 pt-2">
+            <div>
+              <Label className="text-xs">Label (e.g. Home, Work)</Label>
+              <Input value={newAddr.label} onChange={(e) => setNewAddr({ ...newAddr, label: e.target.value })} placeholder="Home" className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Address Line</Label>
+              <Input value={newAddr.line} onChange={(e) => setNewAddr({ ...newAddr, line: e.target.value })} placeholder="Flat / House no, Street" className="mt-1" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Area</Label>
+                <Input value={newAddr.area} onChange={(e) => setNewAddr({ ...newAddr, area: e.target.value })} placeholder="Indiranagar" className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-xs">City</Label>
+                <Input value={newAddr.city} onChange={(e) => setNewAddr({ ...newAddr, city: e.target.value })} placeholder="Bengaluru" className="mt-1" />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Pincode</Label>
+              <Input value={newAddr.pincode} onChange={(e) => setNewAddr({ ...newAddr, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} placeholder="560038" className="mt-1" />
+            </div>
+          </div>
+          <div className="flex gap-2 pt-4">
+            <Button variant="outline" className="flex-1" onClick={() => setShowAddAddr(false)}>Cancel</Button>
+            <Button
+              className="flex-1"
+              disabled={!newAddr.label || !newAddr.line || !newAddr.area || !newAddr.city || newAddr.pincode.length < 6}
+              onClick={handleAddAddress}
+            >
+              Save Address
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
 
-// ============================================================================
-// Booking Confirmed
-// ============================================================================
 function BookingConfirmed({
+  code,
   total,
   pickupDate,
   pickupSlot,
@@ -670,6 +929,7 @@ function BookingConfirmed({
   vendorName,
   onClose,
 }: {
+  code: string;
   total: number;
   pickupDate: string;
   pickupSlot: string;
@@ -693,7 +953,7 @@ function BookingConfirmed({
         <CheckCircle2 className="h-9 w-9 text-white" />
       </motion.div>
       <h2 className="text-2xl font-bold" style={{ fontFamily: "var(--font-display)" }}>Booking Confirmed!</h2>
-      <p className="text-sm text-muted-foreground mt-1">Order <span className="font-mono font-semibold text-foreground">LH-2853</span> has been placed successfully.</p>
+      <p className="text-sm text-muted-foreground mt-1">Order <span className="font-mono font-semibold text-foreground">{code}</span> has been placed successfully.</p>
 
       <Card className="mt-5 p-4 text-left shadow-soft">
         <div className="space-y-2 text-sm">

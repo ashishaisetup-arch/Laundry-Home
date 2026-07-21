@@ -1,6 +1,5 @@
-"use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
@@ -44,6 +43,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogHeader,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { api } from "@/lib/api/client";
+import { useAppStore } from "@/lib/store";
+import { useFetch } from "@/lib/hooks/use-fetch";
 import {
   BarChart,
   Bar,
@@ -60,68 +72,86 @@ import {
   Legend,
 } from "recharts";
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
+import { VendorOrderDetail } from "./vendor-order-detail";
 import { StatCard } from "@/components/shared/stat-card";
 import { ServiceIcon } from "@/components/shared/service-icon";
 import { OrderTimeline } from "@/components/shared/order-timeline";
-import {
-  ORDERS,
-  VENDOR_ORDERS,
-  SERVICES,
-  VENDOR_WEEKLY_REVENUE,
-  VENDOR_SERVICE_REVENUE,
-  GARMENT_INVENTORY,
-  ORDER_STAGE_FLOW,
-} from "@/lib/mock-data";
+import { useOrders, useServices, useStaff, useGarments, useVendor } from "@/lib/hooks";
+import { useVendorWeeklyRevenue, useVendorServiceRevenue, useVendorInventory, useVendorDashboardStats } from "@/lib/hooks/useVendorAnalytics";
+import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
+import type { Order } from "@/lib/types";
 import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
 
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "Vendor",
-    items: [
-      { id: "dashboard", label: "Dashboard", icon: "LayoutDashboard" },
-      { id: "orders", label: "Order Management", icon: "ClipboardList", badge: 4 },
-      { id: "processing", label: "Laundry Processing", icon: "WashingMachine" },
-      { id: "inventory", label: "Garment Inventory", icon: "Boxes" },
-      { id: "staff", label: "Staff Management", icon: "Users" },
-      { id: "services", label: "Service Management", icon: "Settings2" },
-      { id: "analytics", label: "Analytics", icon: "BarChart3" },
-    ],
-  },
-];
-
-const allVendorOrders = [...ORDERS.filter(o => o.vendorId === "v1"), ...VENDOR_ORDERS];
-
 export function VendorApp() {
   const [view, setView] = useState("dashboard");
+  const [manualOrderOpen, setManualOrderOpen] = useState(false);
+  const vid = useMyVendorId();
+  const { data: orders } = useOrders({ vendorId: vid });
+  const pendingCount = (orders || []).filter((o) => ["placed", "vendor_assigned"].includes(o.status)).length;
+
+  const navGroups: NavGroup[] = useMemo(() => [
+    {
+      label: "Vendor",
+      items: [
+        { id: "dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+        { id: "orders", label: "Order Management", icon: "ClipboardList", badge: pendingCount },
+        { id: "processing", label: "Laundry Processing", icon: "WashingMachine" },
+        { id: "inventory", label: "Garment Inventory", icon: "Boxes" },
+        { id: "staff", label: "Staff Management", icon: "Users" },
+        { id: "services", label: "Service Management", icon: "Settings2" },
+        { id: "analytics", label: "Analytics", icon: "BarChart3" },
+      ],
+    },
+  ], [pendingCount]);
 
   return (
-    <AppShell
-      groups={NAV_GROUPS}
-      activeView={view}
-      onNavigate={setView}
-      pageTitle={pageTitle(view)}
-      pageSubtitle={pageSubtitle(view)}
-      actions={
-        view === "orders" ? (
-          <Button className="bg-primary hover:bg-primary/90">
-            <Plus className="mr-1.5 h-4 w-4" />
-            Manual Order
-          </Button>
-        ) : undefined
-      }
-    >
-      <AnimatePresence mode="wait">
-        {view === "dashboard" && <VendorDashboard key="d" />}
-        {view === "orders" && <VendorOrders key="o" />}
-        {view === "processing" && <VendorProcessing key="p" />}
-        {view === "inventory" && <VendorInventory key="i" />}
-        {view === "staff" && <VendorStaff key="st" />}
-        {view === "services" && <VendorServices key="s" />}
-        {view === "analytics" && <VendorAnalytics key="a" />}
-      </AnimatePresence>
-    </AppShell>
+    <>
+      <AppShell
+        groups={navGroups}
+        activeView={view}
+        onNavigate={setView}
+        pageTitle={pageTitle(view)}
+        pageSubtitle={pageSubtitle(view)}
+        actions={
+          view === "orders" ? (
+            <Button className="bg-primary hover:bg-primary/90" onClick={() => setManualOrderOpen(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              Manual Order
+            </Button>
+          ) : undefined
+        }
+      >
+        <AnimatePresence mode="wait">
+          {view === "dashboard" && <VendorDashboard key="dashboard" />}
+          {view === "orders" && <VendorOrders key="orders" />}
+          {view === "processing" && <VendorProcessing key="processing" />}
+          {view === "inventory" && <VendorInventory key="inventory" />}
+          {view === "staff" && <VendorStaff key="staff" />}
+          {view === "services" && <VendorServices key="services" />}
+          {view === "analytics" && <VendorAnalytics key="analytics" />}
+        </AnimatePresence>
+      </AppShell>
+
+      <Dialog open={manualOrderOpen} onOpenChange={setManualOrderOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create Manual Order</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">Manual order creation coming soon. Please use the customer app to place orders.</p>
+        </DialogContent>
+      </Dialog>
+    </>
   );
+}
+
+function useMyVendorId(): string | null {
+  const userId = useAppStore((s) => s.userId);
+  const { data } = useFetch<{ id: string }[]>(userId ? `/api/vendors?owner_id=${userId}` : null);
+  const vendors = data || [];
+  const [vid, setVid] = useState<string | null>(null);
+  useEffect(() => { if (vendors.length > 0) setVid(vendors[0].id); }, [vendors]);
+  return vid;
 }
 
 function pageTitle(view: string) {
@@ -151,6 +181,38 @@ function pageSubtitle(view: string) {
 // Vendor Dashboard
 // ============================================================================
 function VendorDashboard() {
+  const vid = useMyVendorId();
+  const { data: orders, refetch: refetchOrders } = useOrders({ vendorId: vid });
+  const { data: weeklyRevenue } = useVendorWeeklyRevenue(vid);
+  const { data: serviceRevenue } = useVendorServiceRevenue(vid);
+  const userId = useAppStore((s) => s.userId);
+  const { data: vendorInfo } = useFetch<{ name: string; rating: number; logoColor: string }[]>(
+    userId ? `/api/vendors?owner_id=${userId}` : null
+  );
+  const vendorName = vendorInfo?.[0]?.name || "Vendor";
+  const vendorRating = vendorInfo?.[0]?.rating || 0;
+
+  // Auto-poll every 30 seconds for new orders
+  useEffect(() => {
+    if (!vid) return;
+    const interval = setInterval(refetchOrders, 30000);
+    return () => clearInterval(interval);
+  }, [vid, refetchOrders]);
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const orderList = orders || [];
+  const pendingOrders = orderList.filter((o) => ["placed", "vendor_assigned"].includes(o.status));
+  const todayOrders = orderList.filter((o) => o.createdAt?.startsWith(todayStr));
+  const todayRevenue = todayOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+  const pendingCount = pendingOrders.length;
+  const todayOrderCount = todayOrders.length;
+
+  const wr = weeklyRevenue || [];
+  const sr = serviceRevenue || [];
+  const weeklyTotal = wr.reduce((s, d) => s + (d.revenue || 0), 0);
+  const maxDaily = Math.max(...wr.map((d) => d.orders || 0), 1);
+  const capacityUsed = Math.min(Math.round((todayOrderCount / maxDaily) * 100), 100);
   return (
     <div className="space-y-6">
       {/* Welcome banner */}
@@ -164,22 +226,22 @@ function VendorDashboard() {
                 <Badge className="bg-white/20 text-white border-0">Verified Vendor</Badge>
               </div>
               <h2 className="text-2xl md:text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-                Good afternoon, FreshFold! 👋
+                Good afternoon, {vendorName}! 👋
               </h2>
               <p className="text-sm text-white/80 mt-1">
-                You have <strong>4 new orders</strong> waiting · Today&apos;s revenue: <strong>₹18,900</strong>
+                You have <strong>{pendingCount} new order{pendingCount !== 1 ? "s" : ""}</strong> waiting · Today&apos;s revenue: <strong>{formatINR(todayRevenue)}</strong>
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-xl bg-white/15 backdrop-blur p-3 min-w-[120px]">
                 <p className="text-xs text-white/80">Today&apos;s Revenue</p>
-                <p className="text-xl font-bold mt-0.5">₹18.9K</p>
-                <p className="text-[10px] text-emerald-200">+12% vs avg</p>
+                <p className="text-xl font-bold mt-0.5">{formatINR(todayRevenue)}</p>
+                <p className="text-[10px] text-emerald-200">{todayOrderCount} order{todayOrderCount !== 1 ? "s" : ""} today</p>
               </div>
               <div className="rounded-xl bg-white/15 backdrop-blur p-3 min-w-[120px]">
                 <p className="text-xs text-white/80">Capacity Used</p>
-                <p className="text-xl font-bold mt-0.5">62%</p>
-                <p className="text-[10px] text-white/70">38% available</p>
+                <p className="text-xl font-bold mt-0.5">{capacityUsed}%</p>
+                <p className="text-[10px] text-white/70">{100 - capacityUsed}% available</p>
               </div>
             </div>
           </div>
@@ -188,10 +250,10 @@ function VendorDashboard() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Today's Orders" value="28" change={8.1} trend="up" icon={Package} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="Today's Revenue" value={formatINR(18900)} change={12.4} trend="up" icon={IndianRupee} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Pending Acceptance" value="4" icon={Clock} accent="from-amber-500 to-orange-600" />
-        <StatCard label="Avg Rating" value="4.8★" change={2.1} trend="up" icon={Star} accent="from-violet-500 to-purple-600" />
+        <StatCard label="Today's Orders" value={String(todayOrderCount)} change={0} trend="up" icon={Package} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="Today's Revenue" value={formatINR(todayRevenue)} change={0} trend="up" icon={IndianRupee} accent="from-emerald-500 to-green-600" />
+        <StatCard label="Pending Acceptance" value={String(pendingCount)} icon={Clock} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Avg Rating" value={`${vendorRating}★`} change={0} trend="up" icon={Star} accent="from-violet-500 to-purple-600" />
       </div>
 
       {/* Charts */}
@@ -201,15 +263,11 @@ function VendorDashboard() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="font-semibold">Weekly Revenue</h3>
-              <p className="text-xs text-muted-foreground">Last 7 days · ₹1,46,500 total</p>
+              <p className="text-xs text-muted-foreground">Last 7 days · {formatINR(weeklyTotal)} total</p>
             </div>
-            <Badge variant="secondary" className="gap-1">
-              <TrendingUp className="h-3 w-3 text-emerald-500" />
-              +18.9%
-            </Badge>
           </div>
           <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={VENDOR_WEEKLY_REVENUE} margin={{ left: -16, right: 8, top: 8 }}>
+            <AreaChart data={wr} margin={{ left: -16, right: 8, top: 8 }}>
               <defs>
                 <linearGradient id="rev-grad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#6B9C8E" stopOpacity={0.4} />
@@ -235,7 +293,7 @@ function VendorDashboard() {
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
               <Pie
-                data={VENDOR_SERVICE_REVENUE}
+                data={sr}
                 dataKey="revenue"
                 nameKey="name"
                 cx="50%"
@@ -244,7 +302,7 @@ function VendorDashboard() {
                 outerRadius={75}
                 paddingAngle={3}
               >
-                {VENDOR_SERVICE_REVENUE.map((entry, i) => (
+                {sr.map((entry, i) => (
                   <Cell key={i} fill={entry.color} />
                 ))}
               </Pie>
@@ -255,7 +313,7 @@ function VendorDashboard() {
             </PieChart>
           </ResponsiveContainer>
           <div className="space-y-1.5 mt-3">
-            {VENDOR_SERVICE_REVENUE.map((s) => (
+            {sr.map((s) => (
               <div key={s.name} className="flex items-center gap-2 text-xs">
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: s.color }} />
                 <span className="flex-1">{s.name}</span>
@@ -274,7 +332,7 @@ function VendorDashboard() {
             <Button variant="ghost" size="sm" className="text-xs">View all</Button>
           </div>
           <div className="space-y-2">
-            {allVendorOrders.filter(o => ["placed", "vendor_assigned", "vendor_accepted", "pickup_scheduled"].includes(o.status)).map((o) => (
+            {(orders || []).filter((o) => ["placed", "vendor_assigned", "vendor_accepted", "pickup_scheduled"].includes(o.status)).map((o) => (
               <div key={o.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3 hover:bg-muted/30 transition-colors">
                 <Avatar className="h-9 w-9">
                   <AvatarFallback className="bg-muted text-xs font-semibold">{o.customerAvatar}</AvatarFallback>
@@ -291,13 +349,30 @@ function VendorDashboard() {
                   <p className="text-[10px] text-muted-foreground">{o.pickupSlot}</p>
                 </div>
                 <div className="flex gap-1">
-                  <Button size="sm" variant="outline" className="h-7 w-7 p-0 text-rose-600 hover:text-rose-700">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 w-7 p-0 text-rose-600 hover:text-rose-700"
+                    onClick={async () => {
+                      try {
+                        await api.post(`/api/orders/${o.id}/reject`);
+                        toast.success(`Order ${o.code} rejected`, { description: "Reassigned to next available vendor." });
+                        refetchOrders();
+                      } catch (e: any) { toast.error("Failed to reject order", { description: e.message }); }
+                    }}
+                  >
                     <XCircle className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     size="sm"
                     className="h-7 bg-primary hover:bg-primary/90"
-                    onClick={() => toast.success(`Order ${o.code} accepted`, { description: "Customer has been notified." })}
+                    onClick={async () => {
+                      try {
+                        await api.patch(`/api/orders/${o.id}`, { status: "vendor_accepted", currentStageIndex: 2 });
+                        toast.success(`Order ${o.code} accepted`, { description: "Customer has been notified." });
+                        refetchOrders();
+                      } catch (e: any) { toast.error("Failed to accept order", { description: e.message }); }
+                    }}
                   >
                     <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
                     Accept
@@ -323,44 +398,70 @@ function VendorDashboard() {
 // Vendor Orders
 // ============================================================================
 function VendorOrders() {
-  return (
-    <Tabs defaultValue="pending">
-      <TabsList>
-        <TabsTrigger value="pending">Pending <Badge variant="secondary" className="ml-1.5 text-[10px]">3</Badge></TabsTrigger>
-        <TabsTrigger value="accepted">Accepted <Badge variant="secondary" className="ml-1.5 text-[10px]">1</Badge></TabsTrigger>
-        <TabsTrigger value="processing">Processing <Badge variant="secondary" className="ml-1.5 text-[10px]">2</Badge></TabsTrigger>
-        <TabsTrigger value="completed">Completed</TabsTrigger>
-      </TabsList>
+  const vid = useMyVendorId();
+  const { data: orders, refetch: refetchOrders } = useOrders({ vendorId: vid });
+  const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!vid) return;
+    const interval = setInterval(refetchOrders, 30000);
+    return () => clearInterval(interval);
+  }, [vid, refetchOrders]);
+  const allVendorOrders = orders || [];
 
-      {(["pending", "accepted", "processing", "completed"] as const).map((tab) => {
-        const filtered = allVendorOrders.filter((o) => {
-          if (tab === "pending") return ["placed", "vendor_assigned"].includes(o.status);
-          if (tab === "accepted") return ["vendor_accepted", "pickup_scheduled"].includes(o.status);
-          if (tab === "processing") return ["pickup_completed", "laundry_received", "sorting", "tagging", "washing", "drying", "ironing", "dry_cleaning", "quality_inspection", "packing", "ready_for_dispatch"].includes(o.status);
-          return ["delivered", "completed"].includes(o.status);
-        });
-        return (
-          <TabsContent key={tab} value={tab} className="mt-4">
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filtered.map((o) => (
-                <VendorOrderCard key={o.id} order={o} />
-              ))}
-            </div>
-          </TabsContent>
-        );
-      })}
-    </Tabs>
+  const tabFilters: Record<string, string[]> = {
+    pending: ["placed", "vendor_assigned"],
+    accepted: ["vendor_accepted", "pickup_scheduled"],
+    processing: [
+      "pickup_completed", "laundry_received", "sorting", "tagging",
+      "washing", "drying", "ironing", "dry_cleaning",
+      "quality_inspection", "packing", "ready_for_dispatch",
+    ],
+    completed: ["delivered", "completed"],
+  };
+
+  const counts = Object.fromEntries(
+    Object.entries(tabFilters).map(([tab, statuses]) => [
+      tab, allVendorOrders.filter(o => statuses.includes(o.status)).length,
+    ])
+  );
+
+  return (
+    <>
+      <Tabs defaultValue="pending">
+        <TabsList>
+          <TabsTrigger value="pending">Pending <Badge variant="secondary" className="ml-1.5 text-[10px]">{counts.pending}</Badge></TabsTrigger>
+          <TabsTrigger value="accepted">Accepted <Badge variant="secondary" className="ml-1.5 text-[10px]">{counts.accepted}</Badge></TabsTrigger>
+          <TabsTrigger value="processing">Processing <Badge variant="secondary" className="ml-1.5 text-[10px]">{counts.processing}</Badge></TabsTrigger>
+          <TabsTrigger value="completed">Completed <Badge variant="secondary" className="ml-1.5 text-[10px]">{counts.completed}</Badge></TabsTrigger>
+        </TabsList>
+
+        {(["pending", "accepted", "processing", "completed"] as const).map((tab) => {
+          const filtered = allVendorOrders.filter((o) => tabFilters[tab].includes(o.status));
+          return (
+            <TabsContent key={tab} value={tab} className="mt-4">
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filtered.map((o) => (
+                  <VendorOrderCard key={o.id} order={o} onView={setDetailOrderId} />
+                ))}
+              </div>
+            </TabsContent>
+          );
+        })}
+      </Tabs>
+      <VendorOrderDetail orderId={detailOrderId} onClose={() => setDetailOrderId(null)} />
+    </>
   );
 }
 
-function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
+function VendorOrderCard({ order, onView }: { order: Order; onView?: (id: string) => void }) {
   const stage = ORDER_STAGE_FLOW[order.currentStageIndex];
+  const itemCount = order.garmentCount || (order.items || []).reduce((sum, i: any) => sum + (i.qty || 0), 0);
   return (
     <Card className="p-4 shadow-soft hover:shadow-lift transition-shadow">
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
           <Avatar className="h-8 w-8">
-            <AvatarFallback className="bg-muted text-[10px] font-semibold">{order.customerAvatar}</AvatarFallback>
+            <AvatarFallback className="bg-muted text-[10px] font-semibold">{order.customerAvatar || order.customerName?.charAt(0) || "?"}</AvatarFallback>
           </Avatar>
           <div>
             <p className="text-sm font-semibold">{order.code}</p>
@@ -377,7 +478,7 @@ function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
       <div className="space-y-1 mb-3 text-xs">
         <div className="flex items-center gap-2 text-muted-foreground">
           <Package className="h-3 w-3" />
-          {order.garmentCount} items · {order.items.length} services
+          {itemCount} items · {order.items.length} services
         </div>
         <div className="flex items-center gap-2 text-muted-foreground">
           <Clock className="h-3 w-3" />
@@ -395,19 +496,34 @@ function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
       </div>
 
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" className="flex-1 h-8 text-xs">
+        <Button variant="outline" size="sm" className="flex-1 h-8 text-xs" onClick={() => onView?.(order.id)}>
           <Eye className="h-3.5 w-3.5 mr-1" />
           View
         </Button>
         {["placed", "vendor_assigned"].includes(order.status) && (
           <>
-            <Button size="sm" variant="outline" className="h-8 w-8 p-0 text-rose-600">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 w-8 p-0 text-rose-600"
+              onClick={async () => {
+                try {
+                  await api.post(`/api/orders/${order.id}/reject`);
+                  toast.success(`Order ${order.code} rejected`);
+                } catch (e: any) { toast.error("Failed to reject order", { description: e.message }); }
+              }}
+            >
               <XCircle className="h-3.5 w-3.5" />
             </Button>
             <Button
               size="sm"
               className="flex-1 h-8 bg-primary hover:bg-primary/90"
-              onClick={() => toast.success(`Order ${order.code} accepted`)}
+              onClick={async () => {
+                try {
+                  await api.patch(`/api/orders/${order.id}`, { status: "vendor_accepted", currentStageIndex: 2 });
+                  toast.success(`Order ${order.code} accepted`);
+                } catch (e: any) { toast.error("Failed to accept order", { description: e.message }); }
+              }}
             >
               <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
               Accept
@@ -415,7 +531,15 @@ function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
           </>
         )}
         {!["placed", "vendor_assigned", "delivered", "completed"].includes(order.status) && (
-          <Button size="sm" className="flex-1 h-8 bg-primary hover:bg-primary/90">
+          <Button size="sm" className="flex-1 h-8 bg-primary hover:bg-primary/90" onClick={async () => {
+            const idx = ORDER_STAGE_FLOW.findIndex(s => s.stage === order.status);
+            const nextStage = ORDER_STAGE_FLOW[idx + 1];
+            if (!nextStage) return;
+            try {
+              await api.patch(`/api/orders/${order.id}`, { status: nextStage.stage, currentStageIndex: idx + 1 });
+              toast.success(`Status updated to ${nextStage.label}`);
+            } catch (e: any) { toast.error("Update failed", { description: e.message }); }
+          }}>
             Update Status
             <ArrowRight className="h-3.5 w-3.5 ml-1" />
           </Button>
@@ -429,6 +553,14 @@ function VendorOrderCard({ order }: { order: typeof ORDERS[0] }) {
 // Vendor Processing
 // ============================================================================
 function VendorProcessing() {
+  const vid = useMyVendorId();
+  const { data: orders, refetch: refetchOrders } = useOrders({ vendorId: vid });
+  useEffect(() => {
+    if (!vid) return;
+    const interval = setInterval(refetchOrders, 30000);
+    return () => clearInterval(interval);
+  }, [vid, refetchOrders]);
+  const allVendorOrders = orders || [];
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const processingOrders = allVendorOrders.filter(o =>
     ["pickup_completed", "laundry_received", "sorting", "tagging", "washing", "drying", "ironing", "dry_cleaning", "quality_inspection", "packing", "ready_for_dispatch"].includes(o.status)
@@ -492,7 +624,15 @@ function VendorProcessing() {
             <div className="flex flex-wrap gap-2">
               <Button
                 className="bg-primary hover:bg-primary/90"
-                onClick={() => toast.success("Stage updated", { description: "Customer notified." })}
+                onClick={async () => {
+                  const idx = ORDER_STAGE_FLOW.findIndex(s => s.stage === selectedOrder.status);
+                  const nextStage = ORDER_STAGE_FLOW[idx + 1];
+                  if (!nextStage) return;
+                  try {
+                    await api.patch(`/api/orders/${selectedOrder.id}`, { status: nextStage.stage, currentStageIndex: idx + 1 });
+                    toast.success(`Stage updated to ${nextStage.label}`, { description: "Customer notified." });
+                  } catch (e: any) { toast.error("Update failed", { description: e.message }); }
+                }}
               >
                 <ArrowUpRight className="h-4 w-4 mr-1.5" />
                 Advance to next stage
@@ -531,6 +671,14 @@ function VendorProcessing() {
 // Vendor Inventory
 // ============================================================================
 function VendorInventory() {
+  const vid = useMyVendorId();
+  const { data: inventory, refetch: refetchInventory } = useVendorInventory(vid);
+  useEffect(() => {
+    if (!vid) return;
+    const interval = setInterval(refetchInventory, 60000);
+    return () => clearInterval(interval);
+  }, [vid, refetchInventory]);
+  const inv = inventory || [];
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -560,7 +708,7 @@ function VendorInventory() {
               </tr>
             </thead>
             <tbody>
-              {GARMENT_INVENTORY.map((g) => (
+              {inv.map((g: any) => (
                 <tr key={g.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                   <td className="p-3 font-medium">{g.type}</td>
                   <td className="p-3 text-muted-foreground">{g.brand}</td>
@@ -636,6 +784,97 @@ function VendorInventory() {
 // Vendor Services
 // ============================================================================
 function VendorServices() {
+  const vid = useMyVendorId();
+  const { data: services } = useServices();
+  const { data: vendorData, refetch: refetchVendor } = useVendor(vid || "");
+  const svc = services || [];
+  const vendor = vendorData || null;
+
+  const offeredSet = new Set(vendor?.servicesOffered || []);
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkSelection, setBulkSelection] = useState<Set<string>>(new Set());
+
+  const [editingRadius, setEditingRadius] = useState(false);
+  const [radiusInput, setRadiusInput] = useState(String(vendor?.serviceRadiusKm ?? 5));
+  const [editingMinOrder, setEditingMinOrder] = useState(false);
+  const [minOrderInput, setMinOrderInput] = useState(String(vendor?.minOrderValue ?? 150));
+
+  useEffect(() => {
+    setRadiusInput(String(vendor?.serviceRadiusKm ?? 5));
+    setMinOrderInput(String(vendor?.minOrderValue ?? 150));
+  }, [vendor?.serviceRadiusKm, vendor?.minOrderValue]);
+
+  const toggleService = useCallback(async (key: string, enabled: boolean) => {
+    if (!vendor?.id) return;
+    const updated = enabled
+      ? [...(vendor.servicesOffered || []), key]
+      : (vendor.servicesOffered || []).filter((k) => k !== key);
+    try {
+      await api.patch(`/api/vendors/${vendor.id}`, { services_offered: updated });
+      toast.success(enabled ? "Service enabled" : "Service disabled");
+      refetchVendor();
+    } catch (e: any) {
+      toast.error("Failed to update services", { description: e.message });
+    }
+  }, [vendor, refetchVendor]);
+
+  const saveSetting = useCallback(async (field: string, value: any, label: string) => {
+    if (!vendor?.id) return;
+    try {
+      await api.patch(`/api/vendors/${vendor.id}`, { [field]: value });
+      toast.success(`${label} updated`);
+      refetchVendor();
+    } catch (e: any) {
+      toast.error(`Failed to update ${label}`, { description: e.message });
+    }
+  }, [vendor, refetchVendor]);
+
+  const toggleDay = useCallback(async (dayKey: string, active: boolean) => {
+    if (!vendor?.id) return;
+    const hours = { ...(vendor.businessHours || {}) };
+    hours[dayKey] = { ...(hours[dayKey] || { open: "08:00", close: "21:00" }), active };
+    try {
+      await api.patch(`/api/vendors/${vendor.id}`, { business_hours: hours });
+      toast.success(active ? `${dayKey} enabled` : `${dayKey} disabled`);
+      refetchVendor();
+    } catch (e: any) {
+      toast.error("Failed to update hours", { description: e.message });
+    }
+  }, [vendor, refetchVendor]);
+
+  const openBulk = () => {
+    setBulkSelection(new Set(vendor?.servicesOffered || []));
+    setBulkOpen(true);
+  };
+
+  const applyBulk = async () => {
+    if (!vendor?.id) return;
+    try {
+      await api.patch(`/api/vendors/${vendor.id}`, {
+        services_offered: Array.from(bulkSelection),
+      });
+      toast.success("Bulk update applied");
+      setBulkOpen(false);
+      refetchVendor();
+    } catch (e: any) {
+      toast.error("Failed to bulk update", { description: e.message });
+    }
+  };
+
+  // Weekday key map
+  const DAY_MAP: Record<string, string> = {
+    Monday: "monday", Tuesday: "tuesday", Wednesday: "wednesday",
+    Thursday: "thursday", Friday: "friday", Saturday: "saturday", Sunday: "sunday",
+  };
+  const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+  const hours = vendor?.businessHours || {};
+
+  if (!vid) {
+    return <div className="text-sm text-muted-foreground text-center py-8">Loading vendor profile…</div>;
+  }
+
   return (
     <div className="space-y-6">
       {/* Service toggles */}
@@ -645,14 +884,14 @@ function VendorServices() {
             <h3 className="font-semibold">Offered Services</h3>
             <p className="text-xs text-muted-foreground">Toggle services on/off and configure pricing</p>
           </div>
-          <Button variant="outline" size="sm" className="text-xs">
+          <Button variant="outline" size="sm" className="text-xs" onClick={openBulk}>
             <Settings2 className="h-3.5 w-3.5 mr-1.5" />
             Bulk edit
           </Button>
         </div>
         <div className="space-y-2">
-          {SERVICES.map((s) => {
-            const offered = ["wash_fold", "wash_iron", "dry_cleaning", "steam_ironing", "premium_care"].includes(s.key);
+          {svc.map((s) => {
+            const offered = offeredSet.has(s.key as any);
             return (
               <div key={s.key} className={cn("flex items-center gap-3 rounded-lg border p-3 transition-all", offered ? "border-border" : "border-dashed opacity-60")}>
                 <div className={cn("flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br text-white shrink-0", s.gradient)}>
@@ -667,7 +906,7 @@ function VendorServices() {
                     <p className="text-xs text-muted-foreground">Base price</p>
                     <p className="text-sm font-semibold">₹{s.basePrice}{s.pricingType === "per_kg" ? "/kg" : "/pc"}</p>
                   </div>
-                  <Switch defaultChecked={offered} />
+                  <Switch checked={offered} onCheckedChange={(chk) => toggleService(s.key, chk)} />
                 </div>
               </div>
             );
@@ -680,36 +919,90 @@ function VendorServices() {
         <Card className="p-5 shadow-soft">
           <h3 className="font-semibold mb-3">Business Hours</h3>
           <div className="space-y-2">
-            {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map((day) => (
-              <div key={day} className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">{day}</span>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">8:00 AM – 9:00 PM</span>
-                  <Switch defaultChecked={day !== "Sunday"} />
+            {DAY_LABELS.map((day) => {
+              const key = DAY_MAP[day];
+              const dayHours = hours[key] || { open: "08:00", close: "21:00", active: key !== "sunday" };
+              return (
+                <div key={day} className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{day}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-xs">{dayHours.open} – {dayHours.close}</span>
+                    <Switch checked={dayHours.active !== false} onCheckedChange={(chk) => toggleDay(key, chk)} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
 
         <Card className="p-5 shadow-soft">
           <h3 className="font-semibold mb-3">Service Area & Settings</h3>
-          <div className="space-y-3">
+          <div className="space-y-4">
+            {/* Service Radius */}
             <div>
-              <p className="text-xs text-muted-foreground">Service Radius</p>
-              <p className="text-lg font-semibold">5 km</p>
+              <p className="text-xs text-muted-foreground mb-1">Service Radius (km)</p>
+              {editingRadius ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number" min={1} max={50}
+                    value={radiusInput}
+                    onChange={(e) => setRadiusInput(e.target.value)}
+                    className="h-8 w-20 text-sm"
+                  />
+                  <Button size="sm" variant="default" className="h-8 text-xs" onClick={() => { saveSetting("service_radius_km", parseInt(radiusInput) || 5, "Service radius"); setEditingRadius(false); }}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => { setEditingRadius(false); setRadiusInput(String(vendor?.serviceRadiusKm ?? 5)); }}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <p className="text-lg font-semibold">{vendor?.serviceRadiusKm ?? 5} km</p>
+                  <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setEditingRadius(true)}>Edit</Button>
+                </div>
+              )}
             </div>
+
+            {/* Minimum Order */}
             <div>
-              <p className="text-xs text-muted-foreground">Minimum Order Value</p>
-              <p className="text-lg font-semibold">₹150</p>
+              <p className="text-xs text-muted-foreground mb-1">Minimum Order Value (₹)</p>
+              {editingMinOrder ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number" min={0} step={10}
+                    value={minOrderInput}
+                    onChange={(e) => setMinOrderInput(e.target.value)}
+                    className="h-8 w-20 text-sm"
+                  />
+                  <Button size="sm" variant="default" className="h-8 text-xs" onClick={() => { saveSetting("min_order_value", parseInt(minOrderInput) || 150, "Min order"); setEditingMinOrder(false); }}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => { setEditingMinOrder(false); setMinOrderInput(String(vendor?.minOrderValue ?? 150)); }}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <p className="text-lg font-semibold">₹{vendor?.minOrderValue ?? 150}</p>
+                  <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setEditingMinOrder(true)}>Edit</Button>
+                </div>
+              )}
             </div>
+
+            {/* Express Service */}
             <div>
               <p className="text-xs text-muted-foreground">Express Service</p>
               <div className="flex items-center justify-between">
                 <p className="text-sm">1.5× pricing · 12hr delivery</p>
-                <Switch defaultChecked />
+                <Switch
+                  checked={vendor?.expressEnabled !== false}
+                  onCheckedChange={(chk) => saveSetting("express_enabled", chk, "Express service")}
+                />
               </div>
             </div>
+
+            {/* Holiday Calendar */}
             <div>
               <p className="text-xs text-muted-foreground">Holiday Calendar</p>
               <div className="flex items-center gap-2 mt-1">
@@ -720,6 +1013,52 @@ function VendorServices() {
           </div>
         </Card>
       </div>
+
+      {/* Bulk Edit Dialog */}
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Bulk Edit Services</DialogTitle>
+            <DialogDescription>Select all services you want to offer</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {svc.map((s) => {
+              const selected = bulkSelection.has(s.key);
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => {
+                    const next = new Set(bulkSelection);
+                    if (selected) next.delete(s.key); else next.add(s.key);
+                    setBulkSelection(next);
+                  }}
+                  className={cn(
+                    "w-full flex items-center gap-3 rounded-lg border p-3 text-left transition-all",
+                    selected ? "border-primary bg-primary/5" : "border-border"
+                  )}
+                >
+                  <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br text-white shrink-0", s.gradient)}>
+                    <ServiceIcon serviceKey={s.key} className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold">{s.name}</p>
+                    <p className="text-[10px] text-muted-foreground">₹{s.basePrice}/{s.pricingType === "per_kg" ? "kg" : "pc"}</p>
+                  </div>
+                  {selected && <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setBulkSelection(new Set(svc.map((s) => s.key)))}>Select All</Button>
+              <Button variant="outline" size="sm" onClick={() => setBulkSelection(new Set())}>Deselect All</Button>
+            </div>
+            <Button onClick={applyBulk}>Apply ({bulkSelection.size} services)</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -728,14 +1067,36 @@ function VendorServices() {
 // Vendor Analytics
 // ============================================================================
 function VendorAnalytics() {
+  const vid = useMyVendorId();
+  const { data: weeklyRevenue, refetch: refetchWeekly } = useVendorWeeklyRevenue(vid);
+  const { data: serviceRevenue, refetch: refetchService } = useVendorServiceRevenue(vid);
+  const { data: stats, refetch: refetchStats } = useVendorDashboardStats(vid);
+  useEffect(() => {
+    if (!vid) return;
+    const interval = setInterval(() => { refetchWeekly(); refetchService(); refetchStats(); }, 60000);
+    return () => clearInterval(interval);
+  }, [vid, refetchWeekly, refetchService, refetchStats]);
+  const wr = weeklyRevenue || [];
+  const sr = serviceRevenue || [];
+  const s = stats || {
+    totalOrdersThisWeek: 0, weeklyRevenue: 0, avgOrderValue: 0, repeatRate: 0,
+    avgRating: 0, totalReviews: 0, ratingBuckets: {}, todayOrders: 0, todayRevenue: 0,
+  };
+  const totalReviews = s.totalReviews || 0;
+  const ratingBuckets = s.ratingBuckets || {};
+  const buckets = [5, 4, 3, 2, 1].map((star) => {
+    const count = ratingBuckets[star] || 0;
+    const pct = totalReviews > 0 ? Math.round((count / totalReviews) * 100) : 0;
+    return { star, count, pct };
+  });
   return (
     <div className="space-y-6">
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Orders This Week" value="208" change={14.2} trend="up" icon={Package} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="Weekly Revenue" value={formatINR(146500)} change={18.9} trend="up" icon={IndianRupee} accent="from-emerald-500 to-green-600" />
-        <StatCard label="Avg Order Value" value={formatINR(705)} change={4.1} trend="up" icon={TrendingUp} accent="from-violet-500 to-purple-600" />
-        <StatCard label="Repeat Customers" value="78%" change={4.5} trend="up" icon={Repeat} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Orders This Week" value={String(s.totalOrdersThisWeek)} change={0} trend="up" icon={Package} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="Weekly Revenue" value={formatINR(s.weeklyRevenue)} change={0} trend="up" icon={IndianRupee} accent="from-emerald-500 to-green-600" />
+        <StatCard label="Avg Order Value" value={formatINR(s.avgOrderValue)} change={0} trend="up" icon={TrendingUp} accent="from-violet-500 to-purple-600" />
+        <StatCard label="Repeat Customers" value={`${s.repeatRate}%`} change={0} trend="up" icon={Repeat} accent="from-amber-500 to-orange-600" />
       </div>
 
       {/* Charts */}
@@ -743,7 +1104,7 @@ function VendorAnalytics() {
         <Card className="p-5 shadow-soft">
           <h3 className="font-semibold mb-3">Orders & Revenue</h3>
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={VENDOR_WEEKLY_REVENUE} margin={{ left: -16, right: 8 }}>
+            <BarChart data={wr} margin={{ left: -16, right: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="oklch(0.91 0.012 180)" vertical={false} />
               <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" />
               <YAxis yAxisId="left" tick={{ fontSize: 11 }} stroke="oklch(0.52 0.02 195)" tickFormatter={(v) => `₹${v/1000}k`} />
@@ -761,7 +1122,7 @@ function VendorAnalytics() {
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
               <Pie
-                data={VENDOR_SERVICE_REVENUE}
+                data={sr}
                 dataKey="revenue"
                 nameKey="name"
                 cx="50%"
@@ -770,7 +1131,7 @@ function VendorAnalytics() {
                 label={(entry: any) => `${entry.name}`}
                 labelLine={false}
               >
-                {VENDOR_SERVICE_REVENUE.map((entry, i) => (
+                {sr.map((entry, i) => (
                   <Cell key={i} fill={entry.color} />
                 ))}
               </Pie>
@@ -784,13 +1145,7 @@ function VendorAnalytics() {
       <Card className="p-5 shadow-soft">
         <h3 className="font-semibold mb-3">Customer Ratings Breakdown</h3>
         <div className="space-y-2">
-          {[
-            { star: 5, count: 892, pct: 78 },
-            { star: 4, count: 184, pct: 16 },
-            { star: 3, count: 72, pct: 6 },
-            { star: 2, count: 28, pct: 2 },
-            { star: 1, count: 19, pct: 2 },
-          ].map((r) => (
+          {buckets.map((r) => (
             <div key={r.star} className="flex items-center gap-3">
               <div className="flex items-center gap-1 w-12">
                 <span className="text-sm font-medium">{r.star}</span>
@@ -811,10 +1166,9 @@ function VendorAnalytics() {
         </div>
         <div className="mt-4 pt-4 border-t border-border/60 flex items-center justify-between">
           <div>
-            <p className="text-2xl font-bold">4.8</p>
-            <p className="text-xs text-muted-foreground">Average rating · 1,195 reviews</p>
+            <p className="text-2xl font-bold">{s.avgRating}</p>
+            <p className="text-xs text-muted-foreground">Average rating · {totalReviews} reviews</p>
           </div>
-          <Badge variant="secondary" className="text-emerald-600">Top 5% vendors</Badge>
         </div>
       </Card>
     </div>
@@ -825,23 +1179,21 @@ function VendorAnalytics() {
 // Vendor Staff Management
 // ============================================================================
 function VendorStaff() {
-  const staff = [
-    { id: "s1", name: "Lakshmi Devi", role: "Senior Washer", avatar: "LD", shift: "Morning (6 AM – 2 PM)", status: "on-duty", ordersToday: 18, rating: 4.9, joined: "Mar 2023" },
-    { id: "s2", name: "Mohammed Irfan", role: "Ironing Specialist", avatar: "MI", shift: "Morning (6 AM – 2 PM)", status: "on-duty", ordersToday: 22, rating: 4.8, joined: "Jul 2023" },
-    { id: "s3", name: "Sunita Rao", role: "Dry Cleaner", avatar: "SR", shift: "Afternoon (2 PM – 10 PM)", status: "on-duty", ordersToday: 14, rating: 4.7, joined: "Jan 2024" },
-    { id: "s4", name: "Arjun Nair", role: "Quality Inspector", avatar: "AN", shift: "Afternoon (2 PM – 10 PM)", status: "on-duty", ordersToday: 28, rating: 4.9, joined: "Nov 2023" },
-    { id: "s5", name: "Fatima Begum", role: "Packing Specialist", avatar: "FB", shift: "Evening (10 AM – 6 PM)", status: "on-break", ordersToday: 16, rating: 4.6, joined: "Feb 2024" },
-    { id: "s6", name: "Vijay Kumar", role: "Sorting & Tagging", avatar: "VK", shift: "Morning (6 AM – 2 PM)", status: "off-duty", ordersToday: 0, rating: 4.5, joined: "Apr 2024" },
-    { id: "s7", name: "Deepa Singh", role: "Junior Washer", avatar: "DS", shift: "Afternoon (2 PM – 10 PM)", status: "off-duty", ordersToday: 0, rating: 4.4, joined: "May 2024" },
-  ];
+  const vid = useMyVendorId();
+  const { data: staff, refetch: refetchStaff } = useStaff(vid || undefined);
+  useEffect(() => {
+    if (!vid) return;
+    const interval = setInterval(refetchStaff, 60000);
+    return () => clearInterval(interval);
+  }, [vid, refetchStaff]);
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Total Staff" value="7" icon={Users} accent="from-teal-500 to-cyan-600" />
-        <StatCard label="On Duty Now" value="5" icon={CheckCircle2} accent="from-emerald-500 to-green-600" />
-        <StatCard label="On Break" value="1" icon={Clock} accent="from-amber-500 to-orange-600" />
-        <StatCard label="Off Duty" value="1" icon={XCircle} accent="from-rose-500 to-pink-600" />
+        <StatCard label="Total Staff" value={String((staff || []).length)} icon={Users} accent="from-teal-500 to-cyan-600" />
+        <StatCard label="On Duty Now" value={String((staff || []).filter((s) => s.status === "on-duty").length)} icon={CheckCircle2} accent="from-emerald-500 to-green-600" />
+        <StatCard label="On Break" value={String((staff || []).filter((s) => s.status === "on-break").length)} icon={Clock} accent="from-amber-500 to-orange-600" />
+        <StatCard label="Off Duty" value={String((staff || []).filter((s) => s.status === "off-duty").length)} icon={XCircle} accent="from-rose-500 to-pink-600" />
       </div>
 
       <div className="flex items-center justify-between">
@@ -865,7 +1217,9 @@ function VendorStaff() {
       </div>
 
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {staff.map((s) => (
+        {(staff || []).map((s) => {
+          const initials = s.name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+          return (
           <motion.div key={s.id} whileHover={{ y: -2 }}>
             <Card className="p-4 shadow-soft hover:shadow-lift transition-shadow">
               <div className="flex items-start justify-between mb-3">
@@ -873,7 +1227,7 @@ function VendorStaff() {
                   <div className="relative">
                     <Avatar className="h-11 w-11">
                       <AvatarFallback className="bg-primary-surface text-primary-foreground text-xs font-semibold">
-                        {s.avatar}
+                        {initials}
                       </AvatarFallback>
                     </Avatar>
                     {s.status === "on-duty" && (
@@ -933,27 +1287,29 @@ function VendorStaff() {
               </div>
             </Card>
           </motion.div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Shift schedule */}
       <Card className="p-5 shadow-soft">
         <h3 className="font-semibold mb-3">Today&apos;s Shift Schedule</h3>
         <div className="space-y-2">
-          {[
-            { shift: "Morning (6 AM – 2 PM)", staff: ["Lakshmi Devi", "Mohammed Irfan", "Vijay Kumar"], color: "bg-amber-100 text-amber-700 dark:bg-amber-950/30" },
-            { shift: "Evening (10 AM – 6 PM)", staff: ["Fatima Begum"], color: "bg-teal-100 text-teal-700 dark:bg-teal-950/30" },
-            { shift: "Afternoon (2 PM – 10 PM)", staff: ["Sunita Rao", "Arjun Nair", "Deepa Singh"], color: "bg-violet-100 text-violet-700 dark:bg-violet-950/30" },
-          ].map((s) => (
-            <div key={s.shift} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
-              <Badge variant="outline" className={cn("text-[10px]", s.color)}>{s.shift}</Badge>
-              <div className="flex flex-wrap gap-1.5">
-                {s.staff.map((name) => (
-                  <span key={name} className="text-xs font-medium rounded-full bg-muted px-2 py-0.5">{name}</span>
-                ))}
+          {Array.from(new Set((staff || []).map((s) => s.shift))).map((shift) => {
+            const names = (staff || []).filter((s) => s.shift === shift).map((s) => s.name);
+            const colors = ["bg-amber-100 text-amber-700 dark:bg-amber-950/30", "bg-teal-100 text-teal-700 dark:bg-teal-950/30", "bg-violet-100 text-violet-700 dark:bg-violet-950/30", "bg-blue-100 text-blue-700 dark:bg-blue-950/30"];
+            const idx = Array.from(new Set((staff || []).map((s) => s.shift))).indexOf(shift) % colors.length;
+            return (
+              <div key={shift} className="flex items-center gap-3 rounded-lg border border-border/60 p-3">
+                <Badge variant="outline" className={cn("text-[10px]", colors[idx])}>{shift}</Badge>
+                <div className="flex flex-wrap gap-1.5">
+                  {names.map((name) => (
+                    <span key={name} className="text-xs font-medium rounded-full bg-muted px-2 py-0.5">{name}</span>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
     </div>

@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import type { Role, Notification, ChatMessage } from "./types";
-import { NOTIFICATIONS } from "./mock-data";
+import { createClient } from "./supabase";
+import { api } from "./api/client";
+
+let notifChannel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
 
 interface AppState {
   // Auth
@@ -9,9 +12,19 @@ interface AppState {
   userName: string;
   userEmail: string;
   userAvatar: string;
-  login: (role: Role) => void;
-  logout: () => void;
-  switchRole: (role: Role) => void;
+  userPhone: string;
+  userId: string | null;
+  authLoading: boolean;
+  authError: string | null;
+
+  initializeAuth: () => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<void>;
+  signInWithPhone: (phone: string) => Promise<void>;
+  verifyOtp: (phone: string, token: string) => Promise<void>;
+  signInWithOAuth: (provider: "google" | "apple" | "microsoft") => Promise<void>;
+  signUp: (email: string, password: string, name?: string) => Promise<void>;
+  logout: () => Promise<void>;
+  setProfile: (name: string, phone: string, email?: string) => Promise<void>;
 
   // UI state
   theme: "light" | "dark";
@@ -23,113 +36,347 @@ interface AppState {
   // Notifications
   notifications: Notification[];
   unreadCount: number;
-  markNotificationRead: (id: string) => void;
-  markAllRead: () => void;
+  fetchNotifications: () => Promise<void>;
+  markNotificationRead: (id: string) => Promise<void>;
+  markAllRead: () => Promise<void>;
+  setupRealtimeNotifications: () => void;
 
   // AI Assistant
   aiChat: ChatMessage[];
   aiOpen: boolean;
   toggleAi: () => void;
   setAiOpen: (open: boolean) => void;
-  sendAiMessage: (content: string) => void;
+  sendAiMessage: (content: string) => Promise<void>;
   clearAiChat: () => void;
 
   // Wallet
   walletBalance: number;
   loyaltyPoints: number;
+  fetchWallet: () => Promise<void>;
 }
 
-const AI_GREETING: ChatMessage = {
-  id: "ai-0",
-  role: "assistant",
-  content:
-    "Hi! I'm your Laundry Home AI assistant. I can help you with vendor recommendations, price estimates, delivery predictions, and demand insights. What would you like to know?",
-  time: "now",
-};
 
-function generateAiReply(userMsg: string): string {
-  const msg = userMsg.toLowerCase();
-  if (msg.includes("vendor") || msg.includes("recommend")) {
-    return "Based on your location (Indiranagar) and past orders, I recommend **FreshFold Laundry Co.** — 4.8★ rating, 1.2km away, 24hr turnaround, 78% repeat customer rate. For premium items, **Royal Garment Care** specialises in silk and designer wear. Want me to auto-assign the best vendor for your next order?";
-  }
-  if (msg.includes("price") || msg.includes("cost") || msg.includes("estimate")) {
-    return "For 5kg Wash & Fold + 6 shirts Wash & Iron at FreshFold, the estimated cost is **₹525** (including 18% GST, ₹25 platform fee, ₹40 delivery). Express delivery adds 1.5× on service cost. Apply coupon FRESH50 to save up to ₹150 on your first order.";
-  }
-  if (msg.includes("delay") || msg.includes("predict")) {
-    return "Order LH-2849 has a **medium delay risk** (confidence 91%) — vendor capacity is at 78% and pickup slot is 2-4 PM which is a peak window. Recommended action: reassign to QuickClean Express (45% capacity, 11hr turnaround) to bring delivery on time.";
-  }
-  if (msg.includes("demand") || msg.includes("forecast")) {
-    return "Demand forecast for this weekend: **+28% in HSR Layout** and **+22% in Whitefield**. Recommend onboarding 2 more vendors in these zones. Friday-Saturday will see 312 and 268 pickups respectively — pre-position 4 delivery executives in Indiranagar hub.";
-  }
-  if (msg.includes("track") || msg.includes("order")) {
-    return "Your active order LH-2847 is currently in the **Washing** stage (step 9/18). Estimated completion in 14 hours. Pickup was completed on time, and AI predicts low delay risk. Want me to send a real-time notification when it reaches the Ironing stage?";
-  }
-  return "I can help with: vendor recommendations, price estimation, delivery time prediction, delay alerts, demand forecasting, and personalised subscription plans. Try asking \"Which vendor is best for my next order?\" or \"Predict delivery time for my active order.\"";
-}
 
 export const useAppStore = create<AppState>((set, get) => ({
   // Auth
   role: "guest",
   isAuthenticated: false,
-  userName: "Aarav Mehta",
-  userEmail: "aarav.mehta@email.com",
-  userAvatar: "AM",
+  userName: "",
+  userEmail: "",
+  userAvatar: "",
+  userPhone: "",
+  userId: null,
+  authLoading: true,
+  authError: null,
 
-  login: (role) =>
-    set({
-      role,
-      isAuthenticated: true,
-      userName:
-        role === "customer" ? "Aarav Mehta"
-        : role === "vendor" ? "FreshFold Laundry Co."
-        : role === "delivery" ? "Rajesh Kumar"
-        : role === "admin" ? "Ananya Iyer"
-        : role === "superadmin" ? "System Admin"
-        : "Guest",
-      userEmail:
-        role === "customer" ? "aarav.mehta@email.com"
-        : role === "vendor" ? "owner@freshfold.co"
-        : role === "delivery" ? "rajesh.k@delivery.co"
-        : role === "admin" ? "ananya@laundryhome.com"
-        : "admin@laundryhome.com",
-      userAvatar:
-        role === "customer" ? "AM"
-        : role === "vendor" ? "FF"
-        : role === "delivery" ? "RK"
-        : role === "admin" ? "AI"
-        : "SA",
-    }),
+  initializeAuth: async () => {
+    if (sessionStorage.getItem("lh_logged_out")) {
+      sessionStorage.removeItem("lh_logged_out");
+      set({ authLoading: false });
+      return;
+    }
+    try {
+      const supabase = createClient();
+      const url = new URL(window.location.href);
+      const hasCode = url.searchParams.has("code");
 
-  logout: () =>
-    set({
-      role: "guest",
-      isAuthenticated: false,
-      sidebarOpen: false,
-    }),
+      if (hasCode) {
+        const code = url.searchParams.get("code")!;
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          console.warn("[auth] exchangeCodeForSession failed:", error.message);
+        } else if (data?.session) {
+          const session = data.session;
+          const meta = session.user.user_metadata;
+          const role: Role = (meta?.role as Role) || "customer";
+          const name = meta?.name || session.user.email?.split("@")[0] || "User";
+          const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+          url.searchParams.delete("code");
+          url.searchParams.delete("state");
+          window.history.replaceState(window.history.state, "", url.toString());
 
-  switchRole: (role) =>
-    set({
-      role,
-      userName:
-        role === "customer" ? "Aarav Mehta"
-        : role === "vendor" ? "FreshFold Laundry Co."
-        : role === "delivery" ? "Rajesh Kumar"
-        : role === "admin" ? "Ananya Iyer"
-        : role === "superadmin" ? "System Admin"
-        : "Guest",
-      userEmail:
-        role === "customer" ? "aarav.mehta@email.com"
-        : role === "vendor" ? "owner@freshfold.co"
-        : role === "delivery" ? "rajesh.k@delivery.co"
-        : role === "admin" ? "ananya@laundryhome.com"
-        : "admin@laundryhome.com",
-      userAvatar:
-        role === "customer" ? "AM"
-        : role === "vendor" ? "FF"
-        : role === "delivery" ? "RK"
-        : role === "admin" ? "AI"
-        : "SA",
-    }),
+          fetch("/api/auth/session").catch(() => {});
+
+          set({
+            isAuthenticated: true,
+            role,
+            userId: session.user.id,
+            userName: name,
+            userEmail: session.user.email || "",
+            userAvatar: avatar,
+            authLoading: false,
+          });
+          get().fetchNotifications().catch(() => {});
+          get().fetchWallet().catch(() => {});
+          get().setupRealtimeNotifications();
+          return;
+        }
+      }
+
+      const { data: { session } } = await supabase.auth.getSession();
+
+        if (session?.user) {
+          get().fetchNotifications().catch(() => {});
+          get().fetchWallet().catch(() => {});
+          get().setupRealtimeNotifications();
+          const meta = session.user.user_metadata;
+          const role: Role = (meta?.role as Role) || "customer";
+          const name = meta?.name || session.user.email?.split("@")[0] || "User";
+          const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+
+          try {
+            const res = await fetch("/api/auth/session");
+            const data = await res.json();
+            if (data.profile) {
+              set({
+                isAuthenticated: true,
+                role: data.profile.role || role,
+                userId: session.user.id,
+                userName: data.profile.name || name,
+                userEmail: data.profile.email || session.user.email || "",
+                userPhone: data.profile.phone || "",
+                userAvatar: data.profile.avatar || avatar,
+                authLoading: false,
+              });
+              return;
+            }
+          } catch {}
+
+          set({
+            isAuthenticated: true,
+            role,
+            userId: session.user.id,
+            userName: name,
+            userEmail: session.user.email || "",
+            userAvatar: avatar,
+            authLoading: false,
+          });
+          get().fetchNotifications().catch(() => {});
+          get().fetchWallet().catch(() => {});
+          get().setupRealtimeNotifications();
+          return;
+        }
+    } catch (e) {
+      console.warn("[auth] initializeAuth error:", e);
+    }
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("code")) {
+      url.searchParams.delete("code");
+      window.history.replaceState(window.history.state, "", url.toString());
+    }
+    set({ authLoading: false });
+  },
+
+  signInWithEmail: async (email, password) => {
+    set({ authLoading: true, authError: null });
+    try {
+      const supabase = createClient();
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+
+      const userId = data.user?.id || null;
+      const meta = data.user?.user_metadata;
+      const name = meta?.name || data.user?.email?.split("@")[0] || "User";
+      const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+
+      let role: Role = (meta?.role as Role) || "customer";
+      let userName = name;
+      let userEmail = data.user?.email || "";
+      let userPhone = "";
+
+      try {
+        const res = await fetch("/api/auth/session");
+        const d = await res.json();
+        if (d.profile) {
+          role = d.profile.role || role;
+          userName = d.profile.name || userName;
+          userEmail = d.profile.email || userEmail;
+          userPhone = d.profile.phone || "";
+        }
+      } catch {}
+
+      try {
+        const u = new URL(window.location.href);
+        if (u.searchParams.has("clear") || u.searchParams.has("landing")) {
+          u.searchParams.delete("clear");
+          u.searchParams.delete("landing");
+          window.history.replaceState(window.history.state, "", u.toString());
+        }
+      } catch {}
+
+      set({
+        isAuthenticated: true,
+        role,
+        userId,
+        userName,
+        userEmail,
+        userPhone,
+        userAvatar: avatar,
+      });
+
+      get().fetchNotifications().catch(() => {});
+      get().fetchWallet().catch(() => {});
+      get().setupRealtimeNotifications();
+    } catch (e: any) {
+      set({ authError: e.message || "Sign in failed", authLoading: false });
+      throw e;
+    }
+    set({ authLoading: false });
+  },
+
+  signInWithPhone: async (phone) => {
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOtp({ phone });
+    if (error) throw error;
+  },
+
+  verifyOtp: async (phone, token) => {
+    set({ authLoading: true, authError: null });
+    try {
+      const supabase = createClient();
+      const { data, error } = await supabase.auth.verifyOtp({ phone, token, type: "sms" });
+      if (error) throw error;
+
+      const userId = data.user?.id || null;
+      let role: Role = "customer";
+      let userName = "User";
+      let userEmail = "";
+      let userPhone = phone;
+
+      try {
+        const res = await fetch("/api/auth/session");
+        const d = await res.json();
+        if (d.profile) {
+          role = d.profile.role || role;
+          userName = d.profile.name || userName;
+          userEmail = d.profile.email || "";
+          userPhone = d.profile.phone || phone;
+        }
+      } catch {}
+
+      try {
+        const u = new URL(window.location.href);
+        if (u.searchParams.has("clear") || u.searchParams.has("landing")) {
+          u.searchParams.delete("clear");
+          u.searchParams.delete("landing");
+          window.history.replaceState(window.history.state, "", u.toString());
+        }
+      } catch {}
+
+      set({
+        isAuthenticated: true,
+        role,
+        userId,
+        userName,
+        userEmail,
+        userPhone,
+        userAvatar: "US",
+      });
+
+      get().fetchNotifications().catch(() => {});
+      get().fetchWallet().catch(() => {});
+      get().setupRealtimeNotifications();
+    } catch (e: any) {
+      set({ authError: e.message || "Verification failed", authLoading: false });
+      throw e;
+    }
+    set({ authLoading: false });
+  },
+
+  signInWithOAuth: async (provider) => {
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: provider as any,
+      options: {
+        redirectTo: window.location.origin,
+        queryParams: { prompt: "select_account" },
+      },
+    });
+    if (error) throw error;
+  },
+
+  signUp: async (email, password, name?) => {
+    set({ authLoading: true, authError: null });
+    try {
+      const displayName = name || email.split("@")[0] || "User";
+      const supabase = createClient();
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { role: "customer", name: displayName } },
+      });
+      if (error) throw error;
+
+      if (data.user) {
+        const role: Role = "customer";
+        const avatar = displayName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+
+        try {
+          const u = new URL(window.location.href);
+          if (u.searchParams.has("clear") || u.searchParams.has("landing")) {
+            u.searchParams.delete("clear");
+            u.searchParams.delete("landing");
+            window.history.replaceState(window.history.state, "", u.toString());
+          }
+        } catch {}
+
+        set({
+          isAuthenticated: true,
+          role,
+          userId: data.user.id,
+          userName: displayName,
+          userEmail: data.user.email || "",
+          userAvatar: avatar,
+        });
+
+        get().fetchNotifications().catch(() => {});
+        get().fetchWallet().catch(() => {});
+        get().setupRealtimeNotifications();
+      }
+    } catch (e: any) {
+      set({ authError: e.message || "Sign up failed", authLoading: false });
+      throw e;
+    }
+    set({ authLoading: false });
+  },
+
+  logout: async () => {
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+    } catch {}
+    localStorage.clear();
+    sessionStorage.clear();
+    document.cookie.split(";").forEach((c) => {
+      const eq = c.indexOf("=");
+      const name = eq > -1 ? c.substring(0, eq).trim() : c.trim();
+      for (const p of ["/", "/api", "/auth"]) {
+        document.cookie = `${name}=; path=${p}; max-age=0;`;
+        document.cookie = `${name}=; path=${p}; domain=${window.location.hostname}; max-age=0;`;
+      }
+    });
+    window.location.href = "/?clear=1";
+  },
+
+  setProfile: async (name, phone, email?) => {
+    try {
+      const res = await api.patch<{ profile: { name: string; phone: string; email: string; avatar: string } }>("/api/auth/profile", { name, phone, email });
+      if (res?.profile) {
+        set({
+          userName: res.profile.name || name,
+          userPhone: res.profile.phone || phone,
+          userEmail: res.profile.email || email || "",
+          userAvatar: res.profile.avatar || "",
+          authError: null,
+        });
+      } else {
+        set({ userName: name, userPhone: phone, authError: null });
+      }
+    } catch (e: any) {
+      set({ authError: e.message });
+      throw e;
+    }
+  },
 
   // UI
   theme: "light",
@@ -139,52 +386,105 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSidebar: (open) => set({ sidebarOpen: open }),
 
   // Notifications
-  notifications: NOTIFICATIONS,
-  unreadCount: NOTIFICATIONS.filter((n) => !n.read).length,
-  markNotificationRead: (id) =>
-    set((s) => {
-      const updated = s.notifications.map((n) =>
-        n.id === id ? { ...n, read: true } : n
+  notifications: [],
+  unreadCount: 0,
+  fetchNotifications: async () => {
+    try {
+      const data = await api.get<Notification[]>("/api/notifications");
+      const notifs = data || [];
+      set({ notifications: notifs, unreadCount: notifs.filter((n: Notification) => !n.read).length });
+    } catch {}
+  },
+  markNotificationRead: async (id) => {
+    try {
+      await api.patch(`/api/notifications/${id}`, { read: true });
+      set((s) => {
+        const updated = s.notifications.map((n) =>
+          n.id === id ? { ...n, read: true } : n
+        );
+        return { notifications: updated, unreadCount: updated.filter((n) => !n.read).length };
+      });
+    } catch {}
+  },
+  markAllRead: async () => {
+    try {
+      await Promise.all(
+        get().notifications.filter((n) => !n.read).map((n) =>
+          api.patch(`/api/notifications/${n.id}`, { read: true })
+        )
       );
-      return {
-        notifications: updated,
-        unreadCount: updated.filter((n) => !n.read).length,
-      };
-    }),
-  markAllRead: () =>
-    set((s) => ({
-      notifications: s.notifications.map((n) => ({ ...n, read: true })),
-      unreadCount: 0,
-    })),
+      set((s) => ({
+        notifications: s.notifications.map((n) => ({ ...n, read: true })),
+        unreadCount: 0,
+      }));
+    } catch {}
+  },
 
   // AI Assistant
-  aiChat: [AI_GREETING],
+  aiChat: [],
   aiOpen: false,
   toggleAi: () => set((s) => ({ aiOpen: !s.aiOpen })),
   setAiOpen: (open) => set({ aiOpen: open }),
-  sendAiMessage: (content) => {
-    const userMsg: ChatMessage = {
-      id: `ai-${Date.now()}`,
-      role: "user",
-      content,
-      time: "now",
-    };
+  sendAiMessage: async (content) => {
+    const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content, time: new Date().toLocaleTimeString() };
     set((s) => ({ aiChat: [...s.aiChat, userMsg] }));
-
-    // Simulate AI reply after delay
-    setTimeout(() => {
-      const reply: ChatMessage = {
-        id: `ai-${Date.now()}-r`,
-        role: "assistant",
-        content: generateAiReply(content),
-        time: "now",
-      };
+    try {
+      const res = await api.post<{ reply: string }>("/api/chat/ask", { content });
+      const reply: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: res.reply, time: new Date().toLocaleTimeString() };
       set((s) => ({ aiChat: [...s.aiChat, reply] }));
-    }, 800);
+    } catch (e) {
+      const errMsg: ChatMessage = { id: crypto.randomUUID(), role: "assistant", content: "Sorry, I couldn't process that request. Please try again.", time: new Date().toLocaleTimeString() };
+      set((s) => ({ aiChat: [...s.aiChat, errMsg] }));
+    }
   },
-  clearAiChat: () => set({ aiChat: [AI_GREETING] }),
+  clearAiChat: async () => {
+    set({ aiChat: [] });
+  },
 
   // Wallet
-  walletBalance: 1250,
-  loyaltyPoints: 2480,
+  walletBalance: 0,
+  loyaltyPoints: 0,
+  fetchWallet: async () => {
+    try {
+      const data = await api.get<{ balance: number; loyaltyPoints: number }>("/api/wallet");
+      if (data) {
+        set({ walletBalance: data.balance || 0, loyaltyPoints: data.loyaltyPoints || 0 });
+      }
+    } catch {}
+  },
+
+  setupRealtimeNotifications: () => {
+    const state = get();
+    if (!state.isAuthenticated || !state.userId) return;
+    if (notifChannel) return;
+
+    const supabase = createClient();
+    notifChannel = supabase
+      .channel("realtime-notifications")
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${state.userId}`,
+        },
+        (payload: any) => {
+          const newNotif: Notification = {
+            id: payload.new.id,
+            type: payload.new.type || "system",
+            title: payload.new.title || "",
+            body: payload.new.body || "",
+            time: payload.new.created_at || new Date().toISOString(),
+            read: payload.new.read || false,
+            channel: payload.new.channel || "push",
+          };
+          set((s) => ({
+            notifications: [newNotif, ...s.notifications],
+            unreadCount: s.unreadCount + 1,
+          }));
+        }
+      )
+      .subscribe();
+  },
 }));

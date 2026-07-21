@@ -1,4 +1,3 @@
-"use client";
 
 import {
   WashingMachine,
@@ -14,10 +13,9 @@ import {
   Package,
 } from "lucide-react";
 import type { ServiceKey } from "@/lib/types";
-import { SERVICES } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
-const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+const ICON_MAP: Record<string, React.ComponentType<{ className?: string; size?: number }>> = {
   WashingMachine,
   Shirt,
   Sparkles,
@@ -31,6 +29,20 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Package,
 };
 
+const SERVICE_ICON_KEYS: Record<string, string> = {
+  wash_fold: "WashingMachine",
+  wash_iron: "Shirt",
+  dry_cleaning: "Sparkles",
+  steam_ironing: "Wind",
+  premium_care: "Crown",
+  delicate_care: "Feather",
+  shoe_cleaning: "Footprints",
+  blanket: "BedDouble",
+  curtain: "Blinds",
+  carpet: "Square",
+  bulk: "Package",
+};
+
 interface ServiceIconProps {
   serviceKey: ServiceKey;
   className?: string;
@@ -39,9 +51,9 @@ interface ServiceIconProps {
 }
 
 export function ServiceIcon({ serviceKey, className, size = 20, withGradient = false }: ServiceIconProps) {
-  const service = SERVICES.find((s) => s.key === serviceKey);
-  if (!service) return null;
-  const Icon = ICON_MAP[service.icon] || Package;
+  const iconKey = SERVICE_ICON_KEYS[serviceKey];
+  if (!iconKey) return null;
+  const Icon = ICON_MAP[iconKey] || Package;
 
   if (withGradient) {
     return (
@@ -55,5 +67,6 @@ export function ServiceIcon({ serviceKey, className, size = 20, withGradient = f
 }
 
 export function getServiceMeta(key: ServiceKey) {
-  return SERVICES.find((s) => s.key === key)!;
+  const iconKey = SERVICE_ICON_KEYS[key];
+  return { key, icon: iconKey || "Package" };
 }

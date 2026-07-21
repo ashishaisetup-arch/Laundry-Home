@@ -1,4 +1,3 @@
-"use client";
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -7,13 +6,6 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-
-const SUGGESTIONS = [
-  "Recommend a vendor for my next order",
-  "Estimate price for 5kg wash & fold",
-  "Predict delivery time for active order",
-  "Forecast weekend demand",
-];
 
 export function AiAssistant() {
   const { aiOpen, setAiOpen, aiChat, sendAiMessage, clearAiChat } = useAppStore();
@@ -124,25 +116,7 @@ export function AiAssistant() {
                   ))}
                 </div>
 
-                {/* Suggestions */}
-                {aiChat.length <= 1 && (
-                  <div className="mt-6">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                      Try asking
-                    </p>
-                    <div className="space-y-1.5">
-                      {SUGGESTIONS.map((s) => (
-                        <button
-                          key={s}
-                          onClick={() => sendAiMessage(s)}
-                          className="w-full text-left rounded-lg border border-border bg-card px-3 py-2 text-sm hover:bg-muted hover:border-primary/30 transition-colors"
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+
               </ScrollArea>
 
               {/* Input */}

@@ -1,4 +1,3 @@
-"use client";
 
 import { motion } from "framer-motion";
 import { Star, Clock, MapPin, BadgeCheck, Zap, Heart } from "lucide-react";
@@ -14,9 +13,11 @@ interface VendorCardProps {
   onBook?: () => void;
   isSelected?: boolean;
   className?: string;
+  isFavorited?: boolean;
+  onToggleFavorite?: () => void;
 }
 
-export function VendorCard({ vendor, onView, onBook, isSelected, className }: VendorCardProps) {
+export function VendorCard({ vendor, onView, onBook, isSelected, className, isFavorited, onToggleFavorite }: VendorCardProps) {
   return (
     <motion.div
       layout
@@ -59,8 +60,16 @@ export function VendorCard({ vendor, onView, onBook, isSelected, className }: Ve
                 {vendor.area} · {vendor.distanceKm} km
               </div>
             </div>
-            <Button variant="ghost" size="icon" className="h-7 w-7 -mr-1 -mt-1">
-              <Heart className="h-4 w-4 text-muted-foreground hover:text-rose-500" />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 -mr-1 -mt-1"
+              onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(); }}
+            >
+              <Heart className={cn(
+                "h-4 w-4 transition-colors",
+                isFavorited ? "fill-rose-500 text-rose-500" : "text-muted-foreground hover:text-rose-500"
+              )} />
             </Button>
           </div>
 

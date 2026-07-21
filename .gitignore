@@ -19,6 +19,7 @@ node_modules
 
 # production
 /build
+/dist
 
 # misc
 .DS_Store
@@ -46,6 +47,8 @@ local-*
 *.log
 dev.log
 dev.out.log
+package-lock.json
+db/custom.db
 test
 prompt
 

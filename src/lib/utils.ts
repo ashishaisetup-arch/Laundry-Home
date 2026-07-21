@@ -62,3 +62,21 @@ export function formatDateTime(iso: string): string {
   if (!iso) return "—";
   return `${formatDate(iso)}, ${formatTime(iso)}`;
 }
+
+function toCamel(str: string): string {
+  return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+export function convertKeys<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) return obj.map(convertKeys) as unknown as T;
+  if (typeof obj === "object" && !(obj instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(obj as Record<string, unknown>).map(([k, v]) => [
+        toCamel(k),
+        convertKeys(v),
+      ])
+    ) as T;
+  }
+  return obj;
+}

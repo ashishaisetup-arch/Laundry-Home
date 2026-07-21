@@ -1,4 +1,3 @@
-"use client"
 
 import * as React from "react"
 import useEmblaCarousel, {
@@ -95,12 +94,20 @@ function Carousel({
 
   React.useEffect(() => {
     if (!api) return
-    onSelect(api)
     api.on("reInit", onSelect)
     api.on("select", onSelect)
 
     return () => {
       api?.off("select", onSelect)
+    }
+  }, [api, onSelect])
+
+  // Call onSelect once on mount to set initial state
+  React.useEffect(() => {
+    if (api) {
+      // Use setTimeout to avoid calling setState synchronously in effect
+      const timer = setTimeout(() => onSelect(api), 0)
+      return () => clearTimeout(timer)
     }
   }, [api, onSelect])
 
