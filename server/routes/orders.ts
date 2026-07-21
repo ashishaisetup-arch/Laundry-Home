@@ -163,6 +163,7 @@ router.post("/", async (req: Request, res: Response) => {
       wallet_used: pricing.walletUsed || 0,
       express_surcharge: pricing.expressSurcharge || 0,
       surge_charge: pricing.surgeCharge || 0,
+      pricing_breakdown: pricing,
       payment_method: body.payment_method || "cod",
       payment_status: pricing.walletUsed >= pricing.total ? "paid" : "pending",
       pickup_lat: pickupCoords?.lat || null,
