@@ -9,6 +9,8 @@
     "build": "vite build && esbuild server/api-entry.ts --bundle --platform=node --outfile=api/index.js --packages=external",
     "start": "NODE_ENV=production node --import tsx server/index.ts",
     "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "supabase:types": "npx supabase gen types typescript --linked > src/lib/database.types.ts"
   },
   "dependencies": {
@@ -88,6 +90,9 @@
     "@eslint/js": "^9.39.5",
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/vite": "^4.3.2",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/dotenv": "^6.1.1",
@@ -100,12 +105,14 @@
     "eslint": "^9",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^29.1.1",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5",
     "typescript-eslint": "^8.63.0",
-    "vite": "^8.1.4"
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
   }
 }
