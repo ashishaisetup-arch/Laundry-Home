@@ -53,6 +53,7 @@ import { OrderTimeline } from "@/components/shared/order-timeline";
 import { ServiceIcon, getServiceMeta } from "@/components/shared/service-icon";
 import { useAppStore } from "@/lib/store";
 import { useOrders, useVendors, useServices, useAddresses, useCoupons, useReviews, usePaymentMethods, useSubscriptionPlans, useFavoriteVendors } from "@/lib/hooks";
+import { useRouterView } from "@/lib/hooks/use-router-view";
 import type { Order, Vendor, ServiceType } from "@/lib/types";
 import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
@@ -66,7 +67,7 @@ import { DashboardSkeleton, OrderCardSkeleton } from "@/components/shared/skelet
 
 export function CustomerApp() {
   const { userId, walletBalance, loyaltyPoints } = useAppStore();
-  const [view, setView] = useState("dashboard");
+  const [view, setView, handleNavigateFromRouter] = useRouterView("dashboard");
   const [showBooking, setShowBooking] = useState(false);
   const [trackingOrder, setTrackingOrder] = useState<string | null>(null);
   const [discoverArea, setDiscoverArea] = useState<string | null>(null);
@@ -80,27 +81,12 @@ export function CustomerApp() {
     if (ordersHook) setOrders(ordersHook);
   }, [ordersHook, setOrders]);
 
-  // Browser back button → always go to dashboard
-  useEffect(() => {
-    const onPop = () => {
-      setView("dashboard");
-      // Push dashboard state so the next back also goes to dashboard
-      window.history.pushState({ view: "dashboard" }, "");
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
-  // Push history state when navigating to non-dashboard views
   const handleNavigate = (v: string) => {
     if (v === "booking") {
       setShowBooking(true);
       return;
     }
-    if (v !== "dashboard") {
-      window.history.pushState({ view: v }, "");
-    }
-    setView(v);
+    handleNavigateFromRouter(v);
   };
 
   const handleBookingClose = () => {

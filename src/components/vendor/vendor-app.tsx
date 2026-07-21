@@ -77,6 +77,7 @@ import { StatCard } from "@/components/shared/stat-card";
 import { ServiceIcon } from "@/components/shared/service-icon";
 import { OrderTimeline } from "@/components/shared/order-timeline";
 import { useOrders, useServices, useStaff, useGarments, useVendor } from "@/lib/hooks";
+import { useRouterView } from "@/lib/hooks/use-router-view";
 import { useVendorWeeklyRevenue, useVendorServiceRevenue, useVendorInventory, useVendorDashboardStats } from "@/lib/hooks/useVendorAnalytics";
 import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 import type { Order } from "@/lib/types";
@@ -84,7 +85,7 @@ import { cn, formatINR, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
 
 export function VendorApp() {
-  const [view, setView] = useState("dashboard");
+  const [view, setView, handleNavigate] = useRouterView("dashboard");
   const [manualOrderOpen, setManualOrderOpen] = useState(false);
   const vid = useMyVendorId();
   const { data: orders } = useOrders({ vendorId: vid });
@@ -110,7 +111,7 @@ export function VendorApp() {
       <AppShell
         groups={navGroups}
         activeView={view}
-        onNavigate={setView}
+        onNavigate={handleNavigate}
         pageTitle={pageTitle(view)}
         pageSubtitle={pageSubtitle(view)}
         actions={

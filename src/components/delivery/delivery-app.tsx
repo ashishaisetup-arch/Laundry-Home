@@ -38,6 +38,7 @@ import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { StatCard } from "@/components/shared/stat-card";
 import { LeafletMap } from "@/components/shared/leaflet-map";
 import { useDeliveryTasks, useOrders } from "@/lib/hooks";
+import { useRouterView } from "@/lib/hooks/use-router-view";
 import { useGeolocation } from "@/lib/hooks/useGeolocation";
 import { useDeliveryLocation } from "@/lib/hooks/useDeliveryLocation";
 import { useAppStore } from "@/lib/store";
@@ -88,7 +89,7 @@ function filterSortTasks(tasks: DeliveryTask[], type: "pickup" | "delivery") {
 }
 
 export function DeliveryApp() {
-  const [view, setView] = useState("dashboard");
+  const [view, setView, handleNavigate] = useRouterView("dashboard");
   const { userName, userId } = useAppStore();
   const { data: allTasks } = useDeliveryTasks(userId);
   useOrders(userId ? { deliveryExecutiveId: userId } : undefined);
@@ -127,7 +128,7 @@ export function DeliveryApp() {
     <AppShell
       groups={navGroups}
       activeView={view}
-      onNavigate={setView}
+      onNavigate={handleNavigate}
       pageTitle={pageTitle[view] || "Dashboard"}
       pageSubtitle={pageSubtitle[view] || ""}
     >

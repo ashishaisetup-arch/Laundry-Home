@@ -72,6 +72,7 @@ import {
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { StatCard } from "@/components/shared/stat-card";
 import { useOrders, useVendors, useAdminKpis, useAdminAnalytics, useSupportTickets, useCampaigns, useReports } from "@/lib/hooks";
+import { useRouterView } from "@/lib/hooks/use-router-view";
 import { useRealtime } from "@/lib/hooks/useRealtime";
 import type { Vendor } from "@/lib/types";
 import { AdminOrderDetail } from "@/components/admin/admin-order-detail";
@@ -96,13 +97,13 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 export function AdminApp() {
-  const [view, setView] = useState("dashboard");
+  const [view, setView, handleNavigate] = useRouterView("dashboard");
 
   return (
     <AppShell
       groups={NAV_GROUPS}
       activeView={view}
-      onNavigate={setView}
+      onNavigate={handleNavigate}
       pageTitle={pageTitle(view)}
       pageSubtitle={pageSubtitle(view)}
       actions={
