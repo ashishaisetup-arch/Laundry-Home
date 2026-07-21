@@ -61,24 +61,6 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { BookingFlow } from "./booking-flow";
 import { OrderTracking } from "./order-tracking";
 
-const NAV_GROUPS: NavGroup[] = [
-  {
-    label: "Customer",
-    items: [
-      { id: "dashboard", label: "Dashboard", icon: "LayoutDashboard" },
-      { id: "profile", label: "My Profile", icon: "User" },
-      { id: "discover", label: "Find Vendors", icon: "MapPin" },
-      { id: "booking", label: "Book Pickup", icon: "Package", badge: "New" },
-      { id: "orders", label: "My Orders", icon: "ClipboardList", badge: 3 },
-      { id: "subscriptions", label: "Subscription Plans", icon: "Calendar" },
-      { id: "payments", label: "Payments & Wallet", icon: "Wallet" },
-      { id: "coupons", label: "Coupons & Rewards", icon: "Ticket" },
-      { id: "favorites", label: "Favorites", icon: "Heart" },
-      { id: "reviews", label: "My Reviews", icon: "Star" },
-    ],
-  },
-];
-
 export function CustomerApp() {
   const { userId, walletBalance, loyaltyPoints } = useAppStore();
   const [view, setView] = useState("dashboard");
@@ -118,6 +100,24 @@ export function CustomerApp() {
 
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
   const completedOrders = (orders || []).filter((o) => o.status === "completed");
+
+  const NAV_GROUPS: NavGroup[] = [
+    {
+      label: "Customer",
+      items: [
+        { id: "dashboard", label: "Dashboard", icon: "LayoutDashboard" },
+        { id: "profile", label: "My Profile", icon: "User" },
+        { id: "discover", label: "Find Vendors", icon: "MapPin" },
+        { id: "booking", label: "Book Pickup", icon: "Package", badge: "New" },
+        { id: "orders", label: "My Orders", icon: "ClipboardList", badge: activeOrders.length || undefined },
+        { id: "subscriptions", label: "Subscription Plans", icon: "Calendar" },
+        { id: "payments", label: "Payments & Wallet", icon: "Wallet" },
+        { id: "coupons", label: "Coupons & Rewards", icon: "Ticket" },
+        { id: "favorites", label: "Favorites", icon: "Heart" },
+        { id: "reviews", label: "My Reviews", icon: "Star" },
+      ],
+    },
+  ];
 
   return (
     <AppShell
