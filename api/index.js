@@ -351,6 +351,160 @@ var auth_default = router2;
 
 // server/routes/orders.ts
 var import_express3 = require("express");
+
+// server/pricing.ts
+var PLATFORM_FEE = 25;
+var DELIVERY_FEE = 40;
+var EXPRESS_SURCHARGE = 50;
+var TAX_RATE = 0.18;
+var REWARD_POINTS_RATE = 100;
+var SERVICES = {
+  wash_fold: { basePrice: 60, pricingType: "per_kg", expressMultiplier: 1.5 },
+  wash_iron: { basePrice: 15, pricingType: "per_piece", expressMultiplier: 1.5 },
+  dry_cleaning: { basePrice: 120, pricingType: "per_piece", expressMultiplier: 1.8 },
+  steam_ironing: { basePrice: 18, pricingType: "per_piece", expressMultiplier: 1.6 },
+  premium_care: { basePrice: 250, pricingType: "per_piece", expressMultiplier: 2 },
+  delicate_care: { basePrice: 180, pricingType: "per_piece", expressMultiplier: 1.8 },
+  shoe_cleaning: { basePrice: 149, pricingType: "per_piece", expressMultiplier: 1.5 },
+  blanket: { basePrice: 199, pricingType: "per_piece", expressMultiplier: 1.4 },
+  curtain: { basePrice: 220, pricingType: "per_piece", expressMultiplier: 1.4 },
+  carpet: { basePrice: 499, pricingType: "per_piece", expressMultiplier: 1.3 },
+  bulk: { basePrice: 45, pricingType: "per_kg", expressMultiplier: 1.2 }
+};
+function computeSubtotal(items) {
+  let subtotal = 0;
+  let hasExpress = false;
+  for (const item of items) {
+    const svc = SERVICES[item.serviceKey];
+    if (!svc) continue;
+    const price = svc.basePrice * item.qty;
+    const multiplier = item.express ? svc.expressMultiplier : 1;
+    subtotal += price * multiplier;
+    if (item.express) hasExpress = true;
+  }
+  return { subtotal, hasExpress };
+}
+async function calculatePricing(input) {
+  const admin = createAdminClient();
+  const steps = [];
+  const { subtotal, hasExpress } = computeSubtotal(input.items);
+  steps.push({ label: "Subtotal", amount: subtotal });
+  let remaining = subtotal;
+  let couponDiscount = 0;
+  if (input.couponCode) {
+    const code = input.couponCode.toUpperCase();
+    const { data: coupon } = await admin.from("coupons").select("*").eq("code", code).single();
+    if (coupon && coupon.active && remaining >= coupon.min_order) {
+      if (coupon.type === "percentage") {
+        couponDiscount = Math.min(remaining * coupon.discount_pct / 100, coupon.max_discount);
+      } else {
+        couponDiscount = Math.min(coupon.max_discount, remaining);
+      }
+      steps.push({ label: `Coupon (${code})`, amount: -couponDiscount });
+    }
+  }
+  remaining -= couponDiscount;
+  let subscriptionDiscount = 0;
+  const { data: subscriptions } = await admin.from("user_subscriptions").select("*, subscription_plans!inner(savings_pct)").eq("user_id", input.userId).eq("status", "active").limit(1);
+  if (subscriptions && subscriptions.length > 0) {
+    const savingsPct = subscriptions[0].subscription_plans?.savings_pct || 0;
+    if (savingsPct > 0) {
+      subscriptionDiscount = Math.round(remaining * savingsPct / 100);
+      steps.push({ label: `Subscription (${savingsPct}% off)`, amount: -subscriptionDiscount });
+    }
+  }
+  remaining -= subscriptionDiscount;
+  let rewardPointsUsed = 0;
+  let rewardDiscount = 0;
+  if (input.redeemPoints && input.redeemPoints > 0) {
+    const { data: profile } = await admin.from("user_profiles").select("loyalty_points").eq("id", input.userId).single();
+    const availablePoints = profile?.loyalty_points || 0;
+    const pointsToUse = Math.min(input.redeemPoints, availablePoints);
+    rewardDiscount = Math.floor(pointsToUse / REWARD_POINTS_RATE);
+    rewardPointsUsed = rewardDiscount * REWARD_POINTS_RATE;
+    if (rewardDiscount > 0) {
+      steps.push({ label: `Reward Points (${rewardPointsUsed} pts)`, amount: -rewardDiscount });
+    }
+  }
+  remaining -= rewardDiscount;
+  const platformFee = PLATFORM_FEE;
+  const deliveryFee = DELIVERY_FEE;
+  steps.push({ label: "Platform Fee", amount: platformFee });
+  steps.push({ label: "Delivery Fee", amount: deliveryFee });
+  const expressSurcharge = hasExpress ? EXPRESS_SURCHARGE : 0;
+  if (expressSurcharge > 0) {
+    steps.push({ label: "Express Surcharge", amount: expressSurcharge });
+  }
+  let surgeCharge = 0;
+  if (input.pickupSlot) {
+    const hour = parseInt(input.pickupSlot.split(":")[0]);
+    const isPeak = hour >= 17 && hour <= 20 || hour >= 8 && hour <= 10;
+    if (isPeak) {
+      surgeCharge = Math.round(remaining * 0.1);
+      steps.push({ label: "Peak Time Surcharge (10%)", amount: surgeCharge });
+    }
+  }
+  if (input.pickupArea) {
+    const premiumAreas = ["Indiranagar", "Koramangala", "MG Road", "Whitefield", "Electronic City"];
+    if (premiumAreas.includes(input.pickupArea)) {
+      const areaSurcharge = Math.round(remaining * 0.05);
+      surgeCharge += areaSurcharge;
+      steps.push({ label: `Premium Area (${input.pickupArea})`, amount: areaSurcharge });
+    }
+  }
+  const taxableAmount = remaining + platformFee + deliveryFee + expressSurcharge + surgeCharge;
+  const taxes = Math.round(taxableAmount * TAX_RATE);
+  steps.push({ label: "GST (18%)", amount: taxes });
+  const total = taxableAmount + taxes;
+  steps.push({ label: "Total", amount: total });
+  return {
+    subtotal,
+    couponDiscount,
+    couponCode: input.couponCode,
+    subscriptionDiscount,
+    rewardPointsUsed,
+    rewardDiscount,
+    walletUsed: input.useWalletAmount || 0,
+    taxes,
+    platformFee,
+    deliveryFee,
+    expressSurcharge,
+    surgeCharge,
+    total,
+    breakdown: steps
+  };
+}
+async function applyPricingToOrder(orderData, pricing, userId) {
+  const admin = createAdminClient();
+  if (pricing.rewardPointsUsed > 0) {
+    const { data: profile } = await admin.from("user_profiles").select("loyalty_points").eq("id", userId).single();
+    const current = profile?.loyalty_points || 0;
+    if (current >= pricing.rewardPointsUsed) {
+      await admin.from("user_profiles").update({ loyalty_points: current - pricing.rewardPointsUsed }).eq("id", userId);
+    }
+  }
+  if (pricing.walletUsed > 0) {
+    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", userId).single();
+    const balance = profile?.wallet_balance || 0;
+    if (balance >= pricing.walletUsed) {
+      await admin.from("user_profiles").update({ wallet_balance: balance - pricing.walletUsed }).eq("id", userId);
+      await admin.from("wallet_transactions").insert({
+        user_id: userId,
+        amount: -pricing.walletUsed,
+        type: "debit",
+        description: `Payment for order ${orderData.code}`
+      });
+    }
+  }
+  if (pricing.couponCode) {
+    const { data: coupon } = await admin.from("coupons").select("id, used_count").eq("code", pricing.couponCode.toUpperCase()).single();
+    if (coupon) {
+      await admin.from("coupons").update({ used_count: coupon.used_count + 1 }).eq("id", coupon.id);
+    }
+  }
+}
+
+// server/routes/orders.ts
 var KNOWN_AREAS = {
   "Indiranagar": { lat: 12.9719, lng: 77.6413 },
   "Koramangala": { lat: 12.9352, lng: 77.6245 },
@@ -421,6 +575,29 @@ router3.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+router3.post("/pricing", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const pricing = await calculatePricing({
+      items: req.body.items || [],
+      couponCode: req.body.couponCode,
+      redeemPoints: req.body.redeemPoints,
+      useWalletAmount: req.body.useWalletAmount,
+      userId: user.id,
+      pickupArea: req.body.pickupArea || req.body.pickup_area,
+      pickupDate: req.body.pickupDate || req.body.pickup_date,
+      pickupSlot: req.body.pickupSlot || req.body.pickup_slot
+    });
+    res.json(pricing);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 router3.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -450,6 +627,16 @@ router3.post("/", async (req, res) => {
       (k) => vendorName.toLowerCase().includes(k.toLowerCase())
     ) : void 0;
     const vendorCoords = vendorAreaKey ? KNOWN_AREAS[vendorAreaKey] : void 0;
+    const pricing = await calculatePricing({
+      items: body.items || [],
+      couponCode: body.couponCode,
+      redeemPoints: body.redeemPoints || body.redeem_points,
+      useWalletAmount: body.useWalletAmount || body.use_wallet_amount || 0,
+      userId: user.id,
+      pickupArea: body.pickup_area,
+      pickupDate: body.pickup_date,
+      pickupSlot: body.pickup_slot
+    });
     const orderData = {
       code,
       customer_id: user.id,
@@ -469,13 +656,20 @@ router3.post("/", async (req, res) => {
       delivery_date: body.delivery_date || "",
       delivery_slot: body.delivery_slot || "",
       estimated_delivery_at: body.estimated_delivery_at || null,
-      amount: body.amount || 0,
-      taxes: body.taxes || 0,
-      platform_fee: body.platform_fee || 0,
-      delivery_fee: body.delivery_fee || 0,
-      total: body.total || 0,
+      amount: pricing.subtotal,
+      taxes: pricing.taxes,
+      platform_fee: pricing.platformFee,
+      delivery_fee: pricing.deliveryFee,
+      total: pricing.total,
+      coupon_code: pricing.couponCode || null,
+      coupon_discount: pricing.couponDiscount || 0,
+      subscription_discount: pricing.subscriptionDiscount || 0,
+      reward_points_used: pricing.rewardPointsUsed || 0,
+      wallet_used: pricing.walletUsed || 0,
+      express_surcharge: pricing.expressSurcharge || 0,
+      surge_charge: pricing.surgeCharge || 0,
       payment_method: body.payment_method || "cod",
-      payment_status: body.payment_status || "pending",
+      payment_status: pricing.walletUsed >= pricing.total ? "paid" : "pending",
       pickup_lat: pickupCoords?.lat || null,
       pickup_lng: pickupCoords?.lng || null,
       delivery_lat: vendorCoords?.lat || null,
@@ -490,6 +684,7 @@ router3.post("/", async (req, res) => {
       res.status(400).json({ error: error.message });
       return;
     }
+    await applyPricingToOrder(orderData, pricing, user.id);
     const { data: stages } = await adminClient.from("order_stage_definitions").select("*").order("sort_order");
     if (stages) {
       const doneUpTo = hasVendor ? 1 : 0;

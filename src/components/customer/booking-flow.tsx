@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
@@ -41,6 +41,25 @@ import type { ServiceKey, Address } from "@/lib/types";
 import type { Slot } from "@/lib/hooks/useSlots";
 import { cn, formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
+import { useAppStore } from "@/lib/store";
+import { useUserSubscriptions } from "@/lib/hooks/useUserSubscriptions";
+
+interface PricingBreakdown {
+  subtotal: number;
+  couponDiscount: number;
+  couponCode?: string;
+  subscriptionDiscount: number;
+  rewardPointsUsed: number;
+  rewardDiscount: number;
+  walletUsed: number;
+  taxes: number;
+  platformFee: number;
+  deliveryFee: number;
+  expressSurcharge: number;
+  surgeCharge: number;
+  total: number;
+  breakdown: { label: string; amount: number }[];
+}
 
 const PICKUP_SLOTS: Slot[] = [
   { id: "p1", slot: "7:00 AM - 9:00 AM", available: true, premium: false },
@@ -131,6 +150,16 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
   const [showAddAddr, setShowAddAddr] = useState(false);
   const [newAddr, setNewAddr] = useState({ label: "", line: "", area: "", city: "", pincode: "" });
   const [placing, setPlacing] = useState(false);
+  const [pricingResult, setPricingResult] = useState<PricingBreakdown | null>(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
+  const [useWallet, setUseWallet] = useState(false);
+  const [redeemPoints, setRedeemPoints] = useState(0);
+  const walletBalance = useAppStore((s) => s.walletBalance);
+  const loyaltyPoints = useAppStore((s) => s.loyaltyPoints);
+  const fetchWallet = useAppStore((s) => s.fetchWallet);
+  const { data: userSubscriptions } = useUserSubscriptions();
+  const activeSubscription = (userSubscriptions || []).find((s) => s.status === "active");
+
   const [confirmedOrder, setConfirmedOrder] = useState<{
     code: string;
     total: number;
@@ -149,24 +178,59 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
   ];
   const stepIndex = steps.findIndex((s) => s.id === step);
 
+  useEffect(() => {
+    if (open) fetchWallet();
+  }, [open, fetchWallet]);
+
+  const fetchPricing = useCallback(async (opts?: { coupon?: string; points?: number; walletAmt?: number }) => {
+    const items = Object.entries(selectedServices)
+      .filter(([, v]) => v.qty > 0)
+      .map(([key, v]) => {
+        const svc = servicesData.find((s) => s.key === key);
+        return {
+          serviceKey: key,
+          serviceName: svc?.name || key,
+          qty: v.qty,
+          unit: svc?.pricingType === "per_kg" ? "kg" : "piece",
+          unitPrice: svc?.basePrice || 0,
+          express: v.express,
+        };
+      });
+    if (items.length === 0) { setPricingResult(null); return; }
+    setPricingLoading(true);
+    try {
+      const addr = addrList.find((a) => a.id === pickupAddr);
+      const result = await api.post<PricingBreakdown>("/api/orders/pricing", {
+        items,
+        couponCode: opts?.coupon !== undefined ? opts.coupon : couponCode || undefined,
+        redeemPoints: opts?.points !== undefined ? opts.points : redeemPoints || undefined,
+        useWalletAmount: opts?.walletAmt !== undefined ? opts.walletAmt : (useWallet ? walletBalance : 0),
+        pickupArea: addr?.area,
+        pickupDate: resolveDate(pickupDate),
+        pickupSlot,
+      });
+      setPricingResult(result);
+    } catch {
+      setPricingResult(null);
+    } finally {
+      setPricingLoading(false);
+    }
+  }, [selectedServices, servicesData, addrList, pickupAddr, couponCode, redeemPoints, useWallet, walletBalance, pickupDate, pickupSlot]);
+
+  useEffect(() => {
+    if (step === "review") fetchPricing();
+  }, [step, fetchPricing]);
+
   const selectedServiceList = Object.entries(selectedServices).filter(([, v]) => v.qty > 0) as [ServiceKey, NonNullable<typeof selectedServices[ServiceKey]>][];
 
-  let subtotal = 0;
-  selectedServiceList.forEach(([key, v]) => {
-    const svc = servicesData.find((s) => s.key === key);
-    if (!svc) return;
-    let price = svc.basePrice * v.qty;
-    if (v.express) price *= svc.expressMultiplier;
-    subtotal += price;
-  });
-  const taxes = Math.round(subtotal * 0.18);
-  const platformFee = 25;
-  const deliveryFee = 40;
-  const expressSurcharge = selectedServiceList.some(([, v]) => v.express) ? 50 : 0;
-  let discount = 0;
-  if (couponCode === "FRESH50") discount = Math.min(150, subtotal * 0.5);
-  else if (couponCode === "WEEKEND25") discount = Math.min(100, subtotal * 0.25);
-  const total = subtotal + taxes + platformFee + deliveryFee + expressSurcharge - discount;
+  const pricing = pricingResult;
+  const subtotal = pricing?.subtotal ?? 0;
+  const taxes = pricing?.taxes ?? 0;
+  const platformFee = pricing?.platformFee ?? 0;
+  const deliveryFee = pricing?.deliveryFee ?? 0;
+  const expressSurcharge = pricing?.expressSurcharge ?? 0;
+  const discount = (pricing?.couponDiscount ?? 0) + (pricing?.subscriptionDiscount ?? 0) + (pricing?.rewardDiscount ?? 0);
+  const total = pricing?.total ?? 0;
 
   const DAY_OFFSET: Record<string, number> = { "Today": 0, "Tomorrow": 1, "Day after": 2, "3 days": 3 };
   function parseSlotStartHour(slot: string): number {
@@ -189,7 +253,7 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
     const dh = parseSlotStartHour(dSlot);
     return 24 + dh - ph >= 24;
   }
-  const isExpress = expressSurcharge > 0;
+  const isExpress = selectedServiceList.some(([, v]) => v.express);
   const gapWarnings: string[] = [];
   if (!isExpress && pickupSlot && deliverySlot && deliveryDate && pickupDate) {
     if (!isDeliverySlotValid(pickupDate, pickupSlot, deliveryDate, deliverySlot)) {
@@ -227,14 +291,15 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
           ? vendorsList?.[0]
           : vendorsList?.find((v) => v.id === selectedVendor);
 
+        const addr = addrList.find((a) => a.id === pickupAddr);
         const orderPayload = {
           vendor_id: chosenVendor?.id || null,
           vendor_name: chosenVendor?.name || vendorMode === "auto" ? "AI-assigned Vendor" : "Selected Vendor",
           vendor_logo_initials: chosenVendor?.logoInitials || "LH",
           vendor_logo_color: chosenVendor?.logoColor || "bg-primary",
           items,
-          pickup_address: addrList.find((a) => a.id === pickupAddr)?.line || "",
-          pickup_area: addrList.find((a) => a.id === pickupAddr)?.area || "",
+          pickup_address: addr?.line || "",
+          pickup_area: addr?.area || "",
           pickup_date: resolveDate(pickupDate),
           pickup_slot: pickupSlot,
           delivery_date: resolveDate(deliveryDate),
@@ -246,6 +311,9 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
           total,
           express: selectedServiceList.some(([, v]) => v.express),
           notes,
+          couponCode: couponCode || undefined,
+          redeemPoints: redeemPoints > 0 ? redeemPoints : undefined,
+          useWalletAmount: useWallet ? walletBalance : 0,
         };
 
         const newOrder = await api.post<{ code: string; total: number }>("/api/orders", orderPayload);
@@ -723,21 +791,38 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
                         </div>
                         <Separator className="my-3" />
                         <div className="space-y-1.5 text-sm">
-                          <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{formatINRDecimal(subtotal)}</span></div>
-                          <div className="flex justify-between"><span className="text-muted-foreground">Taxes (18% GST)</span><span>{formatINRDecimal(taxes)}</span></div>
-                          <div className="flex justify-between"><span className="text-muted-foreground">Platform fee</span><span>{formatINRDecimal(platformFee)}</span></div>
-                          <div className="flex justify-between"><span className="text-muted-foreground">Delivery fee</span><span>{formatINRDecimal(deliveryFee)}</span></div>
-                          {expressSurcharge > 0 && (
-                            <div className="flex justify-between"><span className="text-muted-foreground">Express surcharge</span><span>{formatINRDecimal(expressSurcharge)}</span></div>
+                          {pricingLoading ? (
+                            <div className="text-center py-4 text-muted-foreground text-xs">Calculating pricing...</div>
+                          ) : pricing?.breakdown ? (
+                            pricing.breakdown.map((item, i) => (
+                              <div key={i} className={cn(
+                                "flex justify-between",
+                                item.amount < 0 && "text-emerald-600",
+                                item.label === "Total" && "font-bold text-base pt-1 border-t border-border"
+                              )}>
+                                <span>{item.label}</span>
+                                <span>{item.amount < 0 ? "−" : ""}{formatINRDecimal(Math.abs(item.amount))}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <>
+                              <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span>{formatINRDecimal(subtotal)}</span></div>
+                              <div className="flex justify-between"><span className="text-muted-foreground">Taxes (18% GST)</span><span>{formatINRDecimal(taxes)}</span></div>
+                              <div className="flex justify-between"><span className="text-muted-foreground">Platform fee</span><span>{formatINRDecimal(platformFee)}</span></div>
+                              <div className="flex justify-between"><span className="text-muted-foreground">Delivery fee</span><span>{formatINRDecimal(deliveryFee)}</span></div>
+                              {expressSurcharge > 0 && (
+                                <div className="flex justify-between"><span className="text-muted-foreground">Express surcharge</span><span>{formatINRDecimal(expressSurcharge)}</span></div>
+                              )}
+                              {discount > 0 && (
+                                <div className="flex justify-between text-emerald-600"><span>Discount</span><span>−{formatINRDecimal(discount)}</span></div>
+                              )}
+                              <Separator className="my-2" />
+                              <div className="flex justify-between font-bold text-base">
+                                <span>Total</span>
+                                <span>{formatINRDecimal(total)}</span>
+                              </div>
+                            </>
                           )}
-                          {discount > 0 && (
-                            <div className="flex justify-between text-emerald-600"><span>Discount ({couponCode})</span><span>−{formatINRDecimal(discount)}</span></div>
-                          )}
-                          <Separator className="my-2" />
-                          <div className="flex justify-between font-bold text-base">
-                            <span>Total</span>
-                            <span>{formatINRDecimal(total)}</span>
-                          </div>
                         </div>
                       </Card>
 
@@ -801,25 +886,121 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
                           <div className="flex gap-2">
                             <Input
                               value={couponCode}
-                              onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                              onChange={(e) => {
+                                setCouponCode(e.target.value.toUpperCase());
+                              }}
+                              onBlur={(e) => {
+                                const val = (e.target as HTMLInputElement).value.toUpperCase();
+                                if (val) fetchPricing({ coupon: val });
+                              }}
                               placeholder="Enter code"
                               className="text-sm font-mono"
                             />
-                            <Button variant="outline" size="sm">Apply</Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => fetchPricing({ coupon: couponCode })}
+                            >
+                              Apply
+                            </Button>
                           </div>
-                          {couponCode && discount > 0 && (
-                            <p className="text-xs text-emerald-600 mt-2">✓ {formatINRDecimal(discount)} discount applied!</p>
+                          {pricing?.couponDiscount ? (
+                            <p className="text-xs text-emerald-600 mt-2">✓ {formatINRDecimal(pricing.couponDiscount)} discount applied!</p>
+                          ) : couponCode && pricing?.couponDiscount === 0 ? (
+                            <p className="text-xs text-rose-500 mt-2">✗ Invalid or expired coupon</p>
+                          ) : null}
+                        </Card>
+
+                        {activeSubscription && (
+                          <Card className="p-4 shadow-soft border-emerald-200 bg-emerald-50/50">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700 mb-1">✨ Subscription Active</p>
+                            <p className="text-xs text-emerald-600">You get {pricing?.subscriptionDiscount ? `${formatINRDecimal(pricing.subscriptionDiscount)} off` : "a discount"} on this order.</p>
+                          </Card>
+                        )}
+
+                        <Card className="p-4 shadow-soft">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Wallet</p>
+                            <Wallet className="h-3.5 w-3.5 text-muted-foreground" />
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium">Balance: {formatINRDecimal(walletBalance)}</p>
+                              <p className="text-xs text-muted-foreground">{loyaltyPoints} loyalty points</p>
+                            </div>
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <span className="text-xs text-muted-foreground">Use wallet</span>
+                              <input
+                                type="checkbox"
+                                checked={useWallet}
+                                onChange={(e) => {
+                                  setUseWallet(e.target.checked);
+                                }}
+                                className="accent-primary h-4 w-4"
+                              />
+                            </label>
+                          </div>
+                          {useWallet && walletBalance > 0 && (
+                            <p className="text-xs text-emerald-600 mt-1.5">
+                              {walletBalance >= total ? "Wallet covers the full amount!" : `${formatINRDecimal(walletBalance)} will be applied`}
+                            </p>
+                          )}
+                        </Card>
+
+                        <Card className="p-4 shadow-soft">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Reward Points</p>
+                            <Star className="h-3.5 w-3.5 text-muted-foreground" />
+                          </div>
+                          {loyaltyPoints > 0 ? (
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground">{loyaltyPoints} pts available (100 pts = ₹1)</p>
+                              <div className="flex gap-2">
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  max={loyaltyPoints}
+                                  step={100}
+                                  value={redeemPoints || ""}
+                                  onChange={(e) => {
+                                    const val = Math.min(parseInt(e.target.value) || 0, loyaltyPoints);
+                                    setRedeemPoints(val);
+                                  }}
+                                  onBlur={(e) => {
+                                    const val = Math.min(parseInt((e.target as HTMLInputElement).value) || 0, loyaltyPoints);
+                                    if (val > 0) fetchPricing({ points: val });
+                                  }}
+                                  placeholder="Enter points"
+                                  className="text-sm font-mono"
+                                />
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setRedeemPoints(loyaltyPoints);
+                                    fetchPricing({ points: loyaltyPoints });
+                                  }}
+                                >
+                                  Max
+                                </Button>
+                              </div>
+                              {pricing?.rewardDiscount ? (
+                                <p className="text-xs text-emerald-600">✓ {formatINRDecimal(pricing.rewardDiscount)} discount applied</p>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No reward points available. Earn points with each order!</p>
                           )}
                         </Card>
 
                         <Card className="p-4 shadow-soft">
                           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Payment Method</p>
-                          <RadioGroup defaultValue="upi">
+                          <RadioGroup defaultValue="cod">
                             <div className="space-y-1.5">
                               {[
                                 { id: "upi", label: "UPI", icon: "📱" },
                                 { id: "card", label: "Credit/Debit Card", icon: "💳" },
-                                { id: "wallet", label: `Wallet (₹1,250)`, icon: "👛" },
+                                { id: "wallet", label: `Wallet (${formatINRDecimal(walletBalance)})`, icon: "👛" },
                                 { id: "cod", label: "Cash on Delivery", icon: "💵" },
                               ].map((p) => (
                                 <label key={p.id} className="flex items-center gap-2 cursor-pointer p-1.5 rounded hover:bg-muted/30">

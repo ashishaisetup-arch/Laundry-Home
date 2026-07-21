@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { createAdminClient, createServerClientWithCookies } from "../supabase";
+import { calculatePricing, applyPricingToOrder } from "../pricing";
 
 const KNOWN_AREAS: Record<string, { lat: number; lng: number }> = {
   "Indiranagar":     { lat: 12.9719, lng: 77.6413 },
@@ -62,6 +63,28 @@ router.get("/", async (req: Request, res: Response) => {
   }
 });
 
+router.post("/pricing", async (req: Request, res: Response) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
+
+    const pricing = await calculatePricing({
+      items: req.body.items || [],
+      couponCode: req.body.couponCode,
+      redeemPoints: req.body.redeemPoints,
+      useWalletAmount: req.body.useWalletAmount,
+      userId: user.id,
+      pickupArea: req.body.pickupArea || req.body.pickup_area,
+      pickupDate: req.body.pickupDate || req.body.pickup_date,
+      pickupSlot: req.body.pickupSlot || req.body.pickup_slot,
+    });
+    res.json(pricing);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post("/", async (req: Request, res: Response) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -97,6 +120,18 @@ router.post("/", async (req: Request, res: Response) => {
     ) : undefined;
     const vendorCoords = vendorAreaKey ? KNOWN_AREAS[vendorAreaKey] : undefined;
 
+    // Server-side pricing recalculation
+    const pricing = await calculatePricing({
+      items: body.items || [],
+      couponCode: body.couponCode,
+      redeemPoints: body.redeemPoints || body.redeem_points,
+      useWalletAmount: body.useWalletAmount || body.use_wallet_amount || 0,
+      userId: user.id,
+      pickupArea: body.pickup_area,
+      pickupDate: body.pickup_date,
+      pickupSlot: body.pickup_slot,
+    });
+
     const orderData = {
       code,
       customer_id: user.id,
@@ -116,13 +151,20 @@ router.post("/", async (req: Request, res: Response) => {
       delivery_date: body.delivery_date || "",
       delivery_slot: body.delivery_slot || "",
       estimated_delivery_at: body.estimated_delivery_at || null,
-      amount: body.amount || 0,
-      taxes: body.taxes || 0,
-      platform_fee: body.platform_fee || 0,
-      delivery_fee: body.delivery_fee || 0,
-      total: body.total || 0,
+      amount: pricing.subtotal,
+      taxes: pricing.taxes,
+      platform_fee: pricing.platformFee,
+      delivery_fee: pricing.deliveryFee,
+      total: pricing.total,
+      coupon_code: pricing.couponCode || null,
+      coupon_discount: pricing.couponDiscount || 0,
+      subscription_discount: pricing.subscriptionDiscount || 0,
+      reward_points_used: pricing.rewardPointsUsed || 0,
+      wallet_used: pricing.walletUsed || 0,
+      express_surcharge: pricing.expressSurcharge || 0,
+      surge_charge: pricing.surgeCharge || 0,
       payment_method: body.payment_method || "cod",
-      payment_status: body.payment_status || "pending",
+      payment_status: pricing.walletUsed >= pricing.total ? "paid" : "pending",
       pickup_lat: pickupCoords?.lat || null,
       pickup_lng: pickupCoords?.lng || null,
       delivery_lat: vendorCoords?.lat || null,
@@ -134,6 +176,9 @@ router.post("/", async (req: Request, res: Response) => {
     };
     const { data, error } = await adminClient.from("orders").insert(orderData).select().single();
     if (error) { res.status(400).json({ error: error.message }); return; }
+
+    // Apply reward/wallet deductions and increment coupon usage
+    await applyPricingToOrder(orderData, pricing, user.id);
 
     const { data: stages } = await adminClient.from("order_stage_definitions").select("*").order("sort_order");
     if (stages) {
