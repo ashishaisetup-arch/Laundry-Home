@@ -105,6 +105,19 @@ export function CustomerApp() {
     refetchOrders();
   };
 
+  const handleCancelOrder = async (orderId: string) => {
+    try {
+      await api.post(`/api/orders/${orderId}/cancel`);
+      patchOrder(orderId, { status: "cancelled", paymentStatus: "refunded" });
+      refetchOrders();
+      toast.success("Order cancelled", {
+        description: "Refund will be processed in 3-5 business days.",
+      });
+    } catch (err: any) {
+      toast.error("Cancel failed", { description: err.message });
+    }
+  };
+
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
   const completedOrders = (orders || []).filter((o) => o.status === "completed");
 
@@ -157,6 +170,7 @@ export function CustomerApp() {
             activeOrders={activeOrders}
             completedOrders={completedOrders}
             onTrack={(id) => setTrackingOrder(id)}
+            onCancel={handleCancelOrder}
           />
         )}
         {view === "payments" && <CustomerPayments key="p" walletBalance={walletBalance} />}
@@ -303,7 +317,7 @@ function CustomerDashboard({
         </div>
         <div className="grid md:grid-cols-2 gap-4">
           {activeOrders.slice(0, 2).map((order) => (
-            <OrderCard key={order.id} order={order} onClick={() => onTrack(order.id)} />
+            <OrderCard key={order.id} order={order} onClick={() => onTrack(order.id)} onCancel={handleCancelOrder} />
           ))}
         </div>
       </div>
@@ -837,10 +851,12 @@ function CustomerOrders({
   activeOrders,
   completedOrders,
   onTrack,
+  onCancel,
 }: {
   activeOrders: Order[];
   completedOrders: Order[];
   onTrack: (id: string) => void;
+  onCancel?: (orderId: string) => void;
 }) {
   return (
     <Tabs defaultValue="active">
@@ -855,14 +871,14 @@ function CustomerOrders({
       <TabsContent value="active" className="mt-4">
         <div className="grid md:grid-cols-2 gap-4">
           {activeOrders.map((o) => (
-            <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} />
+            <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} onCancel={onCancel} />
           ))}
         </div>
       </TabsContent>
       <TabsContent value="completed" className="mt-4">
         <div className="grid md:grid-cols-2 gap-4">
           {completedOrders.map((o) => (
-            <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} />
+            <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} onCancel={onCancel} />
           ))}
         </div>
       </TabsContent>
