@@ -60,6 +60,9 @@ import { api } from "@/lib/api/client";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { BookingFlow } from "./booking-flow";
 import { OrderTracking } from "./order-tracking";
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
+import { DashboardSkeleton, OrderCardSkeleton } from "@/components/shared/skeleton-card";
 
 export function CustomerApp() {
   const { userId, walletBalance, loyaltyPoints } = useAppStore();
@@ -68,7 +71,7 @@ export function CustomerApp() {
   const [trackingOrder, setTrackingOrder] = useState<string | null>(null);
   const [discoverArea, setDiscoverArea] = useState<string | null>(null);
   const [bookingLocation, setBookingLocation] = useState<{lat: number; lng: number} | null>(null);
-  const { data: ordersHook, refetch: refetchOrders } = useOrders(userId ? { customerId: userId } : undefined);
+  const { data: ordersHook, loading: ordersLoading, error: ordersError, refetch: refetchOrders } = useOrders(userId ? { customerId: userId } : undefined);
   const setOrders = useAppStore((s) => s.setOrders);
   const patchOrder = useAppStore((s) => s.patchOrder);
   const orders = useAppStore((s) => s.orders);
@@ -160,11 +163,13 @@ export function CustomerApp() {
     >
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
+          ordersLoading ? <DashboardSkeleton /> : ordersError ? <ErrorState message={ordersError} onRetry={refetchOrders} /> :
           <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} onCancel={handleCancelOrder} />
         )}
         {view === "profile" && <CustomerProfile key="pf" />}
         {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
         {view === "orders" && (
+          ordersLoading ? <div className="grid md:grid-cols-2 gap-4"><OrderCardSkeleton /><OrderCardSkeleton /></div> : ordersError ? <ErrorState message={ordersError} onRetry={refetchOrders} /> :
           <CustomerOrders
             key="o"
             activeOrders={activeOrders}
@@ -317,11 +322,20 @@ function CustomerDashboard({
           </h3>
           <Button variant="ghost" size="sm" className="text-xs" onClick={() => onNavigate("orders")}>View all</Button>
         </div>
-        <div className="grid md:grid-cols-2 gap-4">
-          {activeOrders.slice(0, 2).map((order) => (
-            <OrderCard key={order.id} order={order} onClick={() => onTrack(order.id)} onCancel={onCancel} />
-          ))}
-        </div>
+        {activeOrders.length > 0 ? (
+          <div className="grid md:grid-cols-2 gap-4">
+            {activeOrders.slice(0, 2).map((order) => (
+              <OrderCard key={order.id} order={order} onClick={() => onTrack(order.id)} onCancel={onCancel} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            icon={Package}
+            title="No active orders"
+            description="Place your first order to see it here"
+            action={<Button onClick={onBook}><Plus className="mr-1.5 h-4 w-4" />Book Pickup</Button>}
+          />
+        )}
       </div>
 
 
@@ -871,18 +885,26 @@ function CustomerOrders({
         </TabsTrigger>
       </TabsList>
       <TabsContent value="active" className="mt-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          {activeOrders.map((o) => (
-            <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} onCancel={onCancel} />
-          ))}
-        </div>
+        {activeOrders.length > 0 ? (
+          <div className="grid md:grid-cols-2 gap-4">
+            {activeOrders.map((o) => (
+              <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} onCancel={onCancel} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState icon={Package} title="No active orders" description="Your in-progress orders will appear here" />
+        )}
       </TabsContent>
       <TabsContent value="completed" className="mt-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          {completedOrders.map((o) => (
-            <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} onCancel={onCancel} />
-          ))}
-        </div>
+        {completedOrders.length > 0 ? (
+          <div className="grid md:grid-cols-2 gap-4">
+            {completedOrders.map((o) => (
+              <OrderCard key={o.id} order={o} onClick={() => onTrack(o.id)} onCancel={onCancel} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState icon={Package} title="No completed orders" description="Completed orders will appear here" />
+        )}
       </TabsContent>
     </Tabs>
   );

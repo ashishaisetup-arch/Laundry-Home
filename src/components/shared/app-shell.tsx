@@ -1,5 +1,5 @@
 
-import { useState, useRef, type ReactNode } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bell,
@@ -19,6 +19,7 @@ import {
   Users,
   Shield,
   LayoutDashboard,
+  MessageSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -169,9 +170,27 @@ export function AppShell({
     userEmail,
     userAvatar,
     role,
+    theme,
+    toggleTheme,
     logout,
     toggleAi,
   } = useAppStore();
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        const modals = document.querySelectorAll("[data-state='open']");
+        if (modals.length > 0) return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>("input[placeholder*='Search']")?.focus();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const sidebar = (
     <div className="flex h-full flex-col bg-sidebar">
@@ -406,6 +425,10 @@ export function AppShell({
                 <Settings className="mr-2 h-4 w-4" />
                 Settings
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={toggleTheme}>
+                {theme === "dark" ? <Sun className="mr-2 h-4 w-4" /> : <Moon className="mr-2 h-4 w-4" />}
+                {theme === "dark" ? "Light Mode" : "Dark Mode"}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={logout} className="text-rose-600 focus:text-rose-700">
                 <LogOut className="mr-2 h-4 w-4" />
@@ -448,6 +471,15 @@ export function AppShell({
 
       {/* AI Assistant overlay */}
       <AiAssistant />
+
+      {/* Mobile AI FAB */}
+      <button
+        onClick={toggleAi}
+        className="lg:hidden fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-float hover:bg-primary/90 active:scale-95 transition-all duration-200"
+        aria-label="Open AI Assistant"
+      >
+        <MessageSquare className="h-6 w-6" />
+      </button>
     </div>
   );
 }
