@@ -86,6 +86,8 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
     return () => { cancelledFetch = true; };
   }, [orderId, loading, order, liveLoc?.lat, liveLoc?.lng, order?.deliveryLat, order?.deliveryLng]);
 
+  const markOrderCancelled = useAppStore((s) => s.markOrderCancelled);
+
   if (!orderId || loading || !order) return null;
 
   const currentStage = ORDER_STAGE_FLOW[order.currentStageIndex];
@@ -95,8 +97,6 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
   const isCancellable = !["completed", "cancelled", "delivered", "out_for_delivery"].includes(order.status) && !cancelled;
   const isCompleted = ["completed", "delivered"].includes(order.status) && !cancelled;
   const milestoneIndices = [0, Math.floor(ORDER_STAGE_FLOW.length / 3), Math.floor(ORDER_STAGE_FLOW.length * 2 / 3), ORDER_STAGE_FLOW.length - 1];
-
-  const markOrderCancelled = useAppStore((s) => s.markOrderCancelled);
 
   const handleCancel = async () => {
     try {
