@@ -54,6 +54,7 @@ import { cn, formatINR } from "@/lib/utils";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { useOrderStages, useAuditLogs, useFeatureFlags, useApiKeys, useWebhooks, useUsers, useSystemConfig, useVendors, useRbac } from "@/lib/hooks";
+import { useRouterView } from "@/lib/hooks/use-router-view";
 import type { AdminUser } from "@/lib/hooks/useUsers";
 import type { SystemConfig } from "@/lib/hooks/useSystemConfig";
 import type { RolePermission } from "@/lib/hooks/useRbac";
@@ -76,7 +77,7 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 export function SuperAdminApp() {
-  const [view, setView] = useState("overview");
+  const [view, setView, handleNavigateFromRouter] = useRouterView("overview");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const { data: users } = useUsers();
   const { data: vendorsList } = useVendors();
@@ -86,7 +87,7 @@ export function SuperAdminApp() {
       setShowOnboarding(true);
       return;
     }
-    setView(v);
+    handleNavigateFromRouter(v);
   };
 
   return (
