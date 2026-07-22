@@ -111,7 +111,7 @@ export function AuthLanding() {
             <a href="#vendors" className="hover:text-foreground transition-colors">For Vendors</a>
           </nav>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="hidden sm:flex" onClick={() => setShowAuth(true)}>
+            <Button variant="ghost" size="sm" className="hidden sm:flex" onClick={() => { setIsSignUp(false); setShowAuth(true); }}>
               Sign in
             </Button>
             <Button
@@ -401,6 +401,7 @@ export function AuthLanding() {
               setShowAuth(false);
               setStep("method");
               setMethod("otp");
+              setIsSignUp(false);
             }}
             method={method}
             step={step}
