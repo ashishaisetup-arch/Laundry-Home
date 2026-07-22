@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowRight,
@@ -53,7 +53,7 @@ const SERVICES = [
 ];
 
 export function AuthLanding() {
-  const { signInWithOAuth, verifyOtp, signInWithEmail, signUp, authLoading } = useAppStore();
+  const { signInWithOAuth, signInWithPhone, verifyOtp, signInWithEmail, signUp, authLoading } = useAppStore();
   const [showAuth, setShowAuth] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
   const [method, setMethod] = useState<AuthMethod>("otp");
@@ -63,6 +63,11 @@ export function AuthLanding() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const resendTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const openAuth = (signUp: boolean) => {
     setIsSignUp(signUp);
@@ -73,6 +78,10 @@ export function AuthLanding() {
     setPassword("");
     setOtp("");
     setSignupName("");
+    setSendingOtp(false);
+    setOtpSent(false);
+    setOtpError(null);
+    setResendCooldown(0);
     setShowAuth(true);
   };
 
@@ -86,7 +95,51 @@ export function AuthLanding() {
     setPassword("");
     setOtp("");
     setSignupName("");
+    setSendingOtp(false);
+    setOtpSent(false);
+    setOtpError(null);
+    setResendCooldown(0);
   };
+
+  const sendOtp = async (phoneNumber: string) => {
+    if (phoneNumber.length !== 10 || sendingOtp) return;
+    setSendingOtp(true);
+    setOtpError(null);
+    try {
+      await signInWithPhone(`+91${phoneNumber}`);
+      setOtpSent(true);
+      setResendCooldown(30);
+      toast.success("OTP sent to " + phoneNumber);
+    } catch (e: any) {
+      setOtpError(e.message || "Failed to send OTP");
+      toast.error(e.message || "Failed to send OTP");
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  // Auto-send OTP when phone reaches 10 digits on OTP step
+  useEffect(() => {
+    if (step === "otp" && phone.length === 10 && !otpSent && !sendingOtp) {
+      sendOtp(phone);
+    }
+  }, [step, phone, otpSent, sendingOtp]);
+
+  // Resend countdown
+  useEffect(() => {
+    if (resendCooldown > 0) {
+      resendTimer.current = setInterval(() => {
+        setResendCooldown((c) => {
+          if (c <= 1) {
+            if (resendTimer.current) clearInterval(resendTimer.current);
+            return 0;
+          }
+          return c - 1;
+        });
+      }, 1000);
+    }
+    return () => { if (resendTimer.current) clearInterval(resendTimer.current); };
+  }, [resendCooldown > 0]);
 
   const handleVerifyOtp = async () => {
     if (phone.length === 10 && otp.length >= 6) {
@@ -441,6 +494,11 @@ export function AuthLanding() {
             onVerifyOtp={handleVerifyOtp}
             onPasswordLogin={handlePasswordLogin}
             authLoading={authLoading}
+            sendingOtp={sendingOtp}
+            otpSent={otpSent}
+            otpError={otpError}
+            resendCooldown={resendCooldown}
+            onResend={() => sendOtp(phone)}
           />
         )}
       </AnimatePresence>
@@ -472,6 +530,11 @@ function AuthModal({
   onVerifyOtp,
   onPasswordLogin,
   authLoading,
+  sendingOtp,
+  otpSent,
+  otpError,
+  resendCooldown,
+  onResend,
 }: {
   onClose: () => void;
   method: AuthMethod;
@@ -493,6 +556,11 @@ function AuthModal({
   onVerifyOtp: () => void;
   onPasswordLogin: () => void;
   authLoading: boolean;
+  sendingOtp: boolean;
+  otpSent: boolean;
+  otpError: string | null;
+  resendCooldown: number;
+  onResend: () => void;
 }) {
   return (
     <>
@@ -625,28 +693,47 @@ function AuthModal({
 
                     {phone.length === 10 && (
                       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-                        <Label className="text-xs font-semibold">Enter OTP</Label>
-                        <p className="text-[11px] text-muted-foreground mb-2">Sent to +91 {phone} · use any 6 digits</p>
-                        <InputOTP maxLength={6} value={otp} onChange={setOtp}>
-                          <InputOTPGroup>
-                            <InputOTPSlot index={0} />
-                            <InputOTPSlot index={1} />
-                            <InputOTPSlot index={2} />
-                            <InputOTPSlot index={3} />
-                            <InputOTPSlot index={4} />
-                            <InputOTPSlot index={5} />
-                          </InputOTPGroup>
-                        </InputOTP>
+                        {sendingOtp ? (
+                          <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                            Sending OTP...
+                          </div>
+                        ) : otpError ? (
+                          <div className="rounded-lg bg-rose-50 dark:bg-rose-950/20 p-3 text-sm text-rose-600 dark:text-rose-400">
+                            {otpError}
+                          </div>
+                        ) : otpSent ? (
+                          <>
+                            <Label className="text-xs font-semibold">Enter OTP</Label>
+                            <p className="text-[11px] text-muted-foreground mb-2">Sent to +91 {phone} · use any 6 digits</p>
+                            <InputOTP maxLength={6} value={otp} onChange={setOtp}>
+                              <InputOTPGroup>
+                                <InputOTPSlot index={0} />
+                                <InputOTPSlot index={1} />
+                                <InputOTPSlot index={2} />
+                                <InputOTPSlot index={3} />
+                                <InputOTPSlot index={4} />
+                                <InputOTPSlot index={5} />
+                              </InputOTPGroup>
+                            </InputOTP>
+                          </>
+                        ) : (
+                          <div className="text-sm text-muted-foreground text-center py-2">
+                            Click below to receive OTP
+                          </div>
+                        )}
                       </motion.div>
                     )}
 
                     <Button
                       className="w-full bg-primary hover:bg-primary/90 h-11"
-                      disabled={otp.length < 6 || authLoading}
+                      disabled={otp.length < 6 || authLoading || !otpSent}
                       onClick={onVerifyOtp}
                     >
                       {authLoading ? (
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      ) : !otpSent ? (
+                        "Enter phone number first"
                       ) : otp.length < 6 ? (
                         "Enter OTP to continue"
                       ) : isSignUp ? (
@@ -654,12 +741,21 @@ function AuthModal({
                       ) : (
                         "Verify & Sign in"
                       )}
-                      {!authLoading && otp.length >= 6 && <ArrowRight className="ml-2 h-4 w-4" />}
+                      {!authLoading && otpSent && otp.length >= 6 && <ArrowRight className="ml-2 h-4 w-4" />}
                     </Button>
 
-                    <p className="text-[11px] text-center text-muted-foreground">
-                      Didn&apos;t receive code? <button className="text-primary hover:underline">Resend in 0:30</button>
-                    </p>
+                    {otpSent && (
+                      <p className="text-[11px] text-center text-muted-foreground">
+                        Didn&apos;t receive code?{" "}
+                        {resendCooldown > 0 ? (
+                          <span className="text-muted-foreground">Resend in {resendCooldown}s</span>
+                        ) : (
+                          <button className="text-primary hover:underline" onClick={onResend}>
+                            Resend
+                          </button>
+                        )}
+                      </p>
+                    )}
                   </motion.div>
                 )}
 
