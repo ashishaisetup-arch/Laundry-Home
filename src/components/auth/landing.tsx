@@ -117,7 +117,7 @@ export function AuthLanding() {
             <Button
               size="sm"
               className="bg-primary hover:bg-primary/90"
-              onClick={() => setShowAuth(true)}
+              onClick={() => { setIsSignUp(true); setShowAuth(true); }}
             >
               Get Started
               <ArrowRight className="ml-1.5 h-4 w-4" />
@@ -160,12 +160,12 @@ export function AuthLanding() {
                 <Button
                   size="lg"
                   className="bg-primary hover:bg-primary/90 h-12 px-6 text-base shadow-lift"
-                  onClick={() => setShowAuth(true)}
+                  onClick={() => { setIsSignUp(true); setShowAuth(true); }}
                 >
                   Book your first pickup
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
-                <Button size="lg" variant="outline" className="h-12 px-6 text-base" onClick={() => setShowAuth(true)}>
+                <Button size="lg" variant="outline" className="h-12 px-6 text-base" onClick={() => { setIsSignUp(true); setShowAuth(true); }}>
                   <Store className="mr-2 h-5 w-5" />
                   Become a vendor
                 </Button>
@@ -308,7 +308,7 @@ export function AuthLanding() {
               <Button
                 size="lg"
                 className="mt-7 bg-primary hover:bg-primary/90 h-12 px-6"
-                onClick={() => setShowAuth(true)}
+                onClick={() => { setIsSignUp(true); setShowAuth(true); }}
               >
                 Register your business
                 <ArrowRight className="ml-2 h-5 w-5" />
@@ -336,7 +336,7 @@ export function AuthLanding() {
               <Button
                 size="lg"
                 className="mt-6 bg-primary hover:bg-primary/90 h-12 px-8 text-base shadow-lift"
-                onClick={() => setShowAuth(true)}
+                onClick={() => { setIsSignUp(true); setShowAuth(true); }}
               >
                 Get started free
                 <ArrowRight className="ml-2 h-5 w-5" />
