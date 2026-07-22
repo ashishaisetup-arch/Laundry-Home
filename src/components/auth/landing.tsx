@@ -64,6 +64,30 @@ export function AuthLanding() {
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
 
+  const openAuth = (signUp: boolean) => {
+    setIsSignUp(signUp);
+    setStep("method");
+    setMethod("otp");
+    setPhone("");
+    setEmail("");
+    setPassword("");
+    setOtp("");
+    setSignupName("");
+    setShowAuth(true);
+  };
+
+  const closeAuth = () => {
+    setShowAuth(false);
+    setStep("method");
+    setMethod("otp");
+    setIsSignUp(false);
+    setPhone("");
+    setEmail("");
+    setPassword("");
+    setOtp("");
+    setSignupName("");
+  };
+
   const handleVerifyOtp = async () => {
     if (phone.length === 10 && otp.length >= 6) {
       try {
@@ -111,13 +135,13 @@ export function AuthLanding() {
             <a href="#vendors" className="hover:text-foreground transition-colors">For Vendors</a>
           </nav>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="hidden sm:flex" onClick={() => { setIsSignUp(false); setShowAuth(true); }}>
+            <Button variant="ghost" size="sm" className="hidden sm:flex" onClick={() => openAuth(false)}>
               Sign in
             </Button>
             <Button
               size="sm"
               className="bg-primary hover:bg-primary/90"
-              onClick={() => { setIsSignUp(true); setShowAuth(true); }}
+              onClick={() => openAuth(true)}
             >
               Get Started
               <ArrowRight className="ml-1.5 h-4 w-4" />
@@ -160,12 +184,12 @@ export function AuthLanding() {
                 <Button
                   size="lg"
                   className="bg-primary hover:bg-primary/90 h-12 px-6 text-base shadow-lift"
-                  onClick={() => { setIsSignUp(true); setShowAuth(true); }}
+                  onClick={() => openAuth(true)}
                 >
                   Book your first pickup
                   <ArrowRight className="ml-2 h-5 w-5" />
                 </Button>
-                <Button size="lg" variant="outline" className="h-12 px-6 text-base" onClick={() => { setIsSignUp(true); setShowAuth(true); }}>
+                <Button size="lg" variant="outline" className="h-12 px-6 text-base" onClick={() => openAuth(true)}>
                   <Store className="mr-2 h-5 w-5" />
                   Become a vendor
                 </Button>
@@ -308,7 +332,7 @@ export function AuthLanding() {
               <Button
                 size="lg"
                 className="mt-7 bg-primary hover:bg-primary/90 h-12 px-6"
-                onClick={() => { setIsSignUp(true); setShowAuth(true); }}
+                onClick={() => openAuth(true)}
               >
                 Register your business
                 <ArrowRight className="ml-2 h-5 w-5" />
@@ -336,7 +360,7 @@ export function AuthLanding() {
               <Button
                 size="lg"
                 className="mt-6 bg-primary hover:bg-primary/90 h-12 px-8 text-base shadow-lift"
-                onClick={() => { setIsSignUp(true); setShowAuth(true); }}
+                onClick={() => openAuth(true)}
               >
                 Get started free
                 <ArrowRight className="ml-2 h-5 w-5" />
@@ -397,12 +421,7 @@ export function AuthLanding() {
       <AnimatePresence>
         {showAuth && (
           <AuthModal
-            onClose={() => {
-              setShowAuth(false);
-              setStep("method");
-              setMethod("otp");
-              setIsSignUp(false);
-            }}
+            onClose={closeAuth}
             method={method}
             step={step}
             phone={phone}
