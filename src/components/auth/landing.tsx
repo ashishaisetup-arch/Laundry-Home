@@ -629,6 +629,8 @@ function AuthModal({
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
                       ) : otp.length < 6 ? (
                         "Enter OTP to continue"
+                      ) : isSignUp ? (
+                        "Verify & Create account"
                       ) : (
                         "Verify & Sign in"
                       )}
