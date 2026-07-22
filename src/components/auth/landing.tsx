@@ -144,7 +144,7 @@ export function AuthLanding() {
   const handleVerifyOtp = async () => {
     if (phone.length === 10 && otp.length >= 6) {
       try {
-        await verifyOtp(phone, otp);
+        await verifyOtp(`+91${phone}`, otp);
       } catch (e: any) {
         toast.error(e.message || "Verification failed");
       }
