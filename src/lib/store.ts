@@ -385,9 +385,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // UI
-  theme: "light",
+  theme: (typeof document !== "undefined" && document.documentElement.classList.contains("dark")) ? "dark" : "light",
   sidebarOpen: false,
-  toggleTheme: () => set((s) => ({ theme: s.theme === "light" ? "dark" : "light" })),
+  toggleTheme: () => set((s) => {
+    const next = s.theme === "light" ? "dark" : "light";
+    if (typeof document !== "undefined") {
+      document.documentElement.classList.toggle("dark", next === "dark");
+    }
+    try { localStorage.setItem("theme", next); } catch {}
+    return { theme: next };
+  }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebar: (open) => set({ sidebarOpen: open }),
 

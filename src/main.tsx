@@ -4,6 +4,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import "./globals.css";
 
+const savedTheme = (() => {
+  try { return localStorage.getItem("theme"); } catch { return null; }
+})();
+if (savedTheme === "dark") {
+  document.documentElement.classList.add("dark");
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
