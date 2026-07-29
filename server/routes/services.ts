@@ -6,7 +6,7 @@ const router = Router();
 router.get("/", async (_req: Request, res: Response) => {
   try {
     const supabase = createAdminClient();
-    const { data, error } = await supabase.from("services").select("*").order("sort_order");
+    const { data, error } = await supabase.from("services").select("*");
     if (error) { res.status(500).json({ error: error.message }); return; }
     res.json(data);
   } catch (err: any) {
