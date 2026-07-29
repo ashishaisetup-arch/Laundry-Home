@@ -65,7 +65,7 @@ export function AdminOrderFilters({ filters, onChange, vendors, deliveryExecutiv
   const [localSearch, setLocalSearch] = useState(filters.search);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filtersRef = useRef(filters);
-  filtersRef.current = filters;
+  useEffect(() => { filtersRef.current = filters; }, [filters]);
 
   const update = useCallback((patch: Partial<OrderFilterValues>) => {
     onChange({ ...filtersRef.current, ...patch });

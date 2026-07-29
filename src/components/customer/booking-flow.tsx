@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
@@ -137,7 +137,13 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
 
   const [step, setStep] = useState<Step>("services");
   const [selectedServices, setSelectedServices] = useState<Partial<Record<ServiceKey, { qty: number; express: boolean }>>>({});
-  const [pickupAddr, setPickupAddr] = useState("");
+
+  const defaultAddress = (addresses || []).find((a) => a.isDefault) || (addresses || [])[0];
+  const [pickupAddr, setPickupAddr] = useState(defaultAddress?.id || "");
+
+  useEffect(() => {
+    if (defaultAddress && !pickupAddr) setPickupAddr(defaultAddress.id);
+  }, [defaultAddress, pickupAddr]);
   const [pickupDate, setPickupDate] = useState("Today");
   const [pickupSlot, setPickupSlot] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("Tomorrow");
@@ -160,6 +166,8 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
   const { data: userSubscriptions } = useUserSubscriptions();
   const activeSubscription = (userSubscriptions || []).find((s) => s.status === "active");
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+
   const [confirmedOrder, setConfirmedOrder] = useState<{
     code: string;
     total: number;
@@ -181,6 +189,14 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
   useEffect(() => {
     if (open) fetchWallet();
   }, [open, fetchWallet]);
+
+  useEffect(() => {
+    if (open) setTimeout(() => scrollRef.current?.scrollTo({ top: 0, behavior: "instant" }), 50);
+  }, [open]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
+  }, [step]);
 
   const fetchPricing = useCallback(async (opts?: { coupon?: string; points?: number; walletAmt?: number }) => {
     const items = Object.entries(selectedServices)
@@ -241,6 +257,21 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
     if (match[3]?.toUpperCase() === "PM" && h !== 12) h += 12;
     if (match[3]?.toUpperCase() === "AM" && h === 12) h = 0;
     return h;
+  }
+  function parseSlotEndHour(slot: string): number {
+    const end = slot.split("-")[1]?.trim() || "";
+    const match = end.match(/(\d+):?(\d*)?\s*(AM|PM)/i);
+    if (!match) return 23;
+    let h = parseInt(match[1]);
+    if (match[3]?.toUpperCase() === "PM" && h !== 12) h += 12;
+    if (match[3]?.toUpperCase() === "AM" && h === 12) h = 0;
+    return h;
+  }
+  function isSlotExpired(slot: string, dateLabel: string): boolean {
+    if (dateLabel !== "Today") return false;
+    const now = new Date();
+    const currentHour = now.getHours();
+    return parseSlotEndHour(slot) <= currentHour;
   }
   function isDeliverySlotValid(pDate: string, pSlot: string, dDate: string, dSlot: string): boolean {
     if (!pSlot || !dSlot) return true;
@@ -411,7 +442,8 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
-      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto p-0">
+      <DialogContent className="max-w-3xl p-0">
+        <div ref={scrollRef} className="max-h-[92vh] overflow-y-auto">
         <DialogHeader className="sr-only">
           <DialogTitle>Book a pickup</DialogTitle>
         </DialogHeader>
@@ -602,20 +634,23 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
                       <div className="space-y-2">
                         <Label className="text-xs font-semibold">Pickup Time</Label>
                         <div className="grid grid-cols-2 gap-1.5">
-                          {PICKUP_SLOTS.map((s) => (
+                          {PICKUP_SLOTS.map((s) => {
+                            const expired = isSlotExpired(s.slot, pickupDate);
+                            return (
                             <button
                               key={s.id}
-                              disabled={!s.available}
+                              disabled={!s.available || expired}
                               onClick={() => setPickupSlot(s.slot)}
                               className={cn(
                                 "rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors",
-                                !s.available && "opacity-40 cursor-not-allowed line-through",
+                                (!s.available || expired) && "opacity-40 cursor-not-allowed line-through",
                                 pickupSlot === s.slot ? "border-primary bg-primary/5 text-primary" : "border-border/60 hover:bg-muted/30"
                               )}
                             >
                               {s.slot}
                             </button>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -644,14 +679,16 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
                         <div className="grid grid-cols-2 gap-1.5">
                           {DELIVERY_SLOTS.map((s) => {
                             const gapViolation = !!(!isExpress && pickupSlot && pickupDate && !isDeliverySlotValid(pickupDate, pickupSlot, deliveryDate, s.slot));
+                            const expired = isSlotExpired(s.slot, deliveryDate);
+                            const disabled = !s.available || gapViolation || expired;
                             return (
                             <button
                               key={s.id}
-                              disabled={!s.available || gapViolation}
+                              disabled={disabled}
                               onClick={() => setDeliverySlot(s.slot)}
                               className={cn(
                                 "rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors",
-                                !s.available && "opacity-40 cursor-not-allowed line-through",
+                                (!s.available || expired) && "opacity-40 cursor-not-allowed line-through",
                                 gapViolation && "opacity-30 cursor-not-allowed",
                                 deliverySlot === s.slot ? "border-primary bg-primary/5 text-primary" : "border-border/60 hover:bg-muted/30"
                               )}
@@ -1050,6 +1087,7 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
             </motion.div>
           )}
         </AnimatePresence>
+        </div>
       </DialogContent>
 
       {/* Add Address Dialog */}

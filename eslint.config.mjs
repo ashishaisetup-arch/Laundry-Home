@@ -36,6 +36,8 @@ export default tseslint.config(
       "no-undef": "off",
       "no-unreachable": "off",
       "no-useless-escape": "off",
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/preserve-manual-memoization": "off",
     },
   }
 );

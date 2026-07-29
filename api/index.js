@@ -70,35 +70,79 @@ function createServerClientWithCookies(cookieGetter, cookieSetter, cookieRemover
 }
 
 // server/middleware/auth.ts
-var protectedRoutes = /* @__PURE__ */ new Set([
+var ROLE_ROUTES = {
+  "/api/admin": ["admin", "superadmin"],
+  "/api/vendor": ["vendor", "admin", "superadmin"],
+  "/api/delivery": ["delivery", "admin", "superadmin"]
+};
+var PUBLIC_ROUTES = [
+  "/api/auth/",
+  "/api/services",
+  "/api/coupons",
+  "/api/vendors",
+  "/api/slots",
+  "/api/seed",
+  "/api/subscriptions/plans",
+  "/api/geocode"
+];
+var PROTECTED_PREFIXES = [
   "/api/orders",
   "/api/addresses",
   "/api/reviews",
   "/api/delivery-tasks",
   "/api/notifications",
   "/api/wallet"
-]);
+];
 async function authMiddleware(req, res, next) {
   const pathname = req.path;
-  const needsProtection = Array.from(protectedRoutes).some((p) => pathname.startsWith(p)) || pathname.startsWith("/api/") && !pathname.startsWith("/api/auth/") && !pathname.startsWith("/api/services") && !pathname.startsWith("/api/coupons") && !pathname.startsWith("/api/vendors") && !pathname.startsWith("/api/slots") && !pathname.startsWith("/api/seed") && !pathname.startsWith("/api/admin") && !pathname.startsWith("/api/vendor") && !pathname.startsWith("/api/subscriptions/plans") && !pathname.startsWith("/api/geocode");
-  if (!needsProtection) return next();
-  try {
-    const cookieGetter = (name) => {
-      const val = req.cookies?.[name];
-      if (!val && name !== "sb-zuayfacnytoougyvvvcl-auth-token" && !name.startsWith("sb-zuayfacnytoougyvvvcl-auth-token.")) {
+  const matchedRoleRoute = Object.entries(ROLE_ROUTES).find(
+    ([prefix]) => pathname.startsWith(prefix)
+  );
+  if (matchedRoleRoute) {
+    try {
+      const cookieGetter = (name) => req.cookies?.[name];
+      const supabase = createServerClientWithCookies(cookieGetter);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
-      return val;
-    };
+      req.user = user;
+      const admin = createAdminClient();
+      const { data: profile } = await admin.from("user_profiles").select("role").eq("id", user.id).single();
+      const userRole = profile?.role || "customer";
+      if (!matchedRoleRoute[1].includes(userRole)) {
+        res.status(403).json({ error: "Forbidden: insufficient role" });
+        return;
+      }
+      next();
+      return;
+    } catch {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+  if (!pathname.startsWith("/api/")) {
+    next();
+    return;
+  }
+  if (PUBLIC_ROUTES.some((p) => pathname.startsWith(p))) {
+    next();
+    return;
+  }
+  const needsAuth = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
+  if (!needsAuth) {
+    next();
+    return;
+  }
+  try {
+    const cookieGetter = (name) => req.cookies?.[name];
     const supabase = createServerClientWithCookies(cookieGetter);
     const { data: { user }, error: getUserError } = await supabase.auth.getUser();
     if (getUserError) {
       console.error("getUser error:", getUserError.message);
     }
     if (!user) {
-      console.log("Auth fail:", {
-        cookies: req.cookies ? Object.keys(req.cookies) : "no cookies",
-        authCookie: req.cookies?.["sb-zuayfacnytoougyvvvcl-auth-token"] ? "exists" : "missing"
-      });
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
@@ -925,6 +969,37 @@ router3.post("/:id/cancel", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+router3.post("/reorder/:id", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const { id } = req.params;
+    const { data: original, error: fetchError } = await supabase.from("orders").select("*").eq("id", id).eq("user_id", user.id).single();
+    if (fetchError || !original) return res.status(404).json({ error: "Order not found" });
+    const newOrder = {
+      user_id: user.id,
+      vendor_id: original.vendor_id,
+      pickup_area: original.pickup_area,
+      pickup_address: original.pickup_address,
+      delivery_area: original.delivery_area,
+      delivery_address: original.delivery_address,
+      scheduled_pickup: new Date(Date.now() + 864e5).toISOString(),
+      // tomorrow
+      scheduled_delivery: null,
+      notes: original.notes,
+      total: original.total,
+      status: "pending",
+      current_stage_index: 0,
+      garment_count: original.garment_count
+    };
+    const { data, error } = await supabase.from("orders").insert(newOrder).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 var orders_default = router3;
 
 // server/routes/vendors.ts
@@ -1677,7 +1752,7 @@ router13.get("/kpis", async (_req, res) => {
       supabase.from("user_profiles").select("id", { count: "exact", head: true }),
       supabase.from("vendors").select("id, verified, is_open"),
       supabase.from("orders").select("total, status, created_at"),
-      supabase.from("reviews").select("rating"),
+      supabase.from("reviews").select("overall"),
       supabase.from("orders").select("id", { count: "exact", head: true }).gte("created_at", todayStr)
     ]);
     const totalUsers = usersRes.count || 0;
@@ -1712,7 +1787,7 @@ router13.get("/kpis", async (_req, res) => {
     const cancelledOrders = orders.filter((o) => o.status === "cancelled").length;
     const deliveryRate = totalOrders > 0 ? Math.round(deliveredOrders / totalOrders * 100) : 0;
     const reviews = reviewsRes.data || [];
-    const avgRating = reviews.length > 0 ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(2) : "0.00";
+    const avgRating = reviews.length > 0 ? (reviews.reduce((s, r) => s + r.overall, 0) / reviews.length).toFixed(2) : "0.00";
     const todayOrders = todayOrdersRes.count || 0;
     const kpis = [
       { label: "Total Users", value: totalUsers.toLocaleString(), change: 0, trend: "up", icon: "Users", accent: "from-teal-500 to-cyan-600", spark: [40, 60, 45, 70, 65, 80, 75] },
@@ -1998,7 +2073,7 @@ router14.get("/stats", async (req, res) => {
     const todayStr = todayStart.toISOString();
     const [ordersRes, reviewsRes, allOrdersRes] = await Promise.all([
       supabase.from("orders").select("total, created_at, customer_id, status").eq("vendor_id", vendorId).neq("status", "cancelled"),
-      supabase.from("reviews").select("rating").eq("vendor_id", vendorId),
+      supabase.from("reviews").select("overall").eq("vendor_id", vendorId),
       supabase.from("orders").select("total, created_at, customer_id").eq("vendor_id", vendorId).neq("status", "cancelled")
     ]);
     const allOrders = ordersRes.data || [];
@@ -2012,10 +2087,10 @@ router14.get("/stats", async (req, res) => {
     ).length : 0;
     const repeatRate = uniqueCustomers.size > 0 ? Math.round(repeatCustomers / uniqueCustomers.size * 100) : 0;
     const reviews = reviewsRes.data || [];
-    const avgRating = reviews.length > 0 ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0;
+    const avgRating = reviews.length > 0 ? reviews.reduce((s, r) => s + r.overall, 0) / reviews.length : 0;
     const ratingBuckets = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
     for (const r of reviews) {
-      const star = Math.round(r.rating);
+      const star = Math.round(r.overall);
       if (star >= 1 && star <= 5) ratingBuckets[star]++;
     }
     const totalReviews = reviews.length;
@@ -2044,7 +2119,7 @@ router14.get("/inventory", async (req, res) => {
       return;
     }
     const supabase = createAdminClient();
-    const { data } = await supabase.from("garment_inventory").select("*").eq("vendor_id", vendorId);
+    const { data } = await supabase.from("garment_inventory").select("*, orders!inner(vendor_id)").eq("orders.vendor_id", vendorId);
     res.json(data || []);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2210,8 +2285,8 @@ router17.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     const admin = createAdminClient();
-    let query = admin.from("garment_inventory").select("*").order("name");
-    if (vendorId) query = query.eq("vendor_id", vendorId);
+    let query = admin.from("garment_inventory").select("*, orders!inner(vendor_id)");
+    if (vendorId) query = query.eq("orders.vendor_id", vendorId);
     const { data, error } = await query;
     if (error) {
       res.status(500).json({ error: error.message });
@@ -3173,11 +3248,11 @@ ${vendors.slice(0, 6).map(
         reply = "No vendors are currently available in your area. Check back soon!";
       }
     } else if (/(price|cost|rate|how much|pricing|charges)/.test(lower)) {
-      const { data: services } = await admin.from("services").select("name, base_price, unit").limit(10);
+      const { data: services } = await admin.from("services").select("name, base_price, pricing_type").limit(10);
       if (services && services.length > 0) {
         reply = `Our pricing:
 ${services.map(
-          (s) => `\u2022 **${s.name}** \u2014 \u20B9${s.base_price}/${s.unit || "item"}`
+          (s) => `\u2022 **${s.name}** \u2014 \u20B9${s.base_price}/${s.pricing_type === "per_kg" ? "kg" : "pc"}`
         ).join("\n")}
 
 *Prices may vary by vendor. Check the booking page for exact quotes.*`;
@@ -3185,10 +3260,10 @@ ${services.map(
         reply = "Visit the **Book Pickup** page to see service pricing in your area.";
       }
     } else if (/(wallet|balance|money|payment|pay)/.test(lower)) {
-      const { data: wallets } = await admin.from("wallets").select("balance, points").eq("user_id", user.id).limit(1);
-      const wallet = wallets?.[0];
+      const { data: profiles2 } = await admin.from("user_profiles").select("wallet_balance, loyalty_points").eq("id", user.id).limit(1);
+      const wallet = profiles2?.[0];
       if (wallet) {
-        reply = `Your wallet balance is **\u20B9${wallet.balance || 0}** with **${wallet.points || 0} loyalty points**.`;
+        reply = `Your wallet balance is **\u20B9${wallet.wallet_balance || 0}** with **${wallet.loyalty_points || 0} loyalty points**.`;
       } else {
         reply = "You don't have a wallet yet. It will be created when you make your first payment.";
       }
@@ -3712,13 +3787,11 @@ router37.post("/verify", async (req, res) => {
       return;
     }
     const admin = createAdminClient();
-    const update = {
-      payment_status: "paid",
-      razorpay_payment_id,
-      razorpay_order_id
-    };
     if (order_id) {
-      await admin.from("orders").update(update).eq("id", order_id);
+      await admin.from("orders").update({
+        payment_status: "paid",
+        payment_details: { razorpay_payment_id, razorpay_order_id }
+      }).eq("id", order_id);
     }
     res.json({ success: true, payment_id: razorpay_payment_id });
   } catch (err) {
@@ -3739,15 +3812,23 @@ router37.post("/wallet/add", async (req, res) => {
       return;
     }
     const admin = createAdminClient();
-    await admin.rpc("add_wallet_funds", { user_id: user.id, amount });
+    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
+    const currentBalance = profile?.wallet_balance || 0;
+    const { error: updateError } = await admin.from("user_profiles").update({
+      wallet_balance: currentBalance + amount
+    }).eq("id", user.id);
+    if (updateError) {
+      res.status(500).json({ error: updateError.message });
+      return;
+    }
     await admin.from("wallet_transactions").insert({
       user_id: user.id,
       type: "credit",
       amount,
       description: "Wallet top-up via payment gateway"
     });
-    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
-    res.json({ balance: profile?.wallet_balance || 0 });
+    const { data: updatedProfile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
+    res.json({ balance: updatedProfile?.wallet_balance || currentBalance + amount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

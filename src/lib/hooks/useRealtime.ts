@@ -8,7 +8,7 @@ export function useRealtime(
   enabled = true,
 ) {
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
   useEffect(() => {
     if (!enabled) return;
