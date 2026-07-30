@@ -7,6 +7,7 @@
   --font-inter: "Inter", sans-serif;
   --font-display: "Fraunces", serif;
   --font-mono: "JetBrains Mono", monospace;
+  --stepper-fade-width: 20px;
 }
 
 @theme inline {
@@ -192,6 +193,14 @@
   background: oklch(0.35 0.006 75);
 }
 
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* ============================================================
    PREMIUM UTILITY CLASSES
    ============================================================ */
@@ -264,4 +273,59 @@
 .focus-ring:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px var(--background), 0 0 0 4px oklch(0.50 0.052 165 / 0.4);
+}
+
+/* Ornamental divider */
+.divider-ornament {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+.divider-ornament::before,
+.divider-ornament::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, oklch(0.5 0.052 165 / 0.15), transparent);
+}
+.divider-ornament .divider-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: oklch(0.5 0.052 165 / 0.25);
+  flex-shrink: 0;
+}
+
+/* Shimmer animation for skeletons */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    oklch(0.93 0.004 75 / 0.3) 25%,
+    oklch(0.96 0.004 75 / 0.5) 50%,
+    oklch(0.93 0.004 75 / 0.3) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+.dark .shimmer {
+  background: linear-gradient(
+    90deg,
+    oklch(0.245 0.006 75 / 0.3) 25%,
+    oklch(0.3 0.006 75 / 0.5) 50%,
+    oklch(0.245 0.006 75 / 0.3) 75%
+  );
+  background-size: 200% 100%;
+}
+
+/* ============================================================
+   GOOGLE PLACES AUTOCOMPLETE — stack above dialogs
+   ============================================================ */
+.pac-container {
+  z-index: 9999 !important;
+  position: fixed !important;
 }
