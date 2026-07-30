@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
@@ -166,7 +166,7 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
   const { data: userSubscriptions } = useUserSubscriptions();
   const activeSubscription = (userSubscriptions || []).find((s) => s.status === "active");
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const [confirmedOrder, setConfirmedOrder] = useState<{
     code: string;
@@ -190,12 +190,12 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
     if (open) fetchWallet();
   }, [open, fetchWallet]);
 
-  useEffect(() => {
-    if (open) setTimeout(() => scrollRef.current?.scrollTo({ top: 0, behavior: "instant" }), 50);
+  useLayoutEffect(() => {
+    if (open) scrollContainerRef.current?.scrollTo({ top: 0, behavior: "auto" });
   }, [open]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: 0, behavior: "instant" });
+  useLayoutEffect(() => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "auto" });
   }, [step]);
 
   const fetchPricing = useCallback(async (opts?: { coupon?: string; points?: number; walletAmt?: number }) => {
@@ -442,8 +442,7 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
-      <DialogContent className="max-w-3xl p-0">
-        <div ref={scrollRef} className="max-h-[92vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[95dvh]">
         <DialogHeader className="sr-only">
           <DialogTitle>Book a pickup</DialogTitle>
         </DialogHeader>
@@ -464,13 +463,14 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
           ) : (
             <motion.div
               key={step}
+              className="flex flex-col flex-1 min-h-0"
               initial={{ opacity: 0, x: 12 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -12 }}
               transition={{ duration: 0.2 }}
             >
               {/* Stepper header */}
-              <div className="border-b border-border p-5 bg-tonal-accent">
+              <div className="shrink-0 border-b border-border p-5 bg-tonal-accent">
                 <div className="flex items-center justify-between">
                   {steps.map((s, i) => (
                     <div key={s.id} className="flex items-center gap-2 flex-1">
@@ -492,6 +492,7 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
               </div>
 
               {/* Content */}
+              <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <div className="p-5 space-y-5">
                 {step === "services" && (
                   <div>
@@ -1055,8 +1056,9 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
                 )}
               </div>
 
+              </div>
               {/* Footer */}
-              <div className="border-t border-border p-4 flex items-center justify-between bg-muted/30">
+              <div className="shrink-0 border-t border-border p-4 flex items-center justify-between bg-muted/30">
                   <div>
                     {selectedServiceList.length > 0 && (
                       <p className="text-xs text-muted-foreground">
@@ -1087,7 +1089,6 @@ export function BookingFlow({ open, onClose, location: externalLocation }: Booki
             </motion.div>
           )}
         </AnimatePresence>
-        </div>
       </DialogContent>
 
       {/* Add Address Dialog */}
