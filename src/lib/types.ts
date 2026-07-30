@@ -256,3 +256,28 @@ export interface ChatMessage {
   content: string;
   time: string;
 }
+
+export interface ServiceItem {
+  id: string;
+  serviceId: string;
+  itemName: string;
+  itemCategory: string;
+  unit: string;
+  defaultPrice: number;
+  estimatedTime: string;
+  estimatedWeightKg: number;
+  itemMasterId: string;
+  isActive: boolean;
+  service?: { id: string; name: string; unit: string };
+}
+
+export interface VendorServicePrice {
+  id: string;
+  vendorId: string;
+  serviceId: string;
+  itemId: string;
+  price: number;
+  isActive: boolean;
+  service?: { name: string; unit: string };
+  item?: { itemName: string; unit: string };
+}

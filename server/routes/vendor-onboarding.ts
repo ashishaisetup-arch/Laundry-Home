@@ -56,7 +56,7 @@ router.get("/pending", async (_req: Request, res: Response) => {
     const { data, error } = await admin
       .from("vendors")
       .select("*, owner:owner_id(id, name, email, phone)")
-      .in("kyc_status", ["pending", "not_submitted"])
+      .in("kyc_status", ["pending"])
       .order("created_at", { ascending: false });
 
     if (error) { res.status(500).json({ error: error.message }); return; }

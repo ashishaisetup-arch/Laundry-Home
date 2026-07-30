@@ -22,7 +22,8 @@ router.get("/catalog", async (req: Request, res: Response) => {
     let query = supabase
       .from("service_categories")
       .select("*, services(*, service_items(*))")
-      .order("display_order");
+      .order("display_order")
+      .order("display_order", { foreignTable: "services" });
 
     if (!includeInactive) {
       query = query.eq("is_active", true);

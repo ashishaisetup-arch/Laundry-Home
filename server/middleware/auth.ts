@@ -12,11 +12,6 @@ const PUBLIC_ROUTES = [
   "/api/slots", "/api/seed", "/api/subscriptions/plans", "/api/geocode",
 ];
 
-const PROTECTED_PREFIXES = [
-  "/api/orders", "/api/addresses", "/api/reviews", "/api/delivery-tasks",
-  "/api/notifications", "/api/wallet",
-];
-
 export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const pathname = req.path;
 
@@ -54,8 +49,6 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
       return;
     }
   }
-
-  const needsAuth = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
 
   try {
     const cookieGetter = (name: string) => req.cookies?.[name];

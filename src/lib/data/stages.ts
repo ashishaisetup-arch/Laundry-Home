@@ -19,4 +19,5 @@ export const ORDER_STAGE_FLOW: { stage: Order["status"]; label: string; icon: st
   { stage: "out_for_delivery", label: "Out for Delivery", icon: "Bike" },
   { stage: "delivered", label: "Delivered", icon: "Home" },
   { stage: "completed", label: "Completed", icon: "CircleCheck" },
+  { stage: "cancelled", label: "Cancelled", icon: "XCircle" },
 ];

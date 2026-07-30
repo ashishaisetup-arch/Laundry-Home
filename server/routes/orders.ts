@@ -96,6 +96,16 @@ router.post("/", async (req: Request, res: Response) => {
 
     const body = req.body;
     const adminClient = createAdminClient();
+
+    const { data: profile, error: profileErr } = await adminClient
+      .from("user_profiles")
+      .select("name, avatar")
+      .eq("id", user.id)
+      .single();
+    if (profileErr) {
+      console.error("[orders] profile lookup error for user", user.id, profileErr);
+    }
+
     const code = `LH-${Date.now().toString(36).toUpperCase()}`;
     const hasVendor = body.vendor_id && body.vendor_id !== "00000000-0000-0000-0000-000000000001" && body.vendor_id !== "00000000-0000-0000-0000-000000000002";
 
@@ -139,8 +149,8 @@ router.post("/", async (req: Request, res: Response) => {
     const orderData = {
       code,
       customer_id: user.id,
-      customer_name: body.customer_name || "Customer",
-      customer_avatar: body.customer_avatar || "",
+      customer_name: profile?.name || "Customer",
+      customer_avatar: profile?.avatar || "",
       vendor_id: hasVendor ? body.vendor_id : null,
       vendor_name: vendorName,
       vendor_logo_initials: vendorLogoInitials,
@@ -536,13 +546,13 @@ router.post("/reorder/:id", async (req: Request, res: Response) => {
       .from("orders")
       .select("*")
       .eq("id", id)
-      .eq("user_id", user.id)
+      .eq("customer_id", user.id)
       .single();
 
     if (fetchError || !original) return res.status(404).json({ error: "Order not found" });
 
     const newOrder = {
-      user_id: user.id,
+      customer_id: user.id,
       vendor_id: original.vendor_id,
       pickup_area: original.pickup_area,
       pickup_address: original.pickup_address,

@@ -245,16 +245,16 @@ export async function applyPricingToOrder(orderData: any, pricing: PricingBreakd
   }
 
   if (pricing.couponCode) {
-    const { data: coupon } = await admin
-      .from("coupons")
-      .select("id, used_count")
-      .eq("code", pricing.couponCode.toUpperCase())
-      .single();
-    if (coupon) {
-      await admin
+      const { data: coupon } = await admin
         .from("coupons")
-        .update({ used_count: (coupon as any).used_count + 1 })
-        .eq("id", (coupon as any).id);
-    }
+        .select("code, used_count")
+        .eq("code", pricing.couponCode.toUpperCase())
+        .single();
+      if (coupon) {
+        await admin
+          .from("coupons")
+          .update({ used_count: (coupon as any).used_count + 1 })
+          .eq("code", (coupon as any).code);
+      }
   }
 }

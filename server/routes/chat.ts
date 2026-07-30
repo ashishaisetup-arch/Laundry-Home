@@ -5,9 +5,12 @@ const router = Router();
 
 router.get("/", async (req: Request, res: Response) => {
   try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
     const admin = createAdminClient();
     const limit = parseInt(req.query.limit as string) || 50;
-    const { data, error } = await admin.from("chat_messages").select("*").order("created_at", { ascending: false }).limit(limit);
+    const { data, error } = await admin.from("chat_messages").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(limit);
     if (error) { res.status(500).json({ error: error.message }); return; }
     res.json((data || []).reverse());
   } catch (err: any) { res.status(500).json({ error: err.message }); }
@@ -80,10 +83,10 @@ router.post("/ask", async (req: Request, res: Response) => {
         reply = "No vendors are currently available in your area. Check back soon!";
       }
     } else if (/(price|cost|rate|how much|pricing|charges)/.test(lower)) {
-      const { data: services } = await admin.from("services").select("name, base_price, pricing_type").limit(10);
+      const { data: services } = await admin.from("services").select("name, unit").limit(10);
       if (services && services.length > 0) {
         reply = `Our pricing:\n${services.map((s: any) =>
-          `• **${s.name}** — ₹${s.base_price}/${s.pricing_type === "per_kg" ? "kg" : "pc"}`
+          `• **${s.name}** (${s.unit})`
         ).join("\n")}\n\n*Prices may vary by vendor. Check the booking page for exact quotes.*`;
       } else {
         reply = "Visit the **Book Pickup** page to see service pricing in your area.";
