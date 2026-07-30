@@ -20,7 +20,7 @@ import { Integrations } from "./superadmin-integrations";
 import { SystemConfig } from "./superadmin-system-config";
 
 export function SuperAdminApp() {
-  const [view, setView, handleNavigateFromRouter] = useRouterView("overview");
+  const [view, setView, handleNavigateFromRouter] = useRouterView("dashboard");
   const [showOnboarding, setShowOnboarding] = useState(false);
   const { data: users } = useUsers();
   const { data: vendorsList } = useVendors();
@@ -41,7 +41,7 @@ export function SuperAdminApp() {
       pageTitle={pageTitle(view)}
       pageSubtitle={pageSubtitle(view)}
       actions={
-        view === "overview" ? (
+        view === "dashboard" ? (
           <Button className="bg-primary hover:bg-primary/90" onClick={() => setShowOnboarding(true)}>
             <Store className="h-4 w-4 mr-1.5" />
             Onboard Vendor
@@ -55,7 +55,7 @@ export function SuperAdminApp() {
       }
     >
       <AnimatePresence mode="wait">
-        {view === "overview" && <SuperAdminOverview key="overview" onOnboard={() => setShowOnboarding(true)} onNavigate={setView} totalUsers={users?.length || 0} totalVendors={vendorsList?.length || 0} />}
+        {view === "dashboard" && <SuperAdminOverview key="dashboard" onOnboard={() => setShowOnboarding(true)} onNavigate={setView} totalUsers={users?.length || 0} totalVendors={vendorsList?.length || 0} />}
         {view === "vendors" && <SuperAdminVendors key="vendors" />}
         {view === "rbac" && <RbacMatrix key="rbac" />}
         {view === "users" && <UserManagement key="users" />}

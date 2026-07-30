@@ -4,7 +4,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "Super Admin",
     items: [
-      { id: "overview", label: "Control Center", icon: "LayoutDashboard" },
+      { id: "dashboard", label: "Control Center", icon: "LayoutDashboard" },
       { id: "onboard", label: "Onboard Vendor", icon: "Store", badge: "New" },
       { id: "vendors", label: "Vendors", icon: "Store" },
       { id: "rbac", label: "Roles & Permissions", icon: "Shield" },
@@ -19,7 +19,7 @@ export const NAV_GROUPS: NavGroup[] = [
 
 export function pageTitle(view: string) {
   return {
-    overview: "Control Center",
+      dashboard: "Control Center",
     vendors: "Vendors",
     rbac: "Roles & Permissions",
     users: "User Management",
@@ -34,7 +34,7 @@ export function pageTitle(view: string) {
 
 export function pageSubtitle(view: string) {
   return {
-    overview: "Super Admin · Full platform access",
+      dashboard: "Super Admin · Full platform access",
     profile: "Manage your account details",
     settings: "Account and app preferences",
     vendors: "All platform vendors · KYC status, approvals and management",
