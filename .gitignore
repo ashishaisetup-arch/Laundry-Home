@@ -58,3 +58,18 @@ server.log
 # Skills directory
 /skills/
 .vercel
+server.log
+
+
+
+# Vite cache
+.vite/
+
+# Supabase temp files
+supabase/.temp/
+
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
