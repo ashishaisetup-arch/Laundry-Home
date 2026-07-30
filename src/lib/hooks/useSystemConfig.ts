@@ -60,12 +60,8 @@ export function useSystemConfig() {
   const { data, loading, error, refetch } = useFetch<SystemConfig>("/api/admin/config");
 
   const saveConfig = useCallback(async (section: string, values: Record<string, any>) => {
-    try {
-      const result = await api.patch<SystemConfig>("/api/admin/config", { [section]: values });
-      return result;
-    } catch (e: any) {
-      throw e;
-    }
+    const result = await api.patch<SystemConfig>("/api/admin/config", { [section]: values });
+    return result;
   }, []);
 
   return { data, loading, error, refetch, saveConfig };
