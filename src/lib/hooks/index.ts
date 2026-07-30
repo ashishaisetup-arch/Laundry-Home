@@ -26,3 +26,4 @@ export { useFavoriteVendors } from "./useFavoriteVendors";
 export { useUsers } from "./useUsers";
 export { useSystemConfig } from "./useSystemConfig";
 export { useRbac } from "./useRbac";
+export { useServiceCatalog } from "./useServiceCatalog";

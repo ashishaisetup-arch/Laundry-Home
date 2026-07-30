@@ -45,13 +45,14 @@ const SERVICE_ICON_KEYS: Record<string, string> = {
 
 interface ServiceIconProps {
   serviceKey: ServiceKey;
+  iconName?: string;
   className?: string;
   size?: number;
   withGradient?: boolean;
 }
 
-export function ServiceIcon({ serviceKey, className, size = 20, withGradient = false }: ServiceIconProps) {
-  const iconKey = SERVICE_ICON_KEYS[serviceKey];
+export function ServiceIcon({ serviceKey, iconName, className, size = 20, withGradient = false }: ServiceIconProps) {
+  const iconKey = iconName || SERVICE_ICON_KEYS[serviceKey];
   if (!iconKey) return null;
   const Icon = ICON_MAP[iconKey] || Package;
 

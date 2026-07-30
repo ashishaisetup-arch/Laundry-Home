@@ -8,7 +8,7 @@ import { useOrders } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
-import { BookingFlow } from "./booking-flow";
+import { BookingFlowV2 as BookingFlow } from "./booking-flow-v2";
 import { OrderTracking } from "./order-tracking";
 import { ErrorState } from "@/components/shared/error-state";
 import { DashboardSkeleton, OrderCardSkeleton } from "@/components/shared/skeleton-card";

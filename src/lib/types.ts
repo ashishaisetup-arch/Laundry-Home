@@ -153,12 +153,24 @@ export interface Address {
   id: string;
   label: string;
   line: string;
+  flatNo?: string;
   area: string;
   city: string;
   pincode: string;
   isDefault: boolean;
   lat: number;
   lng: number;
+}
+
+export interface ServiceCategory {
+  id: string;
+  slug: string;
+  name: string;
+  icon: string;
+  description: string;
+  sortOrder: number;
+  active: boolean;
+  services: ServiceType[];
 }
 
 export interface Coupon {

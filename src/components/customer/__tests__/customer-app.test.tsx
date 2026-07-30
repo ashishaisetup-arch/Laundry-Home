@@ -107,8 +107,8 @@ vi.mock("../customer-profile", () => ({
   CustomerProfile: () => <div data-testid="customer-profile" />,
 }));
 
-vi.mock("../booking-flow", () => ({
-  BookingFlow: ({ open }: any) => open ? <div data-testid="booking-flow" /> : null,
+vi.mock("../booking-flow-v2", () => ({
+  BookingFlowV2: ({ open }: any) => open ? <div data-testid="booking-flow" /> : null,
 }));
 
 vi.mock("../order-tracking", () => ({
