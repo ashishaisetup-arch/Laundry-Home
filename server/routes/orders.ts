@@ -73,6 +73,7 @@ router.post("/pricing", async (req: Request, res: Response) => {
 
     const pricing = await calculatePricing({
       items: req.body.items || [],
+      vendorId: req.body.vendorId,
       couponCode: req.body.couponCode,
       redeemPoints: req.body.redeemPoints,
       useWalletAmount: req.body.useWalletAmount,
@@ -125,6 +126,7 @@ router.post("/", async (req: Request, res: Response) => {
     // Server-side pricing recalculation
     const pricing = await calculatePricing({
       items: body.items || [],
+      vendorId: body.vendorId || body.vendor_id,
       couponCode: body.couponCode,
       redeemPoints: body.redeemPoints || body.redeem_points,
       useWalletAmount: body.useWalletAmount || body.use_wallet_amount || 0,

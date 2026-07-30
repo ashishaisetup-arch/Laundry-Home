@@ -4,28 +4,13 @@ const PLATFORM_FEE = 25;
 const DELIVERY_FEE = 40;
 const EXPRESS_SURCHARGE = 50;
 const TAX_RATE = 0.18;
-const REWARD_POINTS_RATE = 100; // 100 points = ₹1
-
-const SERVICES: Record<string, { basePrice: number; pricingType: string; expressMultiplier: number }> = {
-  wash_fold:      { basePrice: 60,  pricingType: "per_kg",   expressMultiplier: 1.5 },
-  wash_iron:      { basePrice: 15,  pricingType: "per_piece", expressMultiplier: 1.5 },
-  dry_cleaning:   { basePrice: 120, pricingType: "per_piece", expressMultiplier: 1.8 },
-  steam_ironing:  { basePrice: 18,  pricingType: "per_piece", expressMultiplier: 1.6 },
-  premium_care:   { basePrice: 250, pricingType: "per_piece", expressMultiplier: 2 },
-  delicate_care:  { basePrice: 180, pricingType: "per_piece", expressMultiplier: 1.8 },
-  shoe_cleaning:  { basePrice: 149, pricingType: "per_piece", expressMultiplier: 1.5 },
-  blanket:        { basePrice: 199, pricingType: "per_piece", expressMultiplier: 1.4 },
-  curtain:        { basePrice: 220, pricingType: "per_piece", expressMultiplier: 1.4 },
-  carpet:         { basePrice: 499, pricingType: "per_piece", expressMultiplier: 1.3 },
-  bulk:           { basePrice: 45,  pricingType: "per_kg",   expressMultiplier: 1.2 },
-};
+const REWARD_POINTS_RATE = 100;
 
 export interface CartItem {
-  serviceKey: string;
-  serviceName?: string;
+  serviceId: string;
+  itemId?: string;
   qty: number;
   unit?: string;
-  unitPrice?: number;
   express?: boolean;
 }
 
@@ -35,6 +20,7 @@ export interface PricingInput {
   redeemPoints?: number;
   useWalletAmount?: number;
   userId: string;
+  vendorId?: string;
   pickupArea?: string;
   pickupDate?: string;
   pickupSlot?: string;
@@ -60,15 +46,44 @@ export interface PricingBreakdown {
   }[];
 }
 
-function computeSubtotal(items: CartItem[]): { subtotal: number; hasExpress: boolean } {
+async function computeSubtotal(items: CartItem[], admin: ReturnType<typeof createAdminClient>, vendorId?: string): Promise<{ subtotal: number; hasExpress: boolean }> {
+  const itemMasterIds = [...new Set(items.map(i => i.itemId).filter(Boolean) as string[])];
+  const serviceIds = [...new Set(items.map(i => i.serviceId).filter(Boolean) as string[])];
+
+  let defaultMap: Record<string, number> = {};
+  if (itemMasterIds.length > 0) {
+    const { data: serviceItems } = await admin
+      .from("service_items")
+      .select("service_id, item_master_id, default_price")
+      .in("item_master_id", itemMasterIds);
+    for (const si of serviceItems || []) {
+      defaultMap[`${si.service_id}|${si.item_master_id}`] = si.default_price;
+    }
+  }
+
+  let vendorMap: Record<string, number> = {};
+  if (vendorId && itemMasterIds.length > 0) {
+    const { data: vendorPrices } = await admin
+      .from("vendor_service_prices")
+      .select("service_id, price, service_items!inner(item_master_id)")
+      .eq("vendor_id", vendorId)
+      .eq("is_active", true);
+    for (const vp of vendorPrices || []) {
+      const itemMasterId = (vp as any).service_items?.item_master_id;
+      if (itemMasterId) {
+        vendorMap[`${vp.service_id}|${itemMasterId}`] = vp.price;
+      }
+    }
+  }
+
   let subtotal = 0;
   let hasExpress = false;
   for (const item of items) {
-    const svc = SERVICES[item.serviceKey];
-    if (!svc) continue;
-    const price = svc.basePrice * item.qty;
-    const multiplier = item.express ? svc.expressMultiplier : 1;
-    subtotal += price * multiplier;
+    if (!item.serviceId) continue;
+    const key = `${item.serviceId}|${item.itemId || ""}`;
+    const unitPrice = vendorMap[key] || defaultMap[key] || 0;
+    const multiplier = item.express ? 1.5 : 1;
+    subtotal += unitPrice * item.qty * multiplier;
     if (item.express) hasExpress = true;
   }
   return { subtotal, hasExpress };
@@ -78,12 +93,10 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
   const admin = createAdminClient();
   const steps: { label: string; amount: number }[] = [];
 
-  // 1. Subtotal
-  const { subtotal, hasExpress } = computeSubtotal(input.items);
+  const { subtotal, hasExpress } = await computeSubtotal(input.items, admin, input.vendorId);
   steps.push({ label: "Subtotal", amount: subtotal });
   let remaining = subtotal;
 
-  // 2. Coupon discount
   let couponDiscount = 0;
   if (input.couponCode) {
     const code = input.couponCode.toUpperCase();
@@ -103,7 +116,6 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
   }
   remaining -= couponDiscount;
 
-  // 3. Subscription discount
   let subscriptionDiscount = 0;
   const { data: subscriptions } = await admin
     .from("user_subscriptions")
@@ -120,7 +132,6 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
   }
   remaining -= subscriptionDiscount;
 
-  // 4. Reward points
   let rewardPointsUsed = 0;
   let rewardDiscount = 0;
   if (input.redeemPoints && input.redeemPoints > 0) {
@@ -139,19 +150,16 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
   }
   remaining -= rewardDiscount;
 
-  // 5. Platform & delivery fees
   const platformFee = PLATFORM_FEE;
   const deliveryFee = DELIVERY_FEE;
   steps.push({ label: "Platform Fee", amount: platformFee });
   steps.push({ label: "Delivery Fee", amount: deliveryFee });
 
-  // 6. Express surcharge
   const expressSurcharge = hasExpress ? EXPRESS_SURCHARGE : 0;
   if (expressSurcharge > 0) {
     steps.push({ label: "Express Surcharge", amount: expressSurcharge });
   }
 
-  // 7. Surge charge
   let surgeCharge = 0;
   if (input.pickupSlot) {
     const hour = parseInt(input.pickupSlot.split(":")[0]);
@@ -170,12 +178,10 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
     }
   }
 
-  // 8. Tax (GST 18% on subtotal minus discounts, plus fees and surcharges)
   const taxableAmount = remaining + platformFee + deliveryFee + expressSurcharge + surgeCharge;
   const taxes = Math.round(taxableAmount * TAX_RATE);
   steps.push({ label: "GST (18%)", amount: taxes });
 
-  // 9. Total
   const total = taxableAmount + taxes;
   steps.push({ label: "Total", amount: total });
 

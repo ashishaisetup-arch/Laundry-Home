@@ -20,8 +20,12 @@ const PROTECTED_PREFIXES = [
 export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const pathname = req.path;
 
+  if (!pathname.startsWith("/api/")) { next(); return; }
+
+  if (PUBLIC_ROUTES.some((p) => pathname.startsWith(p))) { next(); return; }
+
   const matchedRoleRoute = Object.entries(ROLE_ROUTES).find(([prefix]) =>
-    pathname.startsWith(prefix)
+    pathname === prefix || pathname.startsWith(prefix + "/")
   );
 
   if (matchedRoleRoute) {
@@ -51,13 +55,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
     }
   }
 
-  if (!pathname.startsWith("/api/")) { next(); return; }
-
-  if (PUBLIC_ROUTES.some((p) => pathname.startsWith(p))) { next(); return; }
-
   const needsAuth = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
-
-  if (!needsAuth) { next(); return; }
 
   try {
     const cookieGetter = (name: string) => req.cookies?.[name];
