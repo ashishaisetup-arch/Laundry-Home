@@ -1101,6 +1101,7 @@ export function BookingFlowV2({ open, onClose: _onClose, location: externalLocat
   const currentIndex = STEPS.findIndex((s) => s.id === step);
   const stepperRef = useRef<HTMLDivElement>(null);
   const stepRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [edgeSpacer, setEdgeSpacer] = useState(0);
   const [showLeftFade, setShowLeftFade] = useState(false);
   const [showRightFade, setShowRightFade] = useState(false);
@@ -1181,13 +1182,17 @@ export function BookingFlowV2({ open, onClose: _onClose, location: externalLocat
     });
   }, [currentIndex]);
 
+  useLayoutEffect(() => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [currentIndex]);
+
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent data-booking-scroll className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent data-booking-scroll className="max-w-3xl max-h-[95dvh]">
         <DialogTitle className="sr-only">Book Laundry Service</DialogTitle>
 
         {/* Stepper */}
-        <div className="relative mb-5">
+        <div className="relative mb-5 shrink-0">
           {isMobile && (
             <>
               <div
@@ -1259,28 +1264,31 @@ export function BookingFlowV2({ open, onClose: _onClose, location: externalLocat
           </div>
         </div>
 
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={step}
-            initial={{ opacity: 0, scale: 0.96, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: -8 }}
-            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-          >
-            {step === "category" && renderCategory()}
-            {step === "serviceType" && renderServiceType()}
-            {step === "inventory" && renderInventory()}
-            {step === "addons" && renderAddons()}
-            {step === "schedule" && renderSchedule()}
-            {step === "vendor" && renderVendor()}
-            {step === "review" && renderReview()}
-            {step === "confirmed" && renderConfirmed()}
-          </motion.div>
-        </AnimatePresence>
+        {/* Scrollable Content */}
+        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={step}
+              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: -8 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {step === "category" && renderCategory()}
+              {step === "serviceType" && renderServiceType()}
+              {step === "inventory" && renderInventory()}
+              {step === "addons" && renderAddons()}
+              {step === "schedule" && renderSchedule()}
+              {step === "vendor" && renderVendor()}
+              {step === "review" && renderReview()}
+              {step === "confirmed" && renderConfirmed()}
+            </motion.div>
+          </AnimatePresence>
+        </div>
 
         {/* Navigation */}
         {step !== "confirmed" && (
-          <div className="flex gap-2 pt-6">
+          <div className="flex gap-2 pt-6 shrink-0">
             {currentIndex > 0 ? (
               <Button variant="outline" onClick={() => setStep(STEPS[currentIndex - 1].id)} className="gap-1">
                 <ArrowLeft className="h-4 w-4" /> Back
