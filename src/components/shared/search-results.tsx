@@ -4,9 +4,12 @@ import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api/client";
 import type { Vendor, Order } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Icon } from "./icon";
+import type { NavGroup } from "./app-shell";
 
 interface SearchResultsProps {
   query: string;
+  groups: NavGroup[];
   onNavigate: (view: string) => void;
 }
 
@@ -18,12 +21,21 @@ const VENDOR_TARGET: Record<string, string> = {
   delivery: "dashboard",
 };
 
-export function SearchResults({ query, onNavigate }: SearchResultsProps) {
+export function SearchResults({ query, groups, onNavigate }: SearchResultsProps) {
   const { role, userId, setPendingSearchQuery } = useAppStore();
   const [vendors, setVendors] = useState<Vendor[] | null>(null);
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const q = query.toLowerCase();
+  const seen = new Set<string>();
+  const navMatches = groups.flatMap((g) =>
+    g.items
+      .filter((item) => item.label.toLowerCase().includes(q))
+      .filter((item) => (seen.has(item.id) ? false : (seen.add(item.id), true)))
+      .map((item) => ({ ...item, group: g.label }))
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -108,9 +120,51 @@ export function SearchResults({ query, onNavigate }: SearchResultsProps) {
         </div>
       )}
 
-      {!error && done && !hasVendors && !hasOrders && (
-        <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-          No vendors or orders match “{query}”.
+      {navMatches.length > 0 && (
+        <section>
+          <h2 className="text-[13px] font-semibold uppercase tracking-wide text-muted-foreground mb-3">Go to</h2>
+          <div className="divide-y rounded-xl border bg-card">
+            {navMatches.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => {
+                  if (item.id === "discover") setPendingSearchQuery(query);
+                  onNavigate(item.id);
+                }}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-tonal transition-colors"
+              >
+                <Icon name={item.icon} className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="text-[13px] font-medium">{item.label}</span>
+                {item.badge !== undefined && (
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                    {item.badge}
+                  </span>
+                )}
+                <span className="ml-auto text-xs text-muted-foreground/60">{item.group}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {!error && done && !hasVendors && !hasOrders && navMatches.length === 0 && (
+        <div className="rounded-xl border border-dashed p-10 text-center">
+          <p className="text-sm text-muted-foreground">No vendors or orders match “{query}”.</p>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {vendorTarget && (
+              <button onClick={openVendor} className="text-xs font-medium text-primary hover:underline">
+                Browse all vendors
+              </button>
+            )}
+            {(role === "customer" || role === "vendor" || role === "admin") && (
+              <>
+                {vendorTarget && <span className="text-muted-foreground/40">·</span>}
+                <button onClick={openOrders} className="text-xs font-medium text-primary hover:underline">
+                  Browse all orders
+                </button>
+              </>
+            )}
+          </div>
         </div>
       )}
 

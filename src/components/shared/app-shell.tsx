@@ -443,7 +443,7 @@ export function AppShell({
               </motion.div>
             </AnimatePresence>
           </div>
-          {isSearching && <SearchResults query={searchQuery.trim()} onNavigate={onNavigate} />}
+          {isSearching && <SearchResults query={searchQuery.trim()} groups={groups} onNavigate={onNavigate} />}
         </main>
       </div>
 
