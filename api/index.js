@@ -1065,7 +1065,7 @@ router4.get("/", async (req, res) => {
     if (isOpen === "true") query = query.eq("is_open", true);
     if (service) query = query.contains("services_offered", [service]);
     if (ownerId) query = query.eq("owner_id", ownerId);
-    if (search) query = query.or(`name.ilike.%${search}%,area.ilike.%${search}%,category.ilike.%${search}%`);
+    if (search) query = query.or(`name.ilike.%${search}%,area.ilike.%${search}%`);
     query = query.order("rating", { ascending: false });
     let { data, error } = await query;
     if (error) {

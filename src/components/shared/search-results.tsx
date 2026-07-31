@@ -23,11 +23,13 @@ export function SearchResults({ query, onNavigate }: SearchResultsProps) {
   const [vendors, setVendors] = useState<Vendor[] | null>(null);
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setVendors(null);
     setOrders(null);
+    setError(null);
 
     const timer = setTimeout(async () => {
       setLoading(true);
@@ -53,9 +55,16 @@ export function SearchResults({ query, onNavigate }: SearchResultsProps) {
           const ordersRes = await api.get<Order[]>(ordersUrl);
           if (cancelled) return;
           setOrders(ordersRes);
+        } else {
+          setOrders([]);
         }
       } catch (err) {
         console.error("[search] fetch error", err);
+        if (!cancelled) {
+          setError("Search failed. Please try again.");
+          setVendors([]);
+          setOrders([]);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -93,7 +102,13 @@ export function SearchResults({ query, onNavigate }: SearchResultsProps) {
         {loading && <Loader2 className="h-3.5 w-3.5 animate-spin ml-1" />}
       </div>
 
-      {done && !hasVendors && !hasOrders && (
+      {error && (
+        <div className="rounded-xl border border-dashed border-rose-200 bg-rose-50/50 p-8 text-center text-sm text-rose-600 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-400">
+          {error}
+        </div>
+      )}
+
+      {!error && done && !hasVendors && !hasOrders && (
         <div className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">
           No vendors or orders match “{query}”.
         </div>
@@ -126,10 +141,7 @@ export function SearchResults({ query, onNavigate }: SearchResultsProps) {
                   </div>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold">{v.name}</p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {v.area}
-                      {v.category ? ` · ${v.category}` : ""}
-                    </p>
+                    <p className="truncate text-xs text-muted-foreground">{v.area}</p>
                   </div>
                 </button>
               ))}
