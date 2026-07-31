@@ -45,7 +45,7 @@ import { BrandLockup, LogoMark } from "./brand";
 import { cn } from "@/lib/utils";
 import { AiAssistant } from "@/components/ai/ai-assistant";
 import { Icon } from "./icon";
-import { CommandPalette } from "./command-palette";
+import { SearchResults } from "./search-results";
 
 export interface NavItem {
   id: string;
@@ -78,7 +78,9 @@ export function AppShell({
   pageSubtitle,
   actions,
 }: AppShellProps) {
-  const [commandOpen, setCommandOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const {
     sidebarOpen,
     setSidebar,
@@ -95,14 +97,37 @@ export function AppShell({
     toggleTheme,
     logout,
     toggleAi,
+    setPendingSearchQuery,
   } = useAppStore();
+
+  const isSearching = searchQuery.trim().length > 0;
+
+  const jumpToSearchPage = () => {
+    const q = searchQuery.trim();
+    if (!q) return;
+    setPendingSearchQuery(q);
+    setSearchQuery("");
+    setMobileSearchOpen(false);
+    if (role === "customer") onNavigate("discover");
+    else if (role === "vendor") onNavigate("orders");
+    else if (role === "admin") onNavigate("orders");
+    else if (role === "delivery") onNavigate("pickups");
+    else onNavigate("dashboard");
+  };
 
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setCommandOpen(true);
+        setMobileSearchOpen(false);
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+      if (e.key === "Escape") {
+        setSearchQuery("");
+        setMobileSearchOpen(false);
+        (document.activeElement as HTMLElement | null)?.blur();
       }
     };
     window.addEventListener("keydown", handler);
@@ -205,7 +230,7 @@ export function AppShell({
       {/* Main */}
       <div className="flex flex-1 flex-col min-w-0">
         {/* Top bar */}
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 bg-background/70 backdrop-blur-xl px-5 lg:px-8">
+        <header className="sticky top-0 z-30 flex min-h-16 flex-wrap items-center gap-3 bg-background/70 backdrop-blur-xl px-5 lg:px-8 py-2">
           <Button
             variant="ghost"
             size="icon"
@@ -224,21 +249,32 @@ export function AppShell({
           <div className="flex-1" />
 
           {/* Search */}
-          <button
-            onClick={() => setCommandOpen(true)}
-            className="hidden md:flex items-center h-9 w-64 rounded-lg bg-tonal px-3 text-sm text-muted-foreground hover:bg-tonal-accent transition-colors"
-          >
+          <div className="hidden md:flex items-center h-9 w-64 rounded-lg bg-tonal px-3 text-sm text-muted-foreground focus-within:bg-tonal-accent focus-within:ring-2 focus-within:ring-primary/25 transition-colors">
             <Search className="h-3.5 w-3.5 mr-2 opacity-70" />
-            <span className="flex-1 text-left text-[13px] text-muted-foreground/70">Search orders, vendors…</span>
+            <input
+              ref={searchInputRef}
+              placeholder="Search orders, vendors…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") jumpToSearchPage();
+              }}
+              className="flex-1 bg-transparent outline-none placeholder:text-muted-foreground/70 text-[13px]"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery("")} aria-label="Clear search" className="shrink-0">
+                <X className="h-3.5 w-3.5 opacity-60 hover:opacity-100" />
+              </button>
+            )}
             <kbd className="ml-2 hidden lg:inline rounded bg-background px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/60">⌘K</kbd>
-          </button>
+          </div>
 
-          {/* Mobile search */}
+          {/* Mobile search toggle */}
           <Button
             variant="ghost"
             size="icon"
             className="md:hidden"
-            onClick={() => setCommandOpen(true)}
+            onClick={() => setMobileSearchOpen((o) => !o)}
             aria-label="Search"
           >
             <Search className="h-[18px] w-[18px]" />
@@ -351,46 +387,65 @@ export function AppShell({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* Mobile search row */}
+          {mobileSearchOpen && (
+            <div className="md:hidden flex w-full items-center h-9 rounded-lg bg-tonal px-3 focus-within:bg-tonal-accent focus-within:ring-2 focus-within:ring-primary/25 transition-colors">
+              <Search className="h-3.5 w-3.5 mr-2 opacity-70" />
+              <input
+                autoFocus
+                placeholder="Search orders, vendors…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") jumpToSearchPage();
+                }}
+                className="flex-1 bg-transparent outline-none placeholder:text-muted-foreground/70 text-[13px]"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery("")} aria-label="Clear search" className="shrink-0">
+                  <X className="h-3.5 w-3.5 opacity-60 hover:opacity-100" />
+                </button>
+              )}
+            </div>
+          )}
         </header>
 
         {/* Page header */}
-        <div className="flex flex-col gap-4 px-5 lg:px-8 pt-8 pb-3">
-          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-            <div>
-              <h1 className="text-[26px] md:text-[32px] font-semibold tracking-tight leading-tight" style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}>
-                {pageTitle}
-              </h1>
-              {pageSubtitle && (
-                <p className="text-[13px] text-muted-foreground mt-1.5 tracking-tight">{pageSubtitle}</p>
-              )}
+        {!isSearching && (
+          <div className="flex flex-col gap-4 px-5 lg:px-8 pt-8 pb-3">
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+              <div>
+                <h1 className="text-[26px] md:text-[32px] font-semibold tracking-tight leading-tight" style={{ fontFamily: "var(--font-display)", fontWeight: 500 }}>
+                  {pageTitle}
+                </h1>
+                {pageSubtitle && (
+                  <p className="text-[13px] text-muted-foreground mt-1.5 tracking-tight">{pageSubtitle}</p>
+                )}
+              </div>
+              {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
             </div>
-            {actions && <div className="flex items-center gap-2 flex-wrap">{actions}</div>}
           </div>
-        </div>
+        )}
 
         {/* Main content */}
         <main className="flex-1 px-5 lg:px-8 py-4 pb-16">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeView}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-            >
-              {children}
-            </motion.div>
-          </AnimatePresence>
+          <div className={cn(isSearching && "hidden")}>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={activeView}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+              >
+                {children}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+          {isSearching && <SearchResults query={searchQuery.trim()} onNavigate={onNavigate} />}
         </main>
       </div>
-
-      {/* Command palette */}
-      <CommandPalette
-        open={commandOpen}
-        onOpenChange={setCommandOpen}
-        groups={groups}
-        onNavigate={onNavigate}
-      />
 
       {/* AI Assistant overlay */}
       <AiAssistant />

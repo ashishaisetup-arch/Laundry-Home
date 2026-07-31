@@ -55,6 +55,7 @@ router.get("/", async (req: Request, res: Response) => {
     const isOpen = req.query.isOpen as string;
     const service = req.query.service as string;
     const ownerId = req.query.owner_id as string;
+    const search = req.query.search as string;
     const lat = req.query.lat as string;
     const lng = req.query.lng as string;
     const radiusKm = parseFloat(req.query.radiusKm as string) || 5;
@@ -66,6 +67,7 @@ router.get("/", async (req: Request, res: Response) => {
     if (isOpen === "true") query = query.eq("is_open", true);
     if (service) query = query.contains("services_offered", [service]);
     if (ownerId) query = query.eq("owner_id", ownerId);
+    if (search) query = query.or(`name.ilike.%${search}%,area.ilike.%${search}%,category.ilike.%${search}%`);
     query = query.order("rating", { ascending: false });
 
     let { data, error } = await query;

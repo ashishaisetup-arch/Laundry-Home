@@ -25,6 +25,7 @@ import type { Vendor } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
+import { useAppStore } from "@/lib/store";
 
 export function CustomerDiscover({ onBook, onLocationChange, onLocationUpdate }: { onBook: () => void; onLocationChange?: (area: string | null) => void; onLocationUpdate?: (loc: { area: string; city: string; pincode: string; lat: number; lng: number } | null) => void }) {
   const { data: addresses, refetch: refetchAddresses } = useAddresses();
@@ -38,6 +39,17 @@ export function CustomerDiscover({ onBook, onLocationChange, onLocationUpdate }:
   const [sortBy, setSortBy] = useState("distance");
   const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null);
   const [showLocationChange, setShowLocationChange] = useState(false);
+
+  const pendingSearch = useAppStore((s) => s.pendingSearchQuery);
+  const setPendingSearch = useAppStore((s) => s.setPendingSearchQuery);
+
+  // Consume a search query passed from the header search (Enter jump)
+  useEffect(() => {
+    if (pendingSearch) {
+      setSearch(pendingSearch);
+      setPendingSearch(null);
+    }
+  }, [pendingSearch, setPendingSearch]);
 
   const [location, setLocation] = useState<{
     area: string; city: string; pincode: string; lat: number; lng: number

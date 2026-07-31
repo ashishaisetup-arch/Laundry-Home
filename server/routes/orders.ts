@@ -39,6 +39,7 @@ router.get("/", async (req: Request, res: Response) => {
     const vendorId = req.query.vendorId as string;
     const deliveryExecutiveId = req.query.deliveryExecutiveId as string;
     const status = req.query.status as string;
+    const search = req.query.search as string;
     const limit = parseInt(req.query.limit as string) || 20;
     const isAdminQuery = req.query.admin === "true";
 
@@ -53,6 +54,7 @@ router.get("/", async (req: Request, res: Response) => {
     if (vendorId) query = query.eq("vendor_id", vendorId);
     if (deliveryExecutiveId) query = query.eq("delivery_executive_id", deliveryExecutiveId);
     if (status) query = query.eq("status", status);
+    if (search) query = query.or(`code.ilike.%${search}%,customer_name.ilike.%${search}%,vendor_name.ilike.%${search}%`);
 
     console.log("[orders] GET", { vendorId, deliveryExecutiveId, customerId, status, limit, isAdminQuery });
 

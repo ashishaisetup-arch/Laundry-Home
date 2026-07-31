@@ -590,6 +590,7 @@ router3.get("/", async (req, res) => {
     const vendorId = req.query.vendorId;
     const deliveryExecutiveId = req.query.deliveryExecutiveId;
     const status = req.query.status;
+    const search = req.query.search;
     const limit = parseInt(req.query.limit) || 20;
     const isAdminQuery = req.query.admin === "true";
     const user = req.user;
@@ -601,6 +602,7 @@ router3.get("/", async (req, res) => {
     if (vendorId) query = query.eq("vendor_id", vendorId);
     if (deliveryExecutiveId) query = query.eq("delivery_executive_id", deliveryExecutiveId);
     if (status) query = query.eq("status", status);
+    if (search) query = query.or(`code.ilike.%${search}%,customer_name.ilike.%${search}%,vendor_name.ilike.%${search}%`);
     console.log("[orders] GET", { vendorId, deliveryExecutiveId, customerId, status, limit, isAdminQuery });
     const { data, error } = await query;
     if (error) {
@@ -1052,6 +1054,7 @@ router4.get("/", async (req, res) => {
     const isOpen = req.query.isOpen;
     const service = req.query.service;
     const ownerId = req.query.owner_id;
+    const search = req.query.search;
     const lat = req.query.lat;
     const lng = req.query.lng;
     const radiusKm = parseFloat(req.query.radiusKm) || 5;
@@ -1062,6 +1065,7 @@ router4.get("/", async (req, res) => {
     if (isOpen === "true") query = query.eq("is_open", true);
     if (service) query = query.contains("services_offered", [service]);
     if (ownerId) query = query.eq("owner_id", ownerId);
+    if (search) query = query.or(`name.ilike.%${search}%,area.ilike.%${search}%,category.ilike.%${search}%`);
     query = query.order("rating", { ascending: false });
     let { data, error } = await query;
     if (error) {

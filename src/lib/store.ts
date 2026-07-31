@@ -59,6 +59,10 @@ interface AppState {
   setOrders: (orders: any[]) => void;
   patchOrder: (id: string, updates: Record<string, unknown>) => void;
   markOrderCancelled: (id: string) => void;
+
+  // Search
+  pendingSearchQuery: string | null;
+  setPendingSearchQuery: (query: string | null) => void;
 }
 
 
@@ -483,6 +487,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       ),
     }));
   },
+
+  pendingSearchQuery: null,
+  setPendingSearchQuery: (query: string | null) => set({ pendingSearchQuery: query }),
 
   setupRealtimeNotifications: () => {
     const state = get();
