@@ -5,7 +5,7 @@ import { SuperAdminApp } from "../super-admin-app";
 vi.mock("react-router-dom", () => ({
   useParams: () => ({ role: "superadmin" }),
   useNavigate: () => vi.fn(),
-  useLocation: () => ({ pathname: "/superadmin/overview" }),
+  useLocation: () => ({ pathname: "/superadmin/dashboard" }),
 }));
 
 vi.mock("framer-motion", () => ({
@@ -40,8 +40,8 @@ vi.mock("@/lib/hooks", () => ({
 }));
 
 vi.mock("../superadmin-helpers", () => ({
-  pageTitle: (v: string) => v === "overview" ? "Control Center" : v,
-  pageSubtitle: (v: string) => v === "overview" ? "Super Admin · Full platform access" : v,
+  pageTitle: (v: string) => v === "dashboard" ? "Control Center" : v,
+  pageSubtitle: (v: string) => v === "dashboard" ? "Super Admin · Full platform access" : v,
   NAV_GROUPS: [{ label: "Super Admin", items: [] }],
 }));
 
@@ -82,18 +82,18 @@ vi.mock("../vendor-onboarding", () => ({
 }));
 
 describe("SuperAdminApp", () => {
-  it("renders overview view by default", () => {
+  it("renders dashboard view by default", () => {
     render(<SuperAdminApp />);
     expect(screen.getByTestId("app-shell")).toBeInTheDocument();
     expect(screen.getByTestId("superadmin-overview")).toBeInTheDocument();
   });
 
-  it("shows correct page title for overview", () => {
+  it("shows correct page title for dashboard", () => {
     render(<SuperAdminApp />);
     expect(screen.getByTestId("page-title")).toHaveTextContent("Control Center");
   });
 
-  it("shows correct page subtitle for overview", () => {
+  it("shows correct page subtitle for dashboard", () => {
     render(<SuperAdminApp />);
     expect(screen.getByTestId("page-subtitle")).toHaveTextContent("Full platform access");
   });

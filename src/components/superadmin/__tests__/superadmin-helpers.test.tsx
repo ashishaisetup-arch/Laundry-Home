@@ -4,7 +4,7 @@ import { pageTitle, pageSubtitle, NAV_GROUPS, Crown } from "../superadmin-helper
 
 describe("pageTitle", () => {
   it("returns title for known views", () => {
-    expect(pageTitle("overview")).toBe("Control Center");
+    expect(pageTitle("dashboard")).toBe("Control Center");
     expect(pageTitle("vendors")).toBe("Vendors");
     expect(pageTitle("rbac")).toBe("Roles & Permissions");
     expect(pageTitle("users")).toBe("User Management");
@@ -23,7 +23,7 @@ describe("pageTitle", () => {
 
 describe("pageSubtitle", () => {
   it("returns subtitle for known views", () => {
-    expect(pageSubtitle("overview")).toMatch(/Super Admin/);
+    expect(pageSubtitle("dashboard")).toMatch(/Super Admin/);
     expect(pageSubtitle("vendors")).toMatch(/KYC/);
     expect(pageSubtitle("users")).toMatch(/staff/);
   });
@@ -42,7 +42,7 @@ describe("NAV_GROUPS", () => {
 
   it("includes all required nav items", () => {
     const ids = NAV_GROUPS[0].items.map((i) => i.id);
-    expect(ids).toContain("overview");
+    expect(ids).toContain("dashboard");
     expect(ids).toContain("onboard");
     expect(ids).toContain("vendors");
     expect(ids).toContain("rbac");

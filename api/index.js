@@ -35,7 +35,7 @@ __export(api_entry_exports, {
 module.exports = __toCommonJS(api_entry_exports);
 
 // server/app.ts
-var import_express38 = __toESM(require("express"));
+var import_express40 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
 
@@ -85,18 +85,18 @@ var PUBLIC_ROUTES = [
   "/api/subscriptions/plans",
   "/api/geocode"
 ];
-var PROTECTED_PREFIXES = [
-  "/api/orders",
-  "/api/addresses",
-  "/api/reviews",
-  "/api/delivery-tasks",
-  "/api/notifications",
-  "/api/wallet"
-];
 async function authMiddleware(req, res, next) {
   const pathname = req.path;
+  if (!pathname.startsWith("/api/")) {
+    next();
+    return;
+  }
+  if (PUBLIC_ROUTES.some((p) => pathname.startsWith(p))) {
+    next();
+    return;
+  }
   const matchedRoleRoute = Object.entries(ROLE_ROUTES).find(
-    ([prefix]) => pathname.startsWith(prefix)
+    ([prefix]) => pathname === prefix || pathname.startsWith(prefix + "/")
   );
   if (matchedRoleRoute) {
     try {
@@ -121,19 +121,6 @@ async function authMiddleware(req, res, next) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-  }
-  if (!pathname.startsWith("/api/")) {
-    next();
-    return;
-  }
-  if (PUBLIC_ROUTES.some((p) => pathname.startsWith(p))) {
-    next();
-    return;
-  }
-  const needsAuth = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
-  if (!needsAuth) {
-    next();
-    return;
   }
   try {
     const cookieGetter = (name) => req.cookies?.[name];
@@ -402,28 +389,34 @@ var DELIVERY_FEE = 40;
 var EXPRESS_SURCHARGE = 50;
 var TAX_RATE = 0.18;
 var REWARD_POINTS_RATE = 100;
-var SERVICES = {
-  wash_fold: { basePrice: 60, pricingType: "per_kg", expressMultiplier: 1.5 },
-  wash_iron: { basePrice: 15, pricingType: "per_piece", expressMultiplier: 1.5 },
-  dry_cleaning: { basePrice: 120, pricingType: "per_piece", expressMultiplier: 1.8 },
-  steam_ironing: { basePrice: 18, pricingType: "per_piece", expressMultiplier: 1.6 },
-  premium_care: { basePrice: 250, pricingType: "per_piece", expressMultiplier: 2 },
-  delicate_care: { basePrice: 180, pricingType: "per_piece", expressMultiplier: 1.8 },
-  shoe_cleaning: { basePrice: 149, pricingType: "per_piece", expressMultiplier: 1.5 },
-  blanket: { basePrice: 199, pricingType: "per_piece", expressMultiplier: 1.4 },
-  curtain: { basePrice: 220, pricingType: "per_piece", expressMultiplier: 1.4 },
-  carpet: { basePrice: 499, pricingType: "per_piece", expressMultiplier: 1.3 },
-  bulk: { basePrice: 45, pricingType: "per_kg", expressMultiplier: 1.2 }
-};
-function computeSubtotal(items) {
+async function computeSubtotal(items, admin, vendorId) {
+  const itemMasterIds = [...new Set(items.map((i) => i.itemId).filter(Boolean))];
+  const serviceIds = [...new Set(items.map((i) => i.serviceId).filter(Boolean))];
+  let defaultMap = {};
+  if (itemMasterIds.length > 0) {
+    const { data: serviceItems } = await admin.from("service_items").select("service_id, item_master_id, default_price").in("item_master_id", itemMasterIds);
+    for (const si of serviceItems || []) {
+      defaultMap[`${si.service_id}|${si.item_master_id}`] = si.default_price;
+    }
+  }
+  let vendorMap = {};
+  if (vendorId && itemMasterIds.length > 0) {
+    const { data: vendorPrices } = await admin.from("vendor_service_prices").select("service_id, price, service_items!inner(item_master_id)").eq("vendor_id", vendorId).eq("is_active", true);
+    for (const vp of vendorPrices || []) {
+      const itemMasterId = vp.service_items?.item_master_id;
+      if (itemMasterId) {
+        vendorMap[`${vp.service_id}|${itemMasterId}`] = vp.price;
+      }
+    }
+  }
   let subtotal = 0;
   let hasExpress = false;
   for (const item of items) {
-    const svc = SERVICES[item.serviceKey];
-    if (!svc) continue;
-    const price = svc.basePrice * item.qty;
-    const multiplier = item.express ? svc.expressMultiplier : 1;
-    subtotal += price * multiplier;
+    if (!item.serviceId) continue;
+    const key = `${item.serviceId}|${item.itemId || ""}`;
+    const unitPrice = vendorMap[key] || defaultMap[key] || 0;
+    const multiplier = item.express ? 1.5 : 1;
+    subtotal += unitPrice * item.qty * multiplier;
     if (item.express) hasExpress = true;
   }
   return { subtotal, hasExpress };
@@ -431,7 +424,7 @@ function computeSubtotal(items) {
 async function calculatePricing(input) {
   const admin = createAdminClient();
   const steps = [];
-  const { subtotal, hasExpress } = computeSubtotal(input.items);
+  const { subtotal, hasExpress } = await computeSubtotal(input.items, admin, input.vendorId);
   steps.push({ label: "Subtotal", amount: subtotal });
   let remaining = subtotal;
   let couponDiscount = 0;
@@ -541,9 +534,9 @@ async function applyPricingToOrder(orderData, pricing, userId) {
     }
   }
   if (pricing.couponCode) {
-    const { data: coupon } = await admin.from("coupons").select("id, used_count").eq("code", pricing.couponCode.toUpperCase()).single();
+    const { data: coupon } = await admin.from("coupons").select("code, used_count").eq("code", pricing.couponCode.toUpperCase()).single();
     if (coupon) {
-      await admin.from("coupons").update({ used_count: coupon.used_count + 1 }).eq("id", coupon.id);
+      await admin.from("coupons").update({ used_count: coupon.used_count + 1 }).eq("code", coupon.code);
     }
   }
 }
@@ -631,6 +624,7 @@ router3.post("/pricing", async (req, res) => {
     }
     const pricing = await calculatePricing({
       items: req.body.items || [],
+      vendorId: req.body.vendorId,
       couponCode: req.body.couponCode,
       redeemPoints: req.body.redeemPoints,
       useWalletAmount: req.body.useWalletAmount,
@@ -654,6 +648,10 @@ router3.post("/", async (req, res) => {
     }
     const body = req.body;
     const adminClient = createAdminClient();
+    const { data: profile, error: profileErr } = await adminClient.from("user_profiles").select("name, avatar").eq("id", user.id).single();
+    if (profileErr) {
+      console.error("[orders] profile lookup error for user", user.id, profileErr);
+    }
     const code = `LH-${Date.now().toString(36).toUpperCase()}`;
     const hasVendor = body.vendor_id && body.vendor_id !== "00000000-0000-0000-0000-000000000001" && body.vendor_id !== "00000000-0000-0000-0000-000000000002";
     let vendorName = body.vendor_name || "Vendor";
@@ -675,6 +673,7 @@ router3.post("/", async (req, res) => {
     const vendorCoords = vendorAreaKey ? KNOWN_AREAS[vendorAreaKey] : void 0;
     const pricing = await calculatePricing({
       items: body.items || [],
+      vendorId: body.vendorId || body.vendor_id,
       couponCode: body.couponCode,
       redeemPoints: body.redeemPoints || body.redeem_points,
       useWalletAmount: body.useWalletAmount || body.use_wallet_amount || 0,
@@ -686,8 +685,8 @@ router3.post("/", async (req, res) => {
     const orderData = {
       code,
       customer_id: user.id,
-      customer_name: body.customer_name || "Customer",
-      customer_avatar: body.customer_avatar || "",
+      customer_name: profile?.name || "Customer",
+      customer_avatar: profile?.avatar || "",
       vendor_id: hasVendor ? body.vendor_id : null,
       vendor_name: vendorName,
       vendor_logo_initials: vendorLogoInitials,
@@ -975,10 +974,10 @@ router3.post("/reorder/:id", async (req, res) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     const { id } = req.params;
-    const { data: original, error: fetchError } = await supabase.from("orders").select("*").eq("id", id).eq("user_id", user.id).single();
+    const { data: original, error: fetchError } = await supabase.from("orders").select("*").eq("id", id).eq("customer_id", user.id).single();
     if (fetchError || !original) return res.status(404).json({ error: "Order not found" });
     const newOrder = {
-      user_id: user.id,
+      customer_id: user.id,
       vendor_id: original.vendor_id,
       pickup_area: original.pickup_area,
       pickup_address: original.pickup_address,
@@ -1701,10 +1700,219 @@ router10.post("/", async (req, res) => {
 });
 var reviews_default = router10;
 
-// server/routes/services.ts
+// server/routes/service-categories.ts
 var import_express11 = require("express");
 var router11 = (0, import_express11.Router)();
 router11.get("/", async (_req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("service_categories").select("*").order("display_order");
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router11.post("/", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { name, description, icon, display_order, is_active, grouping } = req.body;
+    const { data, error } = await supabase.from("service_categories").insert({ name, description, icon, display_order, is_active, grouping }).select().single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router11.put("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { name, description, icon, display_order, is_active, grouping } = req.body;
+    const { data, error } = await supabase.from("service_categories").update({ name, description, icon, display_order, is_active, grouping }).eq("id", req.params.id).select().single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router11.delete("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("service_categories").delete().eq("id", req.params.id);
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var service_categories_default = router11;
+
+// server/routes/service-items.ts
+var import_express12 = require("express");
+var router12 = (0, import_express12.Router)();
+router12.get("/", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    let query = supabase.from("service_items").select("*, services(name, unit)");
+    if (req.query.include_inactive !== "true") {
+      query = query.eq("is_active", true);
+    }
+    const { data, error } = await query.order("item_name");
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    const result = (data || []).map((i) => ({
+      id: i.id,
+      serviceId: i.service_id,
+      itemName: i.item_name,
+      itemCategory: i.item_category,
+      unit: i.unit,
+      defaultPrice: i.default_price,
+      estimatedTime: i.estimated_time,
+      estimatedWeightKg: i.estimated_weight_kg,
+      itemMasterId: i.item_master_id,
+      isActive: i.is_active,
+      service: i.services ? {
+        id: i.services.id,
+        name: i.services.name,
+        unit: i.services.unit
+      } : void 0
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router12.get("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("service_items").select("*, services(name, unit)").eq("id", req.params.id).single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    if (!data) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const i = data;
+    res.json({
+      id: i.id,
+      serviceId: i.service_id,
+      itemName: i.item_name,
+      itemCategory: i.item_category,
+      unit: i.unit,
+      defaultPrice: i.default_price,
+      estimatedTime: i.estimated_time,
+      estimatedWeightKg: i.estimated_weight_kg,
+      itemMasterId: i.item_master_id,
+      isActive: i.is_active,
+      service: i.services ? { id: i.services.id, name: i.services.name, unit: i.services.unit } : void 0
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router12.post("/", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { serviceId, itemName, itemCategory, unit, defaultPrice, estimatedTime, estimatedWeightKg, isActive } = req.body;
+    const weightKg = estimatedWeightKg ? parseFloat(estimatedWeightKg) : null;
+    const { data: masterItem, error: masterErr } = await supabase.from("item_master").upsert({
+      category: itemCategory,
+      item_name: itemName,
+      estimated_weight_kg: weightKg
+    }, { onConflict: "item_name,category", ignoreDuplicates: false }).select("id").single();
+    if (masterErr) {
+      res.status(500).json({ error: masterErr.message });
+      return;
+    }
+    const { data, error } = await supabase.from("service_items").upsert({
+      service_id: serviceId,
+      item_name: itemName,
+      item_category: itemCategory,
+      unit,
+      default_price: defaultPrice,
+      estimated_time: estimatedTime,
+      estimated_weight_kg: weightKg,
+      item_master_id: masterItem.id,
+      is_active: isActive ?? true
+    }, { onConflict: "service_id,item_name,item_category", ignoreDuplicates: false }).select().single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router12.put("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { serviceId, itemName, itemCategory, unit, defaultPrice, estimatedTime, estimatedWeightKg, isActive } = req.body;
+    const weightKg = estimatedWeightKg ? parseFloat(estimatedWeightKg) : null;
+    const { data: masterItem, error: masterErr } = await supabase.from("item_master").upsert({
+      category: itemCategory,
+      item_name: itemName,
+      estimated_weight_kg: weightKg
+    }, { onConflict: "item_name,category", ignoreDuplicates: false }).select("id").single();
+    if (masterErr) {
+      res.status(500).json({ error: masterErr.message });
+      return;
+    }
+    const { data, error } = await supabase.from("service_items").update({
+      service_id: serviceId,
+      item_name: itemName,
+      item_category: itemCategory,
+      unit,
+      default_price: defaultPrice,
+      estimated_time: estimatedTime,
+      estimated_weight_kg: weightKg,
+      item_master_id: masterItem.id,
+      is_active: isActive
+    }).eq("id", req.params.id).select().single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router12.delete("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("service_items").delete().eq("id", req.params.id);
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var service_items_default = router12;
+
+// server/routes/services.ts
+var import_express13 = require("express");
+var router13 = (0, import_express13.Router)();
+router13.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("services").select("*");
@@ -1717,12 +1925,52 @@ router11.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var services_default = router11;
+router13.get("/catalog", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const includeInactive = req.query.includeInactive === "true";
+    let query = supabase.from("service_categories").select("*, services(*, service_items(*))").order("display_order").order("display_order", { foreignTable: "services" });
+    if (!includeInactive) {
+      query = query.eq("is_active", true);
+    }
+    const { data, error } = await query;
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    const result = (data || []).map((cat) => {
+      const services = (cat.services || []).filter((s) => includeInactive || s.is_active !== false).map((s) => {
+        const { service_items: _2, ...serviceRest } = s;
+        return {
+          ...serviceRest,
+          items: (s.service_items || []).filter((i) => includeInactive || i.is_active !== false).map((i) => ({
+            id: i.id,
+            serviceId: i.service_id,
+            itemName: i.item_name,
+            itemCategory: i.item_category,
+            unit: i.unit,
+            defaultPrice: i.default_price,
+            estimatedTime: i.estimated_time,
+            estimatedWeightKg: i.estimated_weight_kg,
+            itemMasterId: i.item_master_id,
+            isActive: i.is_active
+          }))
+        };
+      });
+      const { services: _, service_items: __, ...rest } = cat;
+      return { ...rest, services };
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var services_default = router13;
 
 // server/routes/coupons.ts
-var import_express12 = require("express");
-var router12 = (0, import_express12.Router)();
-router12.get("/", async (_req, res) => {
+var import_express14 = require("express");
+var router14 = (0, import_express14.Router)();
+router14.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("coupons").select("*").eq("active", true).order("max_discount", { ascending: false });
@@ -1735,14 +1983,14 @@ router12.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var coupons_default = router12;
+var coupons_default = router14;
 
 // server/routes/admin.ts
-var import_express13 = require("express");
-var router13 = (0, import_express13.Router)();
+var import_express15 = require("express");
+var router15 = (0, import_express15.Router)();
 var DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-router13.get("/kpis", async (_req, res) => {
+router15.get("/kpis", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const todayStart = /* @__PURE__ */ new Date();
@@ -1804,7 +2052,7 @@ router13.get("/kpis", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router13.get("/analytics", async (_req, res) => {
+router15.get("/analytics", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const sevenDaysAgo = /* @__PURE__ */ new Date();
@@ -1902,7 +2150,7 @@ router13.get("/analytics", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router13.get("/orders", async (req, res) => {
+router15.get("/orders", async (req, res) => {
   try {
     const supabase = createAdminClient();
     let query = supabase.from("orders").select("*");
@@ -1958,14 +2206,14 @@ router13.get("/orders", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_default = router13;
+var admin_default = router15;
 
 // server/routes/vendor-analytics.ts
-var import_express14 = require("express");
-var router14 = (0, import_express14.Router)();
+var import_express16 = require("express");
+var router16 = (0, import_express16.Router)();
 var COLORS = ["#0d9488", "#10b981", "#8b5cf6", "#f59e0b", "#06b6d4", "#ec4899", "#f97316"];
 var DAY_LABELS2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-router14.get("/", async (req, res) => {
+router16.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -1983,7 +2231,7 @@ router14.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router14.get("/weekly-revenue", async (req, res) => {
+router16.get("/weekly-revenue", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2020,7 +2268,7 @@ router14.get("/weekly-revenue", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router14.get("/service-revenue", async (req, res) => {
+router16.get("/service-revenue", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2056,7 +2304,7 @@ router14.get("/service-revenue", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router14.get("/stats", async (req, res) => {
+router16.get("/stats", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2111,7 +2359,7 @@ router14.get("/stats", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router14.get("/inventory", async (req, res) => {
+router16.get("/inventory", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2125,12 +2373,12 @@ router14.get("/inventory", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_analytics_default = router14;
+var vendor_analytics_default = router16;
 
 // server/routes/subscriptions.ts
-var import_express15 = require("express");
-var router15 = (0, import_express15.Router)();
-router15.get("/plans", async (_req, res) => {
+var import_express17 = require("express");
+var router17 = (0, import_express17.Router)();
+router17.get("/plans", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("subscription_plans").select("*").order("price");
@@ -2153,7 +2401,7 @@ router15.get("/plans", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router15.get("/", async (req, res) => {
+router17.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2172,7 +2420,7 @@ router15.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router15.post("/", async (req, res) => {
+router17.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2191,7 +2439,7 @@ router15.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router15.delete("/:id", async (req, res) => {
+router17.delete("/:id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2210,12 +2458,12 @@ router15.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var subscriptions_default = router15;
+var subscriptions_default = router17;
 
 // server/routes/vendor-staff.ts
-var import_express16 = require("express");
-var router16 = (0, import_express16.Router)();
-router16.get("/", async (req, res) => {
+var import_express18 = require("express");
+var router18 = (0, import_express18.Router)();
+router18.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     const admin = createAdminClient();
@@ -2231,7 +2479,7 @@ router16.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router16.post("/", async (req, res) => {
+router18.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2250,7 +2498,7 @@ router16.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router16.patch("/:id", async (req, res) => {
+router18.patch("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("vendor_staff").update(req.body).eq("id", req.params.id).select().single();
@@ -2263,7 +2511,7 @@ router16.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router16.delete("/:id", async (req, res) => {
+router18.delete("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("vendor_staff").delete().eq("id", req.params.id);
@@ -2276,12 +2524,12 @@ router16.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_staff_default = router16;
+var vendor_staff_default = router18;
 
 // server/routes/garments.ts
-var import_express17 = require("express");
-var router17 = (0, import_express17.Router)();
-router17.get("/", async (req, res) => {
+var import_express19 = require("express");
+var router19 = (0, import_express19.Router)();
+router19.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     const admin = createAdminClient();
@@ -2297,7 +2545,7 @@ router17.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router17.post("/", async (req, res) => {
+router19.post("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("garment_inventory").insert(req.body).select().single();
@@ -2310,7 +2558,7 @@ router17.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router17.patch("/:id", async (req, res) => {
+router19.patch("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("garment_inventory").update(req.body).eq("id", req.params.id).select().single();
@@ -2323,7 +2571,7 @@ router17.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router17.delete("/:id", async (req, res) => {
+router19.delete("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("garment_inventory").delete().eq("id", req.params.id);
@@ -2336,12 +2584,12 @@ router17.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var garments_default = router17;
+var garments_default = router19;
 
 // server/routes/wallet-methods.ts
-var import_express18 = require("express");
-var router18 = (0, import_express18.Router)();
-router18.get("/", async (req, res) => {
+var import_express20 = require("express");
+var router20 = (0, import_express20.Router)();
+router20.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2360,7 +2608,7 @@ router18.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router18.post("/", async (req, res) => {
+router20.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2382,7 +2630,7 @@ router18.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router18.patch("/:id/default", async (req, res) => {
+router20.patch("/:id/default", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2398,7 +2646,7 @@ router18.patch("/:id/default", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router18.delete("/:id", async (req, res) => {
+router20.delete("/:id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2417,12 +2665,12 @@ router18.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var wallet_methods_default = router18;
+var wallet_methods_default = router20;
 
 // server/routes/coupon-validate.ts
-var import_express19 = require("express");
-var router19 = (0, import_express19.Router)();
-router19.post("/", async (req, res) => {
+var import_express21 = require("express");
+var router21 = (0, import_express21.Router)();
+router21.post("/", async (req, res) => {
   try {
     const { code, subtotal } = req.body;
     if (!code) {
@@ -2458,12 +2706,12 @@ router19.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var coupon_validate_default = router19;
+var coupon_validate_default = router21;
 
 // server/routes/support-tickets.ts
-var import_express20 = require("express");
-var router20 = (0, import_express20.Router)();
-router20.get("/", async (req, res) => {
+var import_express22 = require("express");
+var router22 = (0, import_express22.Router)();
+router22.get("/", async (req, res) => {
   try {
     const status = req.query.status;
     const supabase = createAdminClient();
@@ -2479,7 +2727,7 @@ router20.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.post("/", async (req, res) => {
+router22.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2498,7 +2746,7 @@ router20.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.patch("/:id", async (req, res) => {
+router22.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const admin = createAdminClient();
@@ -2513,7 +2761,7 @@ router20.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.post("/:id/assign", async (req, res) => {
+router22.post("/:id/assign", async (req, res) => {
   try {
     const { id } = req.params;
     const { assigned_to } = req.body;
@@ -2536,7 +2784,7 @@ router20.post("/:id/assign", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.post("/:id/respond", async (req, res) => {
+router22.post("/:id/respond", async (req, res) => {
   try {
     const { id } = req.params;
     const { response } = req.body;
@@ -2565,7 +2813,7 @@ router20.post("/:id/respond", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.post("/:id/close", async (req, res) => {
+router22.post("/:id/close", async (req, res) => {
   try {
     const { id } = req.params;
     const admin = createAdminClient();
@@ -2583,12 +2831,12 @@ router20.post("/:id/close", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var support_tickets_default = router20;
+var support_tickets_default = router22;
 
 // server/routes/admin-campaigns.ts
-var import_express21 = require("express");
-var router21 = (0, import_express21.Router)();
-router21.get("/", async (req, res) => {
+var import_express23 = require("express");
+var router23 = (0, import_express23.Router)();
+router23.get("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("campaigns").select("*").order("created_at", { ascending: false });
@@ -2601,7 +2849,7 @@ router21.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router21.post("/", async (req, res) => {
+router23.post("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("campaigns").insert(req.body).select().single();
@@ -2614,7 +2862,7 @@ router21.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router21.patch("/:id", async (req, res) => {
+router23.patch("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("campaigns").update(req.body).eq("id", req.params.id).select().single();
@@ -2627,12 +2875,12 @@ router21.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_campaigns_default = router21;
+var admin_campaigns_default = router23;
 
 // server/routes/admin-features.ts
-var import_express22 = require("express");
-var router22 = (0, import_express22.Router)();
-router22.get("/", async (_req, res) => {
+var import_express24 = require("express");
+var router24 = (0, import_express24.Router)();
+router24.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("feature_flags").select("*").order("key");
@@ -2645,7 +2893,7 @@ router22.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router22.patch("/:key", async (req, res) => {
+router24.patch("/:key", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("feature_flags").update({ enabled: req.body.enabled, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("key", req.params.key).select().single();
@@ -2658,12 +2906,12 @@ router22.patch("/:key", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_features_default = router22;
+var admin_features_default = router24;
 
 // server/routes/admin-audit-logs.ts
-var import_express23 = require("express");
-var router23 = (0, import_express23.Router)();
-router23.get("/", async (req, res) => {
+var import_express25 = require("express");
+var router25 = (0, import_express25.Router)();
+router25.get("/", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const admin = createAdminClient();
@@ -2677,13 +2925,13 @@ router23.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_audit_logs_default = router23;
+var admin_audit_logs_default = router25;
 
 // server/routes/admin-integrations.ts
-var import_express24 = require("express");
+var import_express26 = require("express");
 var import_crypto = __toESM(require("crypto"));
-var router24 = (0, import_express24.Router)();
-router24.get("/api-keys", async (_req, res) => {
+var router26 = (0, import_express26.Router)();
+router26.get("/api-keys", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("api_keys").select("*").order("created_at", { ascending: false });
@@ -2696,7 +2944,7 @@ router24.get("/api-keys", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router24.post("/api-keys", async (req, res) => {
+router26.post("/api-keys", async (req, res) => {
   try {
     const admin = createAdminClient();
     const keyValue = `lh_${import_crypto.default.randomBytes(24).toString("hex")}`;
@@ -2710,7 +2958,7 @@ router24.post("/api-keys", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router24.delete("/api-keys/:id", async (req, res) => {
+router26.delete("/api-keys/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("api_keys").delete().eq("id", req.params.id);
@@ -2723,7 +2971,7 @@ router24.delete("/api-keys/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router24.get("/webhooks", async (_req, res) => {
+router26.get("/webhooks", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("webhooks").select("*").order("created_at", { ascending: false });
@@ -2736,7 +2984,7 @@ router24.get("/webhooks", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router24.post("/webhooks", async (req, res) => {
+router26.post("/webhooks", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("webhooks").insert(req.body).select().single();
@@ -2749,7 +2997,7 @@ router24.post("/webhooks", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router24.delete("/webhooks/:id", async (req, res) => {
+router26.delete("/webhooks/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("webhooks").delete().eq("id", req.params.id);
@@ -2762,12 +3010,12 @@ router24.delete("/webhooks/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_integrations_default = router24;
+var admin_integrations_default = router26;
 
 // server/routes/admin-reports.ts
-var import_express25 = require("express");
-var router25 = (0, import_express25.Router)();
-router25.get("/", async (_req, res) => {
+var import_express27 = require("express");
+var router27 = (0, import_express27.Router)();
+router27.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data: reports, error: rErr } = await admin.from("reports").select("*").order("created_at", { ascending: false });
@@ -2785,7 +3033,7 @@ router25.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router25.post("/", async (req, res) => {
+router27.post("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("reports").insert(req.body).select().single();
@@ -2798,7 +3046,7 @@ router25.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router25.post("/scheduled", async (req, res) => {
+router27.post("/scheduled", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("scheduled_reports").insert(req.body).select().single();
@@ -2811,7 +3059,7 @@ router25.post("/scheduled", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router25.delete("/scheduled/:id", async (req, res) => {
+router27.delete("/scheduled/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("scheduled_reports").delete().eq("id", req.params.id);
@@ -2824,12 +3072,12 @@ router25.delete("/scheduled/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_reports_default = router25;
+var admin_reports_default = router27;
 
 // server/routes/admin-users.ts
-var import_express26 = require("express");
-var router26 = (0, import_express26.Router)();
-router26.get("/", async (_req, res) => {
+var import_express28 = require("express");
+var router28 = (0, import_express28.Router)();
+router28.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data: profiles, error } = await admin.from("user_profiles").select("id, name, email, phone, role, avatar, suspended, created_at, updated_at").order("created_at", { ascending: false });
@@ -2853,7 +3101,7 @@ router26.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router26.patch("/:id", async (req, res) => {
+router28.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, role, status } = req.body;
@@ -2886,12 +3134,12 @@ router26.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_users_default = router26;
+var admin_users_default = router28;
 
 // server/routes/admin-config.ts
-var import_express27 = require("express");
-var router27 = (0, import_express27.Router)();
-router27.get("/", async (_req, res) => {
+var import_express29 = require("express");
+var router29 = (0, import_express29.Router)();
+router29.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
@@ -2904,7 +3152,7 @@ router27.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router27.patch("/", async (req, res) => {
+router29.patch("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data: existing, error: getErr } = await admin.from("system_config").select("config").eq("id", 1).single();
@@ -2931,12 +3179,12 @@ router27.patch("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_config_default = router27;
+var admin_config_default = router29;
 
 // server/routes/admin-rbac.ts
-var import_express28 = require("express");
-var router28 = (0, import_express28.Router)();
-router28.get("/", async (_req, res) => {
+var import_express30 = require("express");
+var router30 = (0, import_express30.Router)();
+router30.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data: roles, error: rolesErr } = await admin.from("roles").select("*").order("name");
@@ -2959,7 +3207,7 @@ router28.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router28.patch("/:id", async (req, res) => {
+router30.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { allowed } = req.body;
@@ -2974,11 +3222,11 @@ router28.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_rbac_default = router28;
+var admin_rbac_default = router30;
 
 // server/routes/admin-commission.ts
-var import_express29 = require("express");
-var router29 = (0, import_express29.Router)();
+var import_express31 = require("express");
+var router31 = (0, import_express31.Router)();
 function getConfig(supabase) {
   return supabase.from("system_config").select("config").eq("id", 1).single().then((r) => r.data?.config || {});
 }
@@ -2999,7 +3247,7 @@ async function ensureRules(supabase) {
   await saveConfig(supabase, config);
   return config;
 }
-router29.get("/rules", async (_req, res) => {
+router31.get("/rules", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3008,7 +3256,7 @@ router29.get("/rules", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.post("/rules", async (req, res) => {
+router31.post("/rules", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3026,7 +3274,7 @@ router29.post("/rules", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.patch("/rules/:id", async (req, res) => {
+router31.patch("/rules/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3048,7 +3296,7 @@ router29.patch("/rules/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.delete("/rules/:id", async (req, res) => {
+router31.delete("/rules/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3064,7 +3312,7 @@ router29.delete("/rules/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.get("/settlements", async (_req, res) => {
+router31.get("/settlements", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await getConfig(supabase);
@@ -3073,7 +3321,7 @@ router29.get("/settlements", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.post("/settlements", async (req, res) => {
+router31.post("/settlements", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await getConfig(supabase);
@@ -3091,7 +3339,7 @@ router29.post("/settlements", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.patch("/settlements/:id/settle", async (req, res) => {
+router31.patch("/settlements/:id/settle", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await getConfig(supabase);
@@ -3114,7 +3362,7 @@ router29.patch("/settlements/:id/settle", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.get("/summary", async (_req, res) => {
+router31.get("/summary", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data: vendors, error: vErr } = await supabase.from("vendors").select("id, name, monthly_revenue, rating, logo_initials, logo_color");
@@ -3148,12 +3396,12 @@ router29.get("/summary", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_commission_default = router29;
+var admin_commission_default = router31;
 
 // server/routes/order-stages.ts
-var import_express30 = require("express");
-var router30 = (0, import_express30.Router)();
-router30.get("/", async (_req, res) => {
+var import_express32 = require("express");
+var router32 = (0, import_express32.Router)();
+router32.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("order_stage_definitions").select("*").order("sort_order");
@@ -3166,16 +3414,22 @@ router30.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var order_stages_default = router30;
+var order_stages_default = router32;
 
 // server/routes/chat.ts
-var import_express31 = require("express");
-var router31 = (0, import_express31.Router)();
-router31.get("/", async (req, res) => {
+var import_express33 = require("express");
+var router33 = (0, import_express33.Router)();
+router33.get("/", async (req, res) => {
   try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
     const admin = createAdminClient();
     const limit = parseInt(req.query.limit) || 50;
-    const { data, error } = await admin.from("chat_messages").select("*").order("created_at", { ascending: false }).limit(limit);
+    const { data, error } = await admin.from("chat_messages").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(limit);
     if (error) {
       res.status(500).json({ error: error.message });
       return;
@@ -3185,7 +3439,7 @@ router31.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.post("/", async (req, res) => {
+router33.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3204,7 +3458,7 @@ router31.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.post("/ask", async (req, res) => {
+router33.post("/ask", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3248,11 +3502,11 @@ ${vendors.slice(0, 6).map(
         reply = "No vendors are currently available in your area. Check back soon!";
       }
     } else if (/(price|cost|rate|how much|pricing|charges)/.test(lower)) {
-      const { data: services } = await admin.from("services").select("name, base_price, pricing_type").limit(10);
+      const { data: services } = await admin.from("services").select("name, unit").limit(10);
       if (services && services.length > 0) {
         reply = `Our pricing:
 ${services.map(
-          (s) => `\u2022 **${s.name}** \u2014 \u20B9${s.base_price}/${s.pricing_type === "per_kg" ? "kg" : "pc"}`
+          (s) => `\u2022 **${s.name}** (${s.unit})`
         ).join("\n")}
 
 *Prices may vary by vendor. Check the booking page for exact quotes.*`;
@@ -3294,12 +3548,12 @@ How can I assist you today?`;
     res.status(500).json({ error: err.message });
   }
 });
-var chat_default = router31;
+var chat_default = router33;
 
 // server/routes/favorites.ts
-var import_express32 = require("express");
-var router32 = (0, import_express32.Router)();
-router32.get("/", async (req, res) => {
+var import_express34 = require("express");
+var router34 = (0, import_express34.Router)();
+router34.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3318,7 +3572,7 @@ router32.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router32.post("/", async (req, res) => {
+router34.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3342,7 +3596,7 @@ router32.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router32.delete("/:vendor_id", async (req, res) => {
+router34.delete("/:vendor_id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3362,10 +3616,10 @@ router32.delete("/:vendor_id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var favorites_default = router32;
+var favorites_default = router34;
 
 // server/routes/geocode.ts
-var import_express33 = require("express");
+var import_express35 = require("express");
 var cache = /* @__PURE__ */ new Map();
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 function getCached(key) {
@@ -3426,8 +3680,8 @@ function findClosestArea(lat, lng) {
   }
   return closest;
 }
-var router33 = (0, import_express33.Router)();
-router33.get("/reverse", async (req, res) => {
+var router35 = (0, import_express35.Router)();
+router35.get("/reverse", async (req, res) => {
   try {
     const lat = req.query.lat;
     const lng = req.query.lng;
@@ -3487,7 +3741,7 @@ router33.get("/reverse", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router33.get("/search", async (req, res) => {
+router35.get("/search", async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
     if (!q || q.length < 2) {
@@ -3539,13 +3793,13 @@ function haversineKm3(lat1, lng1, lat2, lng2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-var geocode_default = router33;
+var geocode_default = router35;
 
 // server/routes/routing.ts
-var import_express34 = require("express");
+var import_express36 = require("express");
 var ORS_BASE = "https://api.openrouteservice.org/v2";
-var router34 = (0, import_express34.Router)();
-router34.get("/directions", async (req, res) => {
+var router36 = (0, import_express36.Router)();
+router36.get("/directions", async (req, res) => {
   try {
     const apiKey = process.env.OPENROUTESERVICE_API_KEY;
     if (!apiKey) {
@@ -3579,7 +3833,7 @@ router34.get("/directions", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router34.get("/geocode/search", async (req, res) => {
+router36.get("/geocode/search", async (req, res) => {
   try {
     const apiKey = process.env.OPENROUTESERVICE_API_KEY;
     if (!apiKey) {
@@ -3606,12 +3860,12 @@ router34.get("/geocode/search", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var routing_default = router34;
+var routing_default = router36;
 
 // server/routes/delivery-location.ts
-var import_express35 = require("express");
-var router35 = (0, import_express35.Router)();
-router35.post("/", async (req, res) => {
+var import_express37 = require("express");
+var router37 = (0, import_express37.Router)();
+router37.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3646,7 +3900,7 @@ router35.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router35.get("/:execId", async (req, res) => {
+router37.get("/:execId", async (req, res) => {
   try {
     const { execId } = req.params;
     const admin = createAdminClient();
@@ -3660,12 +3914,12 @@ router35.get("/:execId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var delivery_location_default = router35;
+var delivery_location_default = router37;
 
 // server/routes/vendor-onboarding.ts
-var import_express36 = require("express");
-var router36 = (0, import_express36.Router)();
-router36.post("/approve", async (req, res) => {
+var import_express38 = require("express");
+var router38 = (0, import_express38.Router)();
+router38.post("/approve", async (req, res) => {
   try {
     const { vendor_id, owner_id } = req.body;
     if (!vendor_id) {
@@ -3695,7 +3949,7 @@ router36.post("/approve", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router36.post("/reject", async (req, res) => {
+router38.post("/reject", async (req, res) => {
   try {
     const { vendor_id, reason } = req.body;
     if (!vendor_id) {
@@ -3717,10 +3971,10 @@ router36.post("/reject", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router36.get("/pending", async (_req, res) => {
+router38.get("/pending", async (_req, res) => {
   try {
     const admin = createAdminClient();
-    const { data, error } = await admin.from("vendors").select("*, owner:owner_id(id, name, email, phone)").in("kyc_status", ["pending", "not_submitted"]).order("created_at", { ascending: false });
+    const { data, error } = await admin.from("vendors").select("*, owner:owner_id(id, name, email, phone)").in("kyc_status", ["pending"]).order("created_at", { ascending: false });
     if (error) {
       res.status(500).json({ error: error.message });
       return;
@@ -3730,12 +3984,12 @@ router36.get("/pending", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_onboarding_default = router36;
+var vendor_onboarding_default = router38;
 
 // server/routes/payments.ts
-var import_express37 = require("express");
-var router37 = (0, import_express37.Router)();
-router37.post("/create-order", async (req, res) => {
+var import_express39 = require("express");
+var router39 = (0, import_express39.Router)();
+router39.post("/create-order", async (req, res) => {
   try {
     const { amount, currency, order_id } = req.body;
     if (!amount || !order_id) {
@@ -3772,7 +4026,7 @@ router37.post("/create-order", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router37.post("/verify", async (req, res) => {
+router39.post("/verify", async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -3798,7 +4052,7 @@ router37.post("/verify", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router37.post("/wallet/add", async (req, res) => {
+router39.post("/wallet/add", async (req, res) => {
   try {
     const { amount } = req.body;
     if (!amount || amount <= 0) {
@@ -3833,12 +4087,12 @@ router37.post("/wallet/add", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var payments_default = router37;
+var payments_default = router39;
 
 // server/app.ts
-var app = (0, import_express38.default)();
+var app = (0, import_express40.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
-app.use(import_express38.default.json());
+app.use(import_express40.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -3853,6 +4107,9 @@ app.use("/api/slots", slots_default);
 app.use("/api/wallet", wallet_default);
 app.use("/api/reviews", reviews_default);
 app.use("/api/services", services_default);
+app.use("/api/service-categories", service_categories_default);
+app.use("/api/service-items", service_items_default);
+app.use("/api/coupons/validate", coupon_validate_default);
 app.use("/api/coupons", coupons_default);
 app.use("/api/admin", admin_default);
 app.use("/api/vendor/analytics", vendor_analytics_default);
@@ -3860,7 +4117,6 @@ app.use("/api/subscriptions", subscriptions_default);
 app.use("/api/vendor/staff", vendor_staff_default);
 app.use("/api/garments", garments_default);
 app.use("/api/wallet/methods", wallet_methods_default);
-app.use("/api/coupons/validate", coupon_validate_default);
 app.use("/api/support/tickets", support_tickets_default);
 app.use("/api/admin/campaigns", admin_campaigns_default);
 app.use("/api/admin/features", admin_features_default);
