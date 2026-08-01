@@ -105,7 +105,7 @@ function AuthGate() {
     initializeAuth();
   }, []);
 
-  if (authLoading) {
+  if (authLoading && !isAuthRoute) {
     return (
       <div className="flex h-screen items-center justify-center bg-aurora">
         <div className="flex flex-col items-center gap-3">
