@@ -16,7 +16,7 @@ import { PhoneMockup } from "./phone-mockup";
 import { VendorDashboardPreview } from "./vendor-dashboard-preview";
 
 export function AuthLanding() {
-  const { signInWithOAuth, signInWithPhone, verifyOtp, signInWithEmail, signUp, authLoading } = useAppStore();
+  const { signInWithOAuth, signInWithPhone, verifyOtp, signInWithEmail, signUp, resetPassword, authLoading } = useAppStore();
   const [showAuth, setShowAuth] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
   const [method, setMethod] = useState<AuthMethod>("otp");
@@ -30,6 +30,8 @@ export function AuthLanding() {
   const [otpSent, setOtpSent] = useState(false);
   const [otpError, setOtpError] = useState<string | null>(null);
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [resetSent, setResetSent] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const resendTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const openAuth = (signUp: boolean) => {
@@ -44,6 +46,8 @@ export function AuthLanding() {
     setSendingOtp(false);
     setOtpSent(false);
     setOtpError(null);
+    setResetSent(false);
+    setResetError(null);
     setResendCooldown(0);
     setShowAuth(true);
   };
@@ -61,6 +65,8 @@ export function AuthLanding() {
     setSendingOtp(false);
     setOtpSent(false);
     setOtpError(null);
+    setResetSent(false);
+    setResetError(null);
     setResendCooldown(0);
   };
 
@@ -137,6 +143,21 @@ export function AuthLanding() {
     }
     setMethod(m);
     setStep(m === "otp" ? "otp" : "password");
+  };
+
+  const handleResetPassword = async () => {
+    if (!email.trim()) {
+      toast.error("Enter your email address");
+      return;
+    }
+    setResetError(null);
+    try {
+      await resetPassword(email.trim());
+      setResetSent(true);
+      toast.success("Reset link sent — check your inbox");
+    } catch (e: any) {
+      setResetError(e.message || "Failed to send reset link");
+    }
   };
 
   return (
@@ -456,6 +477,9 @@ export function AuthLanding() {
             onAuth={handleAuth}
             onVerifyOtp={handleVerifyOtp}
             onPasswordLogin={handlePasswordLogin}
+            onResetPassword={handleResetPassword}
+            resetSent={resetSent}
+            resetError={resetError}
             authLoading={authLoading}
             sendingOtp={sendingOtp}
             otpSent={otpSent}

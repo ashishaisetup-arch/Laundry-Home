@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { useAppStore } from "@/lib/store";
 import { AuthLanding } from "@/components/auth/landing";
+import { ResetPasswordPage } from "@/components/auth/reset-password";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
@@ -85,8 +86,10 @@ function AuthenticatedApp() {
 function AuthGate() {
   const { role, isAuthenticated, authLoading, initializeAuth } = useAppStore();
   const forceLanding = new URLSearchParams(window.location.search).has("landing") || new URLSearchParams(window.location.search).has("clear");
+  const isAuthRoute = window.location.pathname.startsWith("/auth/");
 
   useEffect(() => {
+    if (isAuthRoute) return;
     const url = new URL(window.location.href);
     if (url.searchParams.has("clear")) {
       localStorage.clear();
@@ -115,31 +118,41 @@ function AuthGate() {
 
   return (
     <AppErrorBoundary>
-      <AnimatePresence mode="wait">
-        {!isAuthenticated || forceLanding ? (
-          <motion.div
-            key="landing"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
-          >
-            <AuthLanding />
-          </motion.div>
-        ) : (
-          <motion.div
-            key={role}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.25 }}
-          >
-            <AuthenticatedApp />
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <Toaster />
-      <SonnerToaster position="top-right" richColors closeButton />
+      {isAuthRoute ? (
+        <>
+          <ResetPasswordPage />
+          <Toaster />
+          <SonnerToaster position="top-right" richColors closeButton />
+        </>
+      ) : (
+        <>
+          <AnimatePresence mode="wait">
+            {!isAuthenticated || forceLanding ? (
+              <motion.div
+                key="landing"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3 }}
+              >
+                <AuthLanding />
+              </motion.div>
+            ) : (
+              <motion.div
+                key={role}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.25 }}
+              >
+                <AuthenticatedApp />
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <Toaster />
+          <SonnerToaster position="top-right" richColors closeButton />
+        </>
+      )}
     </AppErrorBoundary>
   );
 }

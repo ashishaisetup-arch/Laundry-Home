@@ -23,6 +23,7 @@ interface AppState {
   verifyOtp: (phone: string, token: string) => Promise<void>;
   signInWithOAuth: (provider: "google" | "apple" | "microsoft") => Promise<void>;
   signUp: (email: string, password: string, name?: string) => Promise<void>;
+  resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   setProfile: (name: string, phone: string, email?: string) => Promise<void>;
 
@@ -82,6 +83,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   initializeAuth: async () => {
     if (sessionStorage.getItem("lh_logged_out")) {
       sessionStorage.removeItem("lh_logged_out");
+      set({ authLoading: false });
+      return;
+    }
+    if (window.location.pathname.startsWith("/auth/")) {
       set({ authLoading: false });
       return;
     }
@@ -345,6 +350,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     } catch (e: any) {
       set({ authError: e.message || "Sign up failed", authLoading: false });
+      throw e;
+    }
+    set({ authLoading: false });
+  },
+
+  resetPassword: async (email) => {
+    set({ authLoading: true, authError: null });
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/reset-password`,
+      });
+      if (error) throw error;
+    } catch (e: any) {
+      set({ authError: e.message || "Failed to send reset link", authLoading: false });
       throw e;
     }
     set({ authLoading: false });

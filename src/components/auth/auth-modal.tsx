@@ -30,6 +30,9 @@ export function AuthModal({
   onAuth,
   onVerifyOtp,
   onPasswordLogin,
+  onResetPassword,
+  resetSent,
+  resetError,
   authLoading,
   sendingOtp,
   otpSent,
@@ -56,6 +59,9 @@ export function AuthModal({
   onAuth: (m: AuthMethod) => void;
   onVerifyOtp: () => void;
   onPasswordLogin: () => void;
+  onResetPassword: () => void;
+  resetSent: boolean;
+  resetError: string | null;
   authLoading: boolean;
   sendingOtp: boolean;
   otpSent: boolean;
@@ -317,7 +323,9 @@ export function AuthModal({
                         <input type="checkbox" className="rounded" />
                         <span className="text-muted-foreground">Remember me</span>
                       </label>
-                      <a href="#" className="text-primary hover:underline">Forgot password?</a>
+                      <button type="button" onClick={() => setStep("forgot")} className="text-primary hover:underline">
+                        Forgot password?
+                      </button>
                     </div>
                     <Button
                       className="w-full bg-primary hover:bg-primary/90 h-11"
@@ -333,6 +341,75 @@ export function AuthModal({
                       )}
                       {!authLoading && <ArrowRight className="ml-2 h-4 w-4" />}
                     </Button>
+                  </motion.div>
+                )}
+
+                {step === "forgot" && (
+                  <motion.div
+                    key="forgot"
+                    initial={{ opacity: 0, x: 10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -10 }}
+                    className="space-y-4"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setStep("password")}
+                      className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                    >
+                      ← Back to sign in
+                    </button>
+
+                    <div>
+                      <p className="text-sm font-semibold">Reset your password</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Enter your email and we&apos;ll send you a link to set a new password.
+                      </p>
+                    </div>
+
+                    {!resetSent && (
+                      <>
+                        <div>
+                          <Label htmlFor="forgotEmail" className="text-xs font-semibold">Email address</Label>
+                          <Input
+                            id="forgotEmail"
+                            type="email"
+                            placeholder="you@email.com"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="mt-1.5"
+                          />
+                        </div>
+
+                        {resetError && (
+                          <p className="text-xs text-rose-600 bg-rose-50 rounded-lg px-3 py-2 dark:bg-rose-950/30 dark:text-rose-400">
+                            {resetError}
+                          </p>
+                        )}
+
+                        <Button
+                          className="w-full bg-primary hover:bg-primary/90 h-11"
+                          onClick={onResetPassword}
+                          disabled={authLoading || !email.trim()}
+                        >
+                          {authLoading ? (
+                            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                          ) : (
+                            "Send reset link"
+                          )}
+                        </Button>
+                      </>
+                    )}
+
+                    {resetSent && (
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-400">
+                        <p className="font-medium">Check your inbox</p>
+                        <p className="text-xs mt-1">
+                          We&apos;ve emailed a password reset link to <strong>{email}</strong>. It expires in 10
+                          minutes — if you don&apos;t see it, check your spam folder.
+                        </p>
+                      </div>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>

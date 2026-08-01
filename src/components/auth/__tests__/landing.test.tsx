@@ -22,6 +22,7 @@ vi.mock("@/lib/store", () => ({
       verifyOtp: vi.fn(),
       signInWithEmail: vi.fn(),
       signUp: vi.fn(),
+      resetPassword: vi.fn(),
       authLoading: false,
     };
     return selector ? selector(state) : state;

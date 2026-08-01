@@ -17,4 +17,4 @@ export const SERVICES = [
 ];
 
 export type AuthMethod = "otp" | "google" | "apple" | "microsoft" | "email";
-export type AuthStep = "method" | "otp" | "password";
+export type AuthStep = "method" | "otp" | "password" | "forgot";
