@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { ResetPasswordPage } from "../reset-password";
 import { createClient } from "@/lib/supabase";
 
@@ -81,5 +81,38 @@ describe("ResetPasswordPage", () => {
     window.history.replaceState({}, "", "/auth/reset-password?code=abc123&state=xyz789");
     render(<ResetPasswordPage />);
     expect(await screen.findByText("Invalid or expired link")).toBeInTheDocument();
+  });
+
+  it("shows an invalid-link state when the session check throws", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockedCreateClient.mockReturnValue({
+      auth: {
+        getSession: vi.fn().mockRejectedValue(new Error("storage blocked")),
+      },
+    } as any);
+    window.history.replaceState({}, "", "/auth/reset-password?code=abc123");
+    render(<ResetPasswordPage />);
+    expect(await screen.findByText("Invalid or expired link")).toBeInTheDocument();
+    errorSpy.mockRestore();
+  });
+
+  it("shows an invalid-link state when the session check times out", async () => {
+    vi.useFakeTimers();
+    try {
+      mockedCreateClient.mockReturnValue({
+        auth: {
+          getSession: vi.fn().mockReturnValue(new Promise(() => {})),
+        },
+      } as any);
+      window.history.replaceState({}, "", "/auth/reset-password?code=abc123");
+      render(<ResetPasswordPage />);
+      expect(screen.getByText("Verifying your reset link…")).toBeInTheDocument();
+      await act(async () => {
+        vi.advanceTimersByTime(8000);
+      });
+      expect(screen.getByText("Invalid or expired link")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -10,6 +10,20 @@ import { createClient } from "@/lib/supabase";
 
 type Phase = "exchanging" | "ready" | "submitting" | "done" | "invalid";
 
+const SESSION_CHECK_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout"> {
+  let id: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    id = setTimeout(() => resolve("timeout"), ms);
+  });
+  promise.then(
+    () => clearTimeout(id),
+    () => clearTimeout(id)
+  );
+  return Promise.race([promise, timeout]);
+}
+
 export function ResetPasswordPage() {
   const [phase, setPhase] = useState<Phase>("exchanging");
   const [newPassword, setNewPassword] = useState("");
@@ -19,20 +33,26 @@ export function ResetPasswordPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const url = new URL(window.location.href);
-      const hasServerError =
-        url.searchParams.has("error") || url.searchParams.has("error_code") || url.hash.includes("error_code");
-      if (hasServerError || !url.searchParams.has("code")) {
+      try {
+        const url = new URL(window.location.href);
+        const hasServerError =
+          url.searchParams.has("error") || url.searchParams.has("error_code") || url.hash.includes("error_code");
+        if (hasServerError || !url.searchParams.has("code")) {
+          if (!cancelled) setPhase("invalid");
+          return;
+        }
+        const supabase = createClient();
+        const result = await withTimeout(supabase.auth.getSession(), SESSION_CHECK_TIMEOUT_MS);
+        if (cancelled) return;
+        if (result === "timeout") {
+          console.warn("[reset] session check timed out");
+          setPhase("invalid");
+          return;
+        }
+        setPhase(result.data.session ? "ready" : "invalid");
+      } catch (e) {
+        console.error("[reset] session check failed", e);
         if (!cancelled) setPhase("invalid");
-        return;
-      }
-      const supabase = createClient();
-      const { data } = await supabase.auth.getSession();
-      if (cancelled) return;
-      if (data.session) {
-        setPhase("ready");
-      } else {
-        setPhase("invalid");
       }
     })();
     return () => {
