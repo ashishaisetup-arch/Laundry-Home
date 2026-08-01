@@ -20,23 +20,20 @@ export function ResetPasswordPage() {
     let cancelled = false;
     (async () => {
       const url = new URL(window.location.href);
-      const code = url.searchParams.get("code");
-      if (!code) {
+      const hasServerError =
+        url.searchParams.has("error") || url.searchParams.has("error_code") || url.hash.includes("error_code");
+      if (hasServerError || !url.searchParams.has("code")) {
         if (!cancelled) setPhase("invalid");
         return;
       }
       const supabase = createClient();
-      const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+      const { data } = await supabase.auth.getSession();
       if (cancelled) return;
-      if (exchangeError) {
-        console.warn("[reset] exchange failed:", exchangeError.message);
+      if (data.session) {
+        setPhase("ready");
+      } else {
         setPhase("invalid");
-        return;
       }
-      url.searchParams.delete("code");
-      url.searchParams.delete("state");
-      window.history.replaceState(window.history.state, "", url.toString());
-      setPhase("ready");
     })();
     return () => {
       cancelled = true;
