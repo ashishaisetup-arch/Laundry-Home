@@ -73,7 +73,11 @@ function BookingDialog({ open }: { open: boolean }) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) close(); }}>
-      <DialogContent data-booking-scroll className="max-w-3xl max-h-[95dvh] lg:max-w-5xl">
+      <DialogContent
+        data-booking-scroll
+        onInteractOutside={(e) => e.preventDefault()}
+        className="max-w-3xl max-h-[95dvh] lg:max-w-5xl"
+      >
         <DialogTitle className="sr-only">Book Laundry Service</DialogTitle>
 
         {step !== "confirmed" && (isMobile ? <BookingStepper /> : <BookingHeader />)}
