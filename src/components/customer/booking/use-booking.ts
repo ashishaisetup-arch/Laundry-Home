@@ -13,16 +13,6 @@ export interface ItemQty {
   instructions: string[];
 }
 
-export interface NewAddress {
-  label: string;
-  line: string;
-  flatNo: string;
-  area: string;
-  city: string;
-  pincode: string;
-  place_id: string;
-}
-
 export interface PricingBreakdown {
   subtotal: number;
   couponDiscount: number;
@@ -154,10 +144,6 @@ export interface BookingSelectionValue {
   setVendorMode: Dispatch<SetStateAction<"auto" | "manual">>;
   selectedVendor: string;
   setSelectedVendor: Dispatch<SetStateAction<string>>;
-  showAddAddr: boolean;
-  setShowAddAddr: Dispatch<SetStateAction<boolean>>;
-  newAddr: NewAddress;
-  setNewAddr: Dispatch<SetStateAction<NewAddress>>;
   refetchAddresses: () => void;
 }
 

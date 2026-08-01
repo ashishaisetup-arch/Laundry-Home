@@ -1,17 +1,12 @@
+import { useState } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { AddressAutocomplete } from "@/components/shared/address-autocomplete";
-import { useGoogleMapsAvailable } from "@/lib/hooks/useGoogleMaps";
-import { api } from "@/lib/api/client";
-import type { Address } from "@/lib/types";
+import { AddAddressDialog } from "@/components/shared/add-address-dialog";
 import type { Slot } from "@/lib/hooks/useSlots";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
 import { useBookingSelection } from "../use-booking";
 
 const PICKUP_SLOTS: Slot[] = [
@@ -69,12 +64,11 @@ export function StepSchedule() {
     setDeliverySlot,
     notes,
     setNotes,
-    showAddAddr,
-    setShowAddAddr,
-    newAddr,
-    setNewAddr,
     refetchAddresses,
   } = useBookingSelection();
+
+  const [showAddAddr, setShowAddAddr] = useState(false);
+  const [addrTarget, setAddrTarget] = useState<"pickup" | "delivery">("pickup");
 
   const pSlots = PICKUP_SLOTS;
   const dSlots = DELIVERY_SLOTS;
@@ -102,13 +96,13 @@ export function StepSchedule() {
                   <RadioGroupItem value={a.id} />
                   <div>
                     <p className="text-sm font-semibold">{a.label}</p>
-                    <p className="text-xs text-muted-foreground">{a.flatNo ? a.flatNo + ', ' : ''}{a.line}, {a.area}, {a.city} - {a.pincode}</p>
+                    <p className="text-xs text-muted-foreground">{a.fullAddress || `${a.flatNo ? a.flatNo + ", " : ""}${a.line}, ${a.area}, ${a.city} - ${a.pincode}`}</p>
                   </div>
                 </label>
               ))}
             </RadioGroup>
           )}
-          <Button variant="outline" size="sm" onClick={() => setShowAddAddr(true)} className="w-full gap-1">
+          <Button variant="outline" size="sm" onClick={() => { setAddrTarget("pickup"); setShowAddAddr(true); }} className="w-full gap-1">
             <Plus className="h-3.5 w-3.5" /> Add New Address
           </Button>
         </div>
@@ -196,13 +190,13 @@ export function StepSchedule() {
                   <RadioGroupItem value={a.id} />
                   <div>
                     <p className="text-sm font-semibold">{a.label}</p>
-                    <p className="text-xs text-muted-foreground">{a.flatNo ? a.flatNo + ', ' : ''}{a.line}, {a.area}, {a.city} - {a.pincode}</p>
+                    <p className="text-xs text-muted-foreground">{a.fullAddress || `${a.flatNo ? a.flatNo + ", " : ""}${a.line}, ${a.area}, ${a.city} - ${a.pincode}`}</p>
                   </div>
                 </label>
               ))}
             </RadioGroup>
           )}
-          <Button variant="outline" size="sm" onClick={() => setShowAddAddr(true)} className="w-full gap-1">
+          <Button variant="outline" size="sm" onClick={() => { setAddrTarget("delivery"); setShowAddAddr(true); }} className="w-full gap-1">
             <Plus className="h-3.5 w-3.5" /> Add New Address
           </Button>
         </div>
@@ -216,60 +210,15 @@ export function StepSchedule() {
       </div>
 
       {/* Add Address Dialog */}
-      <Dialog open={showAddAddr} onOpenChange={setShowAddAddr}>
-        <DialogContent className="max-w-md">
-          <DialogTitle className="sr-only">Add New Address</DialogTitle>
-          <div>
-            <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Add New Address</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Enter your pickup address details</p>
-          </div>
-          <div className="space-y-3">
-            <Label className="text-xs">Label (e.g. Home, Work)</Label>
-            <Input value={newAddr.label} onChange={(e) => setNewAddr({ ...newAddr, label: e.target.value })} placeholder="Home" />
-            <div>
-              <Label className="text-xs">Search Address</Label>
-              <div className="mt-1">
-                {useGoogleMapsAvailable() ? (
-                  <AddressAutocomplete
-                    value={newAddr.line}
-                    onChange={(place) => {
-                      if (place) {
-                        setNewAddr((prev) => ({ ...prev, line: place.streetAddress, area: place.area, city: place.city, pincode: place.pincode, place_id: place.placeId }));
-                      }
-                    }}
-                    placeholder="Search your full address..."
-                  />
-                ) : (
-                  <Input value={newAddr.line} onChange={(e) => setNewAddr({ ...newAddr, line: e.target.value })} placeholder="Flat / House no, Street" />
-                )}
-              </div>
-            </div>
-            <Input value={newAddr.flatNo} onChange={(e) => setNewAddr({ ...newAddr, flatNo: e.target.value })} placeholder="Flat 2B, Building name" />
-            <div className="grid grid-cols-2 gap-3">
-              <Input value={newAddr.area} onChange={(e) => setNewAddr({ ...newAddr, area: e.target.value })} placeholder="Area" />
-              <Input value={newAddr.pincode} onChange={(e) => setNewAddr({ ...newAddr, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })} placeholder="Pincode" />
-            </div>
-          </div>
-          <div className="flex gap-2 pt-4">
-            <Button variant="outline" className="flex-1" onClick={() => setShowAddAddr(false)}>Cancel</Button>
-            <Button className="flex-1" disabled={!newAddr.label || !newAddr.line || !newAddr.area || !newAddr.city || newAddr.pincode.length < 6}
-              onClick={async () => {
-                try {
-                  const addr = await api.post<Address>("/api/addresses", newAddr);
-                  refetchAddresses();
-                  setPickupAddr(addr.id);
-                  setShowAddAddr(false);
-                  setNewAddr({ label: "", line: "", flatNo: "", area: "", city: "", pincode: "", place_id: "" });
-                  toast.success("Address added");
-                } catch (err: any) {
-                  toast.error("Failed to add address", { description: err.message });
-                }
-              }}>
-              Save Address
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AddAddressDialog
+        open={showAddAddr}
+        onOpenChange={setShowAddAddr}
+        onSaved={(addr) => {
+          refetchAddresses();
+          if (addrTarget === "delivery") setDeliveryAddr(addr.id);
+          else setPickupAddr(addr.id);
+        }}
+      />
     </div>
   );
 }

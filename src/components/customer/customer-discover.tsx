@@ -469,7 +469,7 @@ export function CustomerDiscover({ onBook, onLocationChange, onLocationUpdate }:
                             <span className="ml-auto text-[9px] text-primary font-medium">Selected</span>
                           )}
                         </div>
-                        <p className="text-[11px] text-muted-foreground ml-5.5">{addr.line}, {addr.area}</p>
+                        <p className="text-[11px] text-muted-foreground ml-5.5">{addr.fullAddress || `${addr.line}, ${addr.area}`}</p>
                       </button>
                     );
                   })}

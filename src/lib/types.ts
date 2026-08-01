@@ -157,6 +157,7 @@ export interface Address {
   area: string;
   city: string;
   pincode: string;
+  fullAddress?: string;
   isDefault: boolean;
   lat: number;
   lng: number;

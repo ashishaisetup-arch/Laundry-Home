@@ -70,8 +70,6 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
   const [selectedVendor, setSelectedVendor] = useState("");
   const [notes, setNotes] = useState("");
   const [couponCode, setCouponCode] = useState("");
-  const [showAddAddr, setShowAddAddr] = useState(false);
-  const [newAddr, setNewAddr] = useState({ label: "", line: "", flatNo: "", area: "", city: "", pincode: "", place_id: "" });
   const [placing, setPlacing] = useState(false);
   const [pricingResult, setPricingResult] = useState<PricingBreakdown | null>(null);
   const [pricingLoading, setPricingLoading] = useState(false);
@@ -272,13 +270,13 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
           return sum + (weightMap[i.itemId] || 0) * i.qty;
         }, 0),
         vendor_id: vendorId,
-        pickup_address: selectedAddr?.line || "",
+        pickup_address: selectedAddr?.fullAddress || selectedAddr?.line || "",
         pickup_area: selectedAddr?.area || "",
         pickup_date: resolveDate(pickupDate),
         pickup_slot: pickupSlot,
         delivery_date: resolveDate(deliveryDate),
         delivery_slot: deliverySlot,
-        delivery_address: selectedDelAddr?.line || "",
+        delivery_address: selectedDelAddr?.fullAddress || selectedDelAddr?.line || "",
         delivery_area: selectedDelAddr?.area || "",
         payment_method: "cod",
         notes,
@@ -372,13 +370,9 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       setVendorMode,
       selectedVendor,
       setSelectedVendor,
-      showAddAddr,
-      setShowAddAddr,
-      newAddr,
-      setNewAddr,
       refetchAddresses,
     }),
-    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, totalWeight, vendorsList, bookingType, laundryBagQty, itemQtys, addonQtys, selectedAddonCat, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, showAddAddr, newAddr, refetchAddresses]
+    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, totalWeight, vendorsList, bookingType, laundryBagQty, itemQtys, addonQtys, selectedAddonCat, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, refetchAddresses]
   );
 
   const pricing = useMemo<BookingPricingValue>(
