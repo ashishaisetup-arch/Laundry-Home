@@ -15,6 +15,11 @@ import { AuthModal } from "./auth-modal";
 import { PhoneMockup } from "./phone-mockup";
 import { VendorDashboardPreview } from "./vendor-dashboard-preview";
 
+export function resetErrorMessage(e: any): string {
+  if (e?.status === 429) return "Too many reset requests — try again in about an hour.";
+  return e?.message || "Failed to send reset link";
+}
+
 export function AuthLanding() {
   const { signInWithOAuth, signInWithPhone, verifyOtp, signInWithEmail, signUp, resetPassword, authLoading } = useAppStore();
   const [showAuth, setShowAuth] = useState(false);
@@ -156,7 +161,7 @@ export function AuthLanding() {
       setResetSent(true);
       toast.success("Reset link sent — check your inbox");
     } catch (e: any) {
-      setResetError(e.message || "Failed to send reset link");
+      setResetError(resetErrorMessage(e));
     }
   };
 

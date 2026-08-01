@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { AuthLanding } from "../landing";
+import { AuthLanding, resetErrorMessage } from "../landing";
 
 vi.mock("framer-motion", () => ({
   motion: {
@@ -102,5 +102,21 @@ describe("AuthLanding", () => {
   it("auth modal is not visible by default", () => {
     render(<AuthLanding />);
     expect(screen.queryByTestId("auth-modal")).not.toBeInTheDocument();
+  });
+});
+
+describe("resetErrorMessage", () => {
+  it("maps a 429 rate-limit error to a friendly message", () => {
+    expect(resetErrorMessage({ status: 429, message: "Email rate limit exceeded" })).toBe(
+      "Too many reset requests — try again in about an hour."
+    );
+  });
+
+  it("falls back to the raw error message otherwise", () => {
+    expect(resetErrorMessage({ message: "Invalid credentials" })).toBe("Invalid credentials");
+  });
+
+  it("falls back to a generic message when no message is present", () => {
+    expect(resetErrorMessage(undefined)).toBe("Failed to send reset link");
   });
 });
