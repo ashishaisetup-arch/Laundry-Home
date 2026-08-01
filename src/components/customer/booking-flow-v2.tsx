@@ -1269,10 +1269,11 @@ export function BookingFlowV2({ open, onClose: _onClose, location: externalLocat
           <AnimatePresence mode="wait">
             <motion.div
               key={step}
-              initial={{ opacity: 0, scale: 0.96, y: 8 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, y: -8 }}
+              initial={isMobile ? { opacity: 0, scale: 0.96, y: 8 } : { opacity: 0, y: 28 }}
+              animate={isMobile ? { opacity: 1, scale: 1, y: 0 } : { opacity: 1, y: 0 }}
+              exit={isMobile ? { opacity: 0, scale: 0.96, y: -8 } : { opacity: 0, y: -28 }}
               transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              className="pt-2"
             >
               {step === "category" && renderCategory()}
               {step === "serviceType" && renderServiceType()}
