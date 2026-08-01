@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ServiceIcon } from "@/components/shared/service-icon";
+import type { ServiceKey } from "@/lib/types";
 import { Separator } from "@/components/ui/separator";
 import { BookingTypeSelector } from "../../booking-type-selector";
 import { useBookingSelection } from "../use-booking";
@@ -33,7 +34,7 @@ export function StepServices() {
         return (
           <div key={cat.id}>
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <ServiceIcon serviceKey={cat.slug} iconName={cat.icon} className="h-3.5 w-3.5" />
+              <ServiceIcon serviceKey={cat.slug as ServiceKey} iconName={cat.icon} className="h-3.5 w-3.5" />
               {cat.name}
             </h3>
             <div className="grid grid-cols-2 gap-2">

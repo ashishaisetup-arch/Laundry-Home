@@ -80,7 +80,7 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
   const [confirmedOrder, setConfirmedOrder] = useState<ConfirmedOrder | null>(null);
 
   // ─── Derived ─────────────────────────────────────────────
-  const catalogData = (catalog || []) as CatalogCategory[];
+  const catalogData = (catalog || []) as unknown as CatalogCategory[];
   const servicesData = useMemo(
     () =>
       catalogData.flatMap((cat) =>
@@ -341,6 +341,8 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       defaultPrices,
       totalItems,
       totalAddonItems,
+      totalWeight,
+      vendorsList,
       bookingType,
       setBookingType,
       laundryBagQty,
@@ -376,7 +378,7 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       setNewAddr,
       refetchAddresses,
     }),
-    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, bookingType, laundryBagQty, itemQtys, addonQtys, selectedAddonCat, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, showAddAddr, newAddr, refetchAddresses]
+    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, totalWeight, vendorsList, bookingType, laundryBagQty, itemQtys, addonQtys, selectedAddonCat, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, showAddAddr, newAddr, refetchAddresses]
   );
 
   const pricing = useMemo<BookingPricingValue>(

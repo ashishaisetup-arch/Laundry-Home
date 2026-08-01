@@ -36,7 +36,7 @@ const catalog = [
 
 vi.mock("@/lib/hooks", () => ({
   useServiceCatalog: () => ({ data: catalog }),
-  useVendors: () => ({ data: undefined }),
+  useVendors: () => ({ data: [{ id: "v1", name: "Test Vendor", rating: 4.5, distanceKm: 2 }] }),
   useAddresses: () => ({ data: [], refetch: vi.fn() }),
   useOrders: () => ({ data: [], refetch: vi.fn() }),
 }));
@@ -65,6 +65,8 @@ function Probe() {
       <span data-testid="selected-categories">{sel.selectedCategoryIds.join(",")}</span>
       <span data-testid="selected-services">{sel.selectedServiceIds.join(",")}</span>
       <span data-testid="total-items">{sel.totalItems}</span>
+      <span data-testid="total-weight">{sel.totalWeight}</span>
+      <span data-testid="vendors-count">{(sel.vendorsList || []).length}</span>
       <span data-testid="total-price">{pricing.totalPrice}</span>
       <button data-testid="select-cat" onClick={() => sel.setSelectedCategoryIds(["c1"])}>select category</button>
       <button data-testid="clear-cat" onClick={() => sel.setSelectedCategoryIds([])}>clear category</button>
@@ -128,6 +130,16 @@ describe("BookingProvider", () => {
     fireEvent.click(screen.getByTestId("set-items"));
     expect(screen.getByTestId("total-items")).toHaveTextContent("2");
     expect(screen.getByTestId("total-price")).toHaveTextContent("60");
+  });
+
+  it("exposes totalWeight and vendorsList so steps never read undefined", () => {
+    renderProbe();
+    expect(screen.getByTestId("vendors-count")).toHaveTextContent("1");
+    expect(screen.getByTestId("total-weight")).toHaveTextContent("0");
+    fireEvent.click(screen.getByTestId("select-cat"));
+    fireEvent.click(screen.getByTestId("select-svc"));
+    fireEvent.click(screen.getByTestId("set-items"));
+    expect(screen.getByTestId("total-weight")).toHaveTextContent("0.4");
   });
 
   it("close() resets all state and calls onClose", () => {

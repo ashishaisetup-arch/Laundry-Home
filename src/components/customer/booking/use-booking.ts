@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { Address, ServiceItem } from "@/lib/types";
+import type { Address, ServiceItem, Vendor } from "@/lib/types";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -123,6 +123,8 @@ export interface BookingSelectionValue {
   defaultPrices: Record<string, number>;
   totalItems: number;
   totalAddonItems: number;
+  totalWeight: number;
+  vendorsList: Vendor[] | null;
   bookingType: BookingType;
   setBookingType: Dispatch<SetStateAction<BookingType>>;
   laundryBagQty: number;

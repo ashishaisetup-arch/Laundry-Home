@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ServiceIcon } from "@/components/shared/service-icon";
+import type { ServiceKey } from "@/lib/types";
 import { useBookingSelection } from "../use-booking";
 
 export function StepCategory() {
@@ -39,7 +40,7 @@ export function StepCategory() {
               )}
             >
               <div className="flex items-center justify-between">
-                <ServiceIcon serviceKey={cat.slug} iconName={cat.icon} className="h-8 w-8 shrink-0 text-primary" />
+                <ServiceIcon serviceKey={cat.slug as ServiceKey} iconName={cat.icon} className="h-8 w-8 shrink-0 text-primary" />
                 <div className={cn(
                   "w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors",
                   selected ? "border-primary bg-primary" : "border-muted-foreground/40"
