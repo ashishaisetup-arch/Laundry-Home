@@ -33,7 +33,7 @@ interface Prediction {
   secondaryText: string;
 }
 
-function extractPlace(place: google.maps.places.PlaceResult): PlaceResult | null {
+export function extractPlace(place: google.maps.places.PlaceResult): PlaceResult | null {
   if (!place.place_id) return null;
   const components = place.address_components || [];
   const extract = (types: string[]) =>
@@ -53,20 +53,19 @@ function extractPlace(place: google.maps.places.PlaceResult): PlaceResult | null
     extract(["route"]),
     extract(["premise"]),
     extract(["subpremise"]),
-    extract(["neighborhood"]),
-    extract(["sublocality_level_5"]),
-    extract(["sublocality_level_4"]),
-    extract(["sublocality_level_3"]),
     extract(["sublocality_level_2"]),
-    extract(["sublocality_level_1"]),
   ].filter(Boolean);
-  let streetAddress = streetParts.join(", ");
+  let streetAddress = streetParts
+    .filter((part) => !streetParts.some((other) => other !== part && other.includes(part)))
+    .join(", ");
 
   const areaParts = [
-    extract(["sublocality_level_2"]),
+    extract(["neighborhood"]),
     extract(["sublocality_level_1"]),
   ].filter(Boolean);
-  let area = areaParts.join(", ");
+  let area = areaParts
+    .filter((part, i) => areaParts.indexOf(part) === i)
+    .join(", ");
 
   const city = extract(["locality", "administrative_area_level_3", "administrative_area_level_2", "administrative_area_level_1"]);
 
