@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { useAppStore } from "@/lib/store";
-import { useOrders } from "@/lib/hooks";
+import { useOrders, useCustomerFeatures, type CustomerFeatures } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
@@ -32,6 +32,7 @@ export function CustomerApp() {
   const [discoverArea, setDiscoverArea] = useState<string | null>(null);
   const [bookingLocation, setBookingLocation] = useState<{lat: number; lng: number} | null>(null);
   const { data: ordersHook, loading: ordersLoading, error: ordersError, refetch: refetchOrders } = useOrders(userId ? { customerId: userId } : undefined);
+  const { data: features } = useCustomerFeatures();
   const setOrders = useAppStore((s) => s.setOrders);
   const patchOrder = useAppStore((s) => s.patchOrder);
   const orders = useAppStore((s) => s.orders);
@@ -69,6 +70,26 @@ export function CustomerApp() {
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
   const completedOrders = (orders || []).filter((o) => o.status === "completed");
 
+  const FEATURE_VIEWS: Record<string, keyof CustomerFeatures> = {
+    subscriptions: "enableSubscriptions",
+    payments: "enableWallet",
+    coupons: "enableCoupons",
+    favorites: "enableFavorites",
+    reviews: "enableReviews",
+    discover: "enableDiscover",
+    orders: "enableOrders",
+  };
+
+  const isFeatureOn = (key: keyof CustomerFeatures) => features?.[key] !== false;
+
+useEffect(() => {
+    if (!features) return;
+    const key = FEATURE_VIEWS[view];
+    if (key && !isFeatureOn(key)) {
+      handleNavigateFromRouter("dashboard");
+    }
+  }, [features, view, handleNavigateFromRouter]);
+
   const NAV_GROUPS: NavGroup[] = [
     {
       label: "Customer",
@@ -83,7 +104,7 @@ export function CustomerApp() {
         { id: "coupons", label: "Coupons & Rewards", icon: "Ticket" },
         { id: "favorites", label: "Favorites", icon: "Heart" },
         { id: "reviews", label: "My Reviews", icon: "Star" },
-      ],
+      ].filter((it) => !FEATURE_VIEWS[it.id] || isFeatureOn(FEATURE_VIEWS[it.id])),
     },
   ];
 
@@ -109,26 +130,26 @@ export function CustomerApp() {
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
           ordersLoading ? <DashboardSkeleton /> : ordersError ? <ErrorState message={ordersError} onRetry={refetchOrders} /> :
-          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} onCancel={handleCancelOrder} />
+          <CustomerDashboard key="d" onTrack={(id) => setTrackingOrder(id)} onBook={() => setShowBooking(true)} onNavigate={setView} onCancel={handleCancelOrder} features={features} />
         )}
         {view === "profile" && <CustomerProfile key="pf" />}
         {view === "settings" && <SettingsPage key="set" />}
-        {view === "discover" && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
+        {view === "discover" && isFeatureOn("enableDiscover") && <CustomerDiscover key="disc" onBook={() => setShowBooking(true)} onLocationChange={setDiscoverArea} onLocationUpdate={(loc) => setBookingLocation(loc ? {lat: loc.lat, lng: loc.lng} : null)} />}
         {view === "orders" && (
-          ordersLoading ? <div className="grid md:grid-cols-2 gap-4"><OrderCardSkeleton /><OrderCardSkeleton /></div> : ordersError ? <ErrorState message={ordersError} onRetry={refetchOrders} /> :
+          isFeatureOn("enableOrders") && (ordersLoading ? <div className="grid md:grid-cols-2 gap-4"><OrderCardSkeleton /><OrderCardSkeleton /></div> : ordersError ? <ErrorState message={ordersError} onRetry={refetchOrders} /> :
           <CustomerOrders
             key="o"
             activeOrders={activeOrders}
             completedOrders={completedOrders}
             onTrack={(id) => setTrackingOrder(id)}
             onCancel={handleCancelOrder}
-          />
+          />)
         )}
-        {view === "payments" && <CustomerPayments key="p" walletBalance={walletBalance} />}
-        {view === "subscriptions" && <CustomerSubscriptions key="sub" />}
-        {view === "coupons" && <CustomerCoupons key="c" loyaltyPoints={loyaltyPoints} />}
-        {view === "favorites" && <CustomerFavorites key="f" onBook={() => setShowBooking(true)} />}
-        {view === "reviews" && <CustomerReviews key="r" />}
+        {view === "payments" && isFeatureOn("enableWallet") && <CustomerPayments key="payments" walletBalance={walletBalance} />}
+        {view === "subscriptions" && isFeatureOn("enableSubscriptions") && <CustomerSubscriptions key="subscriptions" />}
+        {view === "coupons" && isFeatureOn("enableCoupons") && <CustomerCoupons key="coupons" loyaltyPoints={loyaltyPoints} />}
+        {view === "favorites" && isFeatureOn("enableFavorites") && <CustomerFavorites key="favorites" onBook={() => setShowBooking(true)} />}
+        {view === "reviews" && isFeatureOn("enableReviews") && <CustomerReviews key="reviews" />}
       </AnimatePresence>
 
       {/* Booking modal */}

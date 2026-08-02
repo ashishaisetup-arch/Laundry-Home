@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
-import { useServiceCatalog, useVendors, useAddresses, useOrders } from "@/lib/hooks";
+import { useServiceCatalog, useVendors, useAddresses, useOrders, useCustomerFeatures } from "@/lib/hooks";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api/client";
 import { formatAddress } from "@/lib/address";
@@ -45,6 +45,7 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
   const { data: catalog } = useServiceCatalog();
   const { data: vendorsList } = useVendors(location ? { lat: location.lat, lng: location.lng, radiusKm: 5 } : undefined);
   const { data: addresses, refetch: refetchAddresses } = useAddresses();
+  const { data: features } = useCustomerFeatures();
   const { refetch: refetchOrders } = useOrders();
   const walletBalance = useAppStore((s) => s.walletBalance);
   const loyaltyPoints = useAppStore((s) => s.loyaltyPoints);
@@ -161,6 +162,13 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     if (!pickupAddr) setPickupAddr(defaultAddr.id);
     if (!deliveryAddr) setDeliveryAddr(defaultAddr.id);
   }, [addresses, pickupAddr, deliveryAddr]);
+
+  useEffect(() => {
+    if (!features) return;
+    if (features.enableCoupons === false) setCouponCode("");
+    if (features.enableWallet === false) setUseWallet(false);
+    if (features.enableLoyalty === false) setRedeemPoints(0);
+  }, [features]);
 
   // ─── Pricing ─────────────────────────────────────────────
   function buildOrderItemsPayload() {
@@ -372,8 +380,9 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       selectedVendor,
       setSelectedVendor,
       refetchAddresses,
+      features,
     }),
-    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, totalWeight, vendorsList, bookingType, laundryBagQty, itemQtys, addonQtys, selectedAddonCat, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, refetchAddresses]
+    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, totalWeight, vendorsList, bookingType, laundryBagQty, itemQtys, addonQtys, selectedAddonCat, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, refetchAddresses, features]
   );
 
   const pricing = useMemo<BookingPricingValue>(

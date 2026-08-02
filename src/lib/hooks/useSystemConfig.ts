@@ -54,6 +54,16 @@ export interface SystemConfig {
     defaultCommissionRate: number;
     vendorPayoutCycleDays: number;
   };
+  customer: {
+    enableSubscriptions: boolean;
+    enableCoupons: boolean;
+    enableWallet: boolean;
+    enableLoyalty: boolean;
+    enableFavorites: boolean;
+    enableReviews: boolean;
+    enableDiscover: boolean;
+    enableOrders: boolean;
+  };
 }
 
 export function useSystemConfig() {

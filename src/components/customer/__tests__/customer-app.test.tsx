@@ -2,10 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { CustomerApp } from "../customer-app";
 
+const mockLocation = { pathname: "/customer/dashboard" };
 vi.mock("react-router-dom", () => ({
   useParams: () => ({ role: "customer" }),
   useNavigate: () => vi.fn(),
-  useLocation: () => ({ pathname: "/customer/dashboard" }),
+  useLocation: () => mockLocation,
 }));
 
 vi.mock("framer-motion", () => ({
@@ -30,8 +31,19 @@ vi.mock("@/lib/store", () => ({
   }),
 }));
 
+const mockFeatures: Record<string, any> = {
+  enableSubscriptions: true,
+  enableCoupons: true,
+  enableWallet: true,
+  enableLoyalty: true,
+  enableFavorites: true,
+  enableReviews: true,
+  enableDiscover: true,
+  enableOrders: true,
+};
 vi.mock("@/lib/hooks", () => ({
   useOrders: () => ({ data: [], loading: false, error: null, refetch: vi.fn() }),
+  useCustomerFeatures: () => ({ data: mockFeatures }),
 }));
 
 vi.mock("@/lib/api/client", () => ({
@@ -131,5 +143,24 @@ describe("CustomerApp", () => {
     render(<CustomerApp />);
     expect(screen.queryByTestId("booking-flow")).not.toBeInTheDocument();
     expect(screen.queryByTestId("order-tracking")).not.toBeInTheDocument();
+  });
+
+  it("redirects to dashboard when the active view's feature is disabled", () => {
+    mockFeatures.enableSubscriptions = false;
+    mockLocation.pathname = "/customer/subscriptions";
+    render(<CustomerApp />);
+    expect(screen.queryByTestId("customer-subscriptions")).not.toBeInTheDocument();
+    expect(screen.getByTestId("customer-dashboard")).toBeInTheDocument();
+    mockFeatures.enableSubscriptions = true;
+    mockLocation.pathname = "/customer/dashboard";
+  });
+
+  it("keeps a disabled view from rendering even before redirect", () => {
+    mockFeatures.enableCoupons = false;
+    mockLocation.pathname = "/customer/coupons";
+    render(<CustomerApp />);
+    expect(screen.queryByTestId("customer-coupons")).not.toBeInTheDocument();
+    mockFeatures.enableCoupons = true;
+    mockLocation.pathname = "/customer/dashboard";
   });
 });

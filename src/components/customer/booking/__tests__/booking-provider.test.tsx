@@ -39,6 +39,18 @@ vi.mock("@/lib/hooks", () => ({
   useVendors: () => ({ data: [{ id: "v1", name: "Test Vendor", rating: 4.5, distanceKm: 2 }] }),
   useAddresses: () => ({ data: [], refetch: vi.fn() }),
   useOrders: () => ({ data: [], refetch: vi.fn() }),
+  useCustomerFeatures: () => ({
+    data: {
+      enableSubscriptions: true,
+      enableCoupons: true,
+      enableWallet: true,
+      enableLoyalty: true,
+      enableFavorites: true,
+      enableReviews: true,
+      enableDiscover: true,
+      enableOrders: true,
+    },
+  }),
 }));
 
 vi.mock("@/lib/store", () => ({

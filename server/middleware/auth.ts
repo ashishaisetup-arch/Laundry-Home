@@ -10,6 +10,7 @@ const ROLE_ROUTES: Record<string, string[]> = {
 const PUBLIC_ROUTES = [
   "/api/auth/", "/api/services", "/api/coupons", "/api/vendors",
   "/api/slots", "/api/seed", "/api/subscriptions/plans", "/api/geocode",
+  "/api/config/customer",
 ];
 
 export async function authMiddleware(req: Request, res: Response, next: NextFunction) {

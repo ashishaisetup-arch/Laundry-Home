@@ -83,6 +83,7 @@ export function SystemConfig() {
 
   const [general, setGeneral] = useState<Record<string, any>>({});
   const [payments, setPayments] = useState<Record<string, any>>({});
+  const [customer, setCustomer] = useState<Record<string, any>>({});
   const [notifications, setNotifications] = useState<Record<string, any>>({});
   const [notifEvents, setNotifEvents] = useState<Record<string, boolean>>({});
   const [security, setSecurity] = useState<Record<string, any>>({});
@@ -92,6 +93,7 @@ export function SystemConfig() {
     if (config) {
       setGeneral(config.general || {});
       setPayments(config.payments || {});
+      setCustomer(config.customer || {});
       const notif = config.notifications || {};
       setNotifications({ push: notif.push, sms: notif.sms, email: notif.email, whatsapp: notif.whatsapp });
       setNotifEvents(notif.events || {});
@@ -105,6 +107,7 @@ export function SystemConfig() {
     try {
       await saveConfig("general", general);
       await saveConfig("payments", payments);
+      await saveConfig("customer", customer);
       await saveConfig("notifications", { ...notifications, events: notifEvents });
       await saveConfig("security", security);
       await saveConfig("limits", limits);
@@ -126,6 +129,7 @@ export function SystemConfig() {
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="payments">Payments</TabsTrigger>
+          <TabsTrigger value="customer">Customer Features</TabsTrigger>
           <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="limits">Limits & Pricing</TabsTrigger>
@@ -220,6 +224,23 @@ export function SystemConfig() {
                 <Label className="text-xs">Min Order Value (₹)</Label>
                 <Input type="number" value={payments.minOrderValue ?? 150} onChange={(e) => setPayments((p) => ({ ...p, minOrderValue: parseFloat(e.target.value) || 0 }))} className="mt-1.5" />
               </div>
+            </div>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="customer" className="mt-4">
+          <Card className="p-5 shadow-soft">
+            <h3 className="font-semibold mb-4">Customer-Facing Features</h3>
+            <p className="text-xs text-muted-foreground mb-4">Disable options below to hide them from customers. They are all enabled by default.</p>
+            <div className="space-y-3">
+              <SwitchItem label="Subscription Plans" desc="Let customers browse and buy plans" checked={customer.enableSubscriptions} onChecked={(v) => setCustomer((p) => ({ ...p, enableSubscriptions: v }))} />
+              <SwitchItem label="Coupons & Rewards" desc="Coupon codes and offers section" checked={customer.enableCoupons} onChecked={(v) => setCustomer((p) => ({ ...p, enableCoupons: v }))} />
+              <SwitchItem label="Payments & Wallet" desc="Wallet top-up, balance and payment methods" checked={customer.enableWallet} onChecked={(v) => setCustomer((p) => ({ ...p, enableWallet: v }))} />
+              <SwitchItem label="Loyalty Points" desc="Earn and redeem loyalty points at checkout" checked={customer.enableLoyalty} onChecked={(v) => setCustomer((p) => ({ ...p, enableLoyalty: v }))} />
+              <SwitchItem label="Favorites" desc="Save and manage favorite vendors" checked={customer.enableFavorites} onChecked={(v) => setCustomer((p) => ({ ...p, enableFavorites: v }))} />
+              <SwitchItem label="My Reviews" desc="Write and view your reviews" checked={customer.enableReviews} onChecked={(v) => setCustomer((p) => ({ ...p, enableReviews: v }))} />
+              <SwitchItem label="Find Vendors" desc="Discover and browse vendors by area" checked={customer.enableDiscover} onChecked={(v) => setCustomer((p) => ({ ...p, enableDiscover: v }))} />
+              <SwitchItem label="My Orders" desc="View order history and tracking" checked={customer.enableOrders} onChecked={(v) => setCustomer((p) => ({ ...p, enableOrders: v }))} />
             </div>
           </Card>
         </TabsContent>

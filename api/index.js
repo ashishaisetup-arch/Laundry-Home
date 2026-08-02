@@ -35,7 +35,7 @@ __export(api_entry_exports, {
 module.exports = __toCommonJS(api_entry_exports);
 
 // server/app.ts
-var import_express40 = __toESM(require("express"));
+var import_express41 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
 
@@ -83,7 +83,8 @@ var PUBLIC_ROUTES = [
   "/api/slots",
   "/api/seed",
   "/api/subscriptions/plans",
-  "/api/geocode"
+  "/api/geocode",
+  "/api/config/customer"
 ];
 async function authMiddleware(req, res, next) {
   const pathname = req.path;
@@ -4093,10 +4094,43 @@ router39.post("/wallet/add", async (req, res) => {
 });
 var payments_default = router39;
 
+// server/routes/customer-config.ts
+var import_express40 = require("express");
+var router40 = (0, import_express40.Router)();
+var CUSTOMER_FEATURE_DEFAULTS = {
+  enableSubscriptions: true,
+  enableCoupons: true,
+  enableWallet: true,
+  enableLoyalty: true,
+  enableFavorites: true,
+  enableReviews: true,
+  enableDiscover: true,
+  enableOrders: true
+};
+router40.get("/", async (_req, res) => {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    const customer = data?.config?.customer || {};
+    const merged = {};
+    for (const [key, enabled] of Object.entries(CUSTOMER_FEATURE_DEFAULTS)) {
+      merged[key] = typeof customer[key] === "boolean" ? customer[key] : enabled;
+    }
+    res.json(merged);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var customer_config_default = router40;
+
 // server/app.ts
-var app = (0, import_express40.default)();
+var app = (0, import_express41.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
-app.use(import_express40.default.json());
+app.use(import_express41.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -4139,6 +4173,7 @@ app.use("/api/routing", routing_default);
 app.use("/api/delivery/location", delivery_location_default);
 app.use("/api/vendor/onboarding", vendor_onboarding_default);
 app.use("/api/payments", payments_default);
+app.use("/api/config/customer", customer_config_default);
 var app_default = app;
 
 // server/api-entry.ts

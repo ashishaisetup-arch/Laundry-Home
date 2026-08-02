@@ -6,18 +6,24 @@ import { OrderCard } from "@/components/shared/order-card";
 import { useAppStore } from "@/lib/store";
 import { cn, formatINR } from "@/lib/utils";
 import { toast } from "sonner";
+import type { CustomerFeatures } from "@/lib/hooks";
 
 interface CustomerDashboardProps {
   onTrack: (id: string) => void;
   onBook: () => void;
   onNavigate: (view: string) => void;
   onCancel?: (orderId: string) => void;
+  features?: CustomerFeatures | null;
 }
 
-export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel }: CustomerDashboardProps) {
+export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel, features }: CustomerDashboardProps) {
   const { userName, walletBalance, loyaltyPoints, orders } = useAppStore();
   const firstName = userName.split(" ")[0];
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
+  const walletOn = features?.enableWallet !== false;
+  const loyaltyOn = features?.enableLoyalty !== false;
+  const couponsOn = features?.enableCoupons !== false;
+  const discoverOn = features?.enableDiscover !== false;
 
   return (
     <div className="space-y-6">
@@ -35,20 +41,24 @@ export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel }: Cus
               </p>
             </div>
             <div className="flex gap-3">
-              <div className="rounded-xl bg-white/15 backdrop-blur p-3 min-w-[110px]">
-                <div className="flex items-center gap-1.5 text-xs text-white/80">
-                  <Wallet className="h-3.5 w-3.5" />
-                  Wallet
+              {walletOn && (
+                <div className="rounded-xl bg-white/15 backdrop-blur p-3 min-w-[110px]">
+                  <div className="flex items-center gap-1.5 text-xs text-white/80">
+                    <Wallet className="h-3.5 w-3.5" />
+                    Wallet
+                  </div>
+                  <p className="text-lg font-bold mt-0.5">{formatINR(walletBalance)}</p>
                 </div>
-                <p className="text-lg font-bold mt-0.5">{formatINR(walletBalance)}</p>
-              </div>
-              <div className="rounded-xl bg-white/15 backdrop-blur p-3 min-w-[110px]">
-                <div className="flex items-center gap-1.5 text-xs text-white/80">
-                  <Gift className="h-3.5 w-3.5" />
-                  Loyalty
+              )}
+              {loyaltyOn && (
+                <div className="rounded-xl bg-white/15 backdrop-blur p-3 min-w-[110px]">
+                  <div className="flex items-center gap-1.5 text-xs text-white/80">
+                    <Gift className="h-3.5 w-3.5" />
+                    Loyalty
+                  </div>
+                  <p className="text-lg font-bold mt-0.5">{loyaltyPoints} pts</p>
                 </div>
-                <p className="text-lg font-bold mt-0.5">{loyaltyPoints} pts</p>
-              </div>
+              )}
             </div>
           </div>
         </Card>
@@ -58,8 +68,8 @@ export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel }: Cus
         {[
           { label: "Book Pickup", icon: Plus, color: "from-teal-500 to-cyan-600", onClick: onBook },
           { label: "Track Order", icon: Navigation, color: "from-emerald-500 to-green-600", onClick: () => activeOrders[0] ? onTrack(activeOrders[0].id) : toast("No active orders") },
-          { label: "Find Vendors", icon: MapPin, color: "from-violet-500 to-purple-600", onClick: () => onNavigate("discover") },
-          { label: "Offers", icon: Ticket, color: "from-amber-500 to-orange-600", onClick: () => onNavigate("coupons") },
+          ...(discoverOn ? [{ label: "Find Vendors", icon: MapPin, color: "from-violet-500 to-purple-600", onClick: () => onNavigate("discover") }] : []),
+          ...(couponsOn ? [{ label: "Offers", icon: Ticket, color: "from-amber-500 to-orange-600", onClick: () => onNavigate("coupons") }] : []),
         ].map((a) => (
           <motion.button
             key={a.label}

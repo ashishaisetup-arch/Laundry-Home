@@ -29,6 +29,7 @@ export function StepReview() {
     vendorMode,
     selectedVendor,
     vendorsList,
+    features,
   } = useBookingSelection();
   const {
     pricingResult,
@@ -46,6 +47,9 @@ export function StepReview() {
 
   const pBreakdown = pricingResult || { subtotal: 0, taxes: 0, platformFee: 0, deliveryFee: 0, total: 0, breakdown: [] };
   const selectedAddonSvcs = addonServices.filter((s) => (addonQtys[s.id] || 0) > 0);
+  const couponsOn = features?.enableCoupons !== false;
+  const walletOn = features?.enableWallet !== false;
+  const loyaltyOn = features?.enableLoyalty !== false;
 
   return (
     <div className="space-y-4">
@@ -191,19 +195,21 @@ export function StepReview() {
           </Card>
 
           {/* Coupon */}
-          <Card className="p-4 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-              <Tag className="h-3.5 w-3.5" /> Coupon
-            </p>
-            <div className="flex gap-2">
-              <Input value={couponCode} onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-                placeholder="Enter code" className="text-sm uppercase flex-1" />
-              <Button variant="outline" size="sm" onClick={() => goToStep("review")}>Apply</Button>
-            </div>
-          </Card>
+          {couponsOn && (
+            <Card className="p-4 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                <Tag className="h-3.5 w-3.5" /> Coupon
+              </p>
+              <div className="flex gap-2">
+                <Input value={couponCode} onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                  placeholder="Enter code" className="text-sm uppercase flex-1" />
+                <Button variant="outline" size="sm" onClick={() => goToStep("review")}>Apply</Button>
+              </div>
+            </Card>
+          )}
 
           {/* Wallet */}
-          {walletBalance > 0 && (
+          {walletOn && walletBalance > 0 && (
             <label className="flex items-center gap-2 rounded-lg border border-border/60 p-3 cursor-pointer hover:bg-muted/30">
               <input type="checkbox" checked={useWallet} onChange={(e) => setUseWallet(e.target.checked)} className="accent-primary" />
               <div>
@@ -214,7 +220,7 @@ export function StepReview() {
           )}
 
           {/* Points */}
-          {loyaltyPoints >= 100 && (
+          {loyaltyOn && loyaltyPoints >= 100 && (
             <Card className="p-4 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Reward Points</p>
               <div className="flex gap-2">

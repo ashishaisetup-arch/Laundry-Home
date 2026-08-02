@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { Address, ServiceItem, Vendor } from "@/lib/types";
+import type { CustomerFeatures } from "@/lib/hooks";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -145,6 +146,7 @@ export interface BookingSelectionValue {
   selectedVendor: string;
   setSelectedVendor: Dispatch<SetStateAction<string>>;
   refetchAddresses: () => void;
+  features?: CustomerFeatures | null;
 }
 
 export interface BookingPricingValue {
