@@ -23,6 +23,7 @@ import { ServiceIcon } from "@/components/shared/service-icon";
 import { useVendors, useServices, useAddresses, useFavoriteVendors } from "@/lib/hooks";
 import type { Vendor } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { formatAddress } from "@/lib/address";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 import { useAppStore } from "@/lib/store";
@@ -469,7 +470,7 @@ export function CustomerDiscover({ onBook, onLocationChange, onLocationUpdate }:
                             <span className="ml-auto text-[9px] text-primary font-medium">Selected</span>
                           )}
                         </div>
-                        <p className="text-[11px] text-muted-foreground ml-5.5">{addr.fullAddress || `${addr.line}, ${addr.area}`}</p>
+                        <p className="text-[11px] text-muted-foreground ml-5.5">{formatAddress(addr)}</p>
                       </button>
                     );
                   })}

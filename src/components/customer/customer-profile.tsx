@@ -19,6 +19,7 @@ import { useAddresses } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
+import { formatAddress } from "@/lib/address";
 
 export function CustomerProfile() {
   const { userName, userEmail, userPhone, userAvatar, role: userRole, setProfile } = useAppStore();
@@ -149,8 +150,7 @@ export function CustomerProfile() {
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
-              <p className="text-xs text-muted-foreground">{addr.fullAddress || addr.line}</p>
-              {!addr.fullAddress && <p className="text-xs text-muted-foreground">{addr.area}, {addr.city} - {addr.pincode}</p>}
+              <p className="text-xs text-muted-foreground">{formatAddress(addr)}</p>
             </div>
           ))}
         </div>

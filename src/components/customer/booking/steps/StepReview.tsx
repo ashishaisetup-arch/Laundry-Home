@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { cn, formatINRDecimal } from "@/lib/utils";
 import { useBookingNavigation, useBookingSelection, useBookingPricing } from "../use-booking";
+import { formatAddress } from "@/lib/address";
 
 export function StepReview() {
   const {
@@ -124,10 +125,10 @@ export function StepReview() {
               <MapPin className="h-3.5 w-3.5" /> Schedule
             </p>
             {(() => { const a = addrList.find((x) => x.id === pickupAddr); return a ? (
-              <p className="text-xs text-muted-foreground"><span className="font-medium">Pickup:</span> {a.label} — {a.flatNo ? a.flatNo + ', ' : ''}{a.line}, {a.area}, {a.city}</p>
+              <p className="text-xs text-muted-foreground"><span className="font-medium">Pickup:</span> {a.label} — {formatAddress(a)}</p>
             ) : null; })()}
             {(() => { const a = addrList.find((x) => x.id === deliveryAddr); return a ? (
-              <p className="text-xs text-muted-foreground"><span className="font-medium">Delivery:</span> {a.label} — {a.flatNo ? a.flatNo + ', ' : ''}{a.line}, {a.area}, {a.city}</p>
+              <p className="text-xs text-muted-foreground"><span className="font-medium">Delivery:</span> {a.label} — {formatAddress(a)}</p>
             ) : null; })()}
             <p className="text-xs text-muted-foreground"><span className="font-medium">Pickup slot:</span> {pickupDate}, {pickupSlot}</p>
             <p className="text-xs text-muted-foreground"><span className="font-medium">Delivery slot:</span> {deliveryDate}, {deliverySlot}</p>

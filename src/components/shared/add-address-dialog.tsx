@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
 import { APIProvider } from "@vis.gl/react-google-maps";
-import { MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +7,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { AddressAutocomplete, type PlaceResult } from "@/components/shared/address-autocomplete";
 import { useGoogleMapsAvailable } from "@/lib/hooks/useGoogleMaps";
 import { api } from "@/lib/api/client";
+import { formatAddress } from "@/lib/address";
 import type { Address } from "@/lib/types";
 import { toast } from "sonner";
 
@@ -19,76 +19,77 @@ interface AddAddressDialogProps {
 
 interface FormState {
   label: string;
+  buildingName: string;
   flatNo: string;
   line: string;
   area: string;
+  landmark: string;
   city: string;
+  state: string;
   pincode: string;
   place_id: string;
   lat: number | null;
   lng: number | null;
 }
 
-const EMPTY_FORM: FormState = { label: "", flatNo: "", line: "", area: "", city: "", pincode: "", place_id: "", lat: null, lng: null };
-
-function composeFullAddress(flatNo: string, street: string, area: string, city: string, pincode: string): string {
-  const head = [flatNo.trim(), street.trim(), area.trim()].filter(Boolean).join(", ");
-  const tail = [city.trim(), pincode.trim()].filter(Boolean).join(" - ");
-  return [head, tail].filter(Boolean).join(", ");
-}
-
-function composeGoogleAddress(flatNo: string, street: string, city: string, pincode: string): string {
-  const head = [flatNo.trim(), street.trim()].filter(Boolean).join(", ");
-  const tail = [city.trim(), pincode.trim()].filter(Boolean).join(" - ");
-  return [head, tail].filter(Boolean).join(", ");
-}
+const EMPTY_FORM: FormState = {
+  label: "",
+  buildingName: "",
+  flatNo: "",
+  line: "",
+  area: "",
+  landmark: "",
+  city: "",
+  state: "",
+  pincode: "",
+  place_id: "",
+  lat: null,
+  lng: null,
+};
 
 export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDialogProps) {
   const googleAvailable = useGoogleMapsAvailable();
   const [googleFailed, setGoogleFailed] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [fullAddress, setFullAddress] = useState("");
-  const [fullAddressTouched, setFullAddressTouched] = useState(false);
+  const [edited, setEdited] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [place, setPlace] = useState<PlaceResult | null>(null);
 
   useEffect(() => {
     if (!open) {
       setForm(EMPTY_FORM);
-      setFullAddress("");
-      setFullAddressTouched(false);
+      setEdited(new Set());
       setPlace(null);
       setGoogleFailed(false);
     }
   }, [open]);
 
-  const handlePlaceSelect = useCallback((p: PlaceResult | null) => {
-    setPlace(p);
-    if (p) {
-      const area = p.area.split(", ").pop() || p.area;
-      setForm((prev) => {
-        setFullAddress(composeGoogleAddress(prev.flatNo, p.streetAddress || p.formattedAddress, p.city, p.pincode));
-        setFullAddressTouched(false);
-        return {
-          ...prev,
-          line: p.streetAddress || p.formattedAddress,
-          area,
-          city: p.city,
-          pincode: p.pincode,
-          place_id: p.placeId,
-          lat: p.latitude || null,
-          lng: p.longitude || null,
-        };
-      });
-    }
+  const setField = useCallback((field: keyof FormState, value: string) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+    setEdited((prev) => new Set(prev).add(field));
   }, []);
 
-  const handleFlatNoChange = (value: string) => {
-    setForm((prev) => ({ ...prev, flatNo: value }));
-    if (place && !fullAddressTouched) {
-      setFullAddress(composeGoogleAddress(value, place.streetAddress || place.formattedAddress, place.city, place.pincode));
-    }
-  };
+  const handlePlaceSelect = useCallback(
+    (p: PlaceResult | null) => {
+      setPlace(p);
+      if (!p) return;
+      const area = p.area.split(", ").pop() || p.area;
+      setForm((prev) => {
+        const next = { ...prev };
+        if (!edited.has("buildingName") && p.building) next.buildingName = p.building;
+        if (!edited.has("line")) next.line = p.streetAddress || p.formattedAddress;
+        if (!edited.has("area")) next.area = area;
+        if (!edited.has("city")) next.city = p.city;
+        if (!edited.has("state")) next.state = p.state;
+        if (!edited.has("pincode")) next.pincode = p.pincode;
+        next.place_id = p.placeId;
+        next.lat = p.latitude || null;
+        next.lng = p.longitude || null;
+        return next;
+      });
+    },
+    [edited]
+  );
 
   const canSave =
     form.label.trim() !== "" &&
@@ -100,16 +101,23 @@ export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDial
   const handleSave = async () => {
     setSaving(true);
     try {
-      const composed = fullAddress.trim() || composeFullAddress(form.flatNo, form.line, form.area, form.city, form.pincode);      const payload: any = {
+      const payload: any = {
         label: form.label.trim(),
+        building_name: form.buildingName.trim(),
+        flat_no: form.flatNo.trim(),
         line: form.line.trim(),
         area: form.area.trim(),
+        landmark: form.landmark.trim(),
         city: form.city.trim(),
+        state: form.state.trim(),
         pincode: form.pincode,
-        full_address: composed,
+        full_address: formatAddress(form),
       };
       if (form.place_id) payload.place_id = form.place_id;
-      if (form.lat != null && form.lng != null) { payload.lat = form.lat; payload.lng = form.lng; }
+      if (form.lat != null && form.lng != null) {
+        payload.lat = form.lat;
+        payload.lng = form.lng;
+      }
       const addr = await api.post<Address>("/api/addresses", payload);
       onSaved?.(addr);
       onOpenChange(false);
@@ -120,6 +128,8 @@ export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDial
       setSaving(false);
     }
   };
+
+  const useGoogleMaps = googleAvailable && !googleFailed;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -132,10 +142,10 @@ export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDial
         <div className="space-y-3 pt-2">
           <div>
             <Label className="text-xs">Label</Label>
-            <Input value={form.label} onChange={(e) => setForm((prev) => ({ ...prev, label: e.target.value }))} placeholder="Home, Work, etc." className="mt-1" />
+            <Input value={form.label} onChange={(e) => setField("label", e.target.value)} placeholder="Home, Work, etc." className="mt-1" />
           </div>
 
-          {googleAvailable && !googleFailed ? (
+          {useGoogleMaps && (
             <APIProvider
               apiKey={import.meta.env.VITE_GOOGLE_MAPS_API_KEY}
               libraries={["places"]}
@@ -151,50 +161,43 @@ export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDial
                   />
                 </div>
               </div>
-              <div>
-                <Label className="text-xs">Flat / Unit No (optional)</Label>
-                <Input value={form.flatNo} onChange={(e) => handleFlatNoChange(e.target.value)} placeholder="Flat No 202" className="mt-1" />
-              </div>
-              <div>
-                <Label className="text-xs">Full Address</Label>
-                <div className="relative mt-1">
-                  <MapPin className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground z-10" />
-                  <Input
-                    value={fullAddress}
-                    onChange={(e) => { setFullAddress(e.target.value); setFullAddressTouched(true); }}
-                    placeholder="Flat No 202, LH CASA Feliz, Horamavu Agara, Bengaluru - 560113"
-                    className="pl-8"
-                  />
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-1">Editable — adjust if anything is missing.</p>
-              </div>
             </APIProvider>
-          ) : (
-            <>
-              <div>
-                <Label className="text-xs">Flat / House no, Street</Label>
-                <Input value={form.line} onChange={(e) => setForm((prev) => ({ ...prev, line: e.target.value }))} placeholder="Flat / House no, Street" className="mt-1" />
-              </div>
-              <div>
-                <Label className="text-xs">Flat / Unit No (optional)</Label>
-                <Input value={form.flatNo} onChange={(e) => handleFlatNoChange(e.target.value)} placeholder="Flat 2B, Building name" className="mt-1" />
-              </div>
-              <div>
-                <Label className="text-xs">Area</Label>
-                <Input value={form.area} onChange={(e) => setForm((prev) => ({ ...prev, area: e.target.value }))} placeholder="Horamavu" className="mt-1" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-xs">City</Label>
-                  <Input value={form.city} onChange={(e) => setForm((prev) => ({ ...prev, city: e.target.value }))} placeholder="Bengaluru" className="mt-1" />
-                </div>
-                <div>
-                  <Label className="text-xs">Pincode</Label>
-                  <Input value={form.pincode} onChange={(e) => setForm((prev) => ({ ...prev, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="560113" className="mt-1" />
-                </div>
-              </div>
-            </>
           )}
+
+          <div>
+            <Label className="text-xs">Apartment / Building / House Name</Label>
+            <Input value={form.buildingName} onChange={(e) => setField("buildingName", e.target.value)} placeholder="Prestige Shantiniketan" className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">Flat / Door No.</Label>
+            <Input value={form.flatNo} onChange={(e) => setField("flatNo", e.target.value)} placeholder="Flat No 202" className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">Street</Label>
+            <Input value={form.line} onChange={(e) => setField("line", e.target.value)} placeholder="Street / Road name" className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">Area / Locality</Label>
+            <Input value={form.area} onChange={(e) => setField("area", e.target.value)} placeholder="Horamavu" className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">Landmark (optional)</Label>
+            <Input value={form.landmark} onChange={(e) => setField("landmark", e.target.value)} placeholder="e.g. Near Phoenix Mall" className="mt-1" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">City</Label>
+              <Input value={form.city} onChange={(e) => setField("city", e.target.value)} placeholder="Bengaluru" className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">State</Label>
+              <Input value={form.state} onChange={(e) => setField("state", e.target.value)} placeholder="Karnataka" className="mt-1" />
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs">Pincode</Label>
+            <Input value={form.pincode} onChange={(e) => setField("pincode", e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="560113" className="mt-1" />
+          </div>
         </div>
         <div className="flex gap-2 pt-4">
           <Button variant="outline" className="flex-1" onClick={() => onOpenChange(false)}>Cancel</Button>

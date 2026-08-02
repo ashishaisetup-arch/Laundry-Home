@@ -8,6 +8,7 @@ import { AddAddressDialog } from "@/components/shared/add-address-dialog";
 import type { Slot } from "@/lib/hooks/useSlots";
 import { cn } from "@/lib/utils";
 import { useBookingSelection } from "../use-booking";
+import { formatAddress } from "@/lib/address";
 
 const PICKUP_SLOTS: Slot[] = [
   { id: "p1", slot: "7:00 AM - 9:00 AM", available: true, premium: false },
@@ -96,7 +97,7 @@ export function StepSchedule() {
                   <RadioGroupItem value={a.id} />
                   <div>
                     <p className="text-sm font-semibold">{a.label}</p>
-                    <p className="text-xs text-muted-foreground">{a.fullAddress || `${a.flatNo ? a.flatNo + ", " : ""}${a.line}, ${a.area}, ${a.city} - ${a.pincode}`}</p>
+                    <p className="text-xs text-muted-foreground">{formatAddress(a)}</p>
                   </div>
                 </label>
               ))}
@@ -190,7 +191,7 @@ export function StepSchedule() {
                   <RadioGroupItem value={a.id} />
                   <div>
                     <p className="text-sm font-semibold">{a.label}</p>
-                    <p className="text-xs text-muted-foreground">{a.fullAddress || `${a.flatNo ? a.flatNo + ", " : ""}${a.line}, ${a.area}, ${a.city} - ${a.pincode}`}</p>
+                    <p className="text-xs text-muted-foreground">{formatAddress(a)}</p>
                   </div>
                 </label>
               ))}

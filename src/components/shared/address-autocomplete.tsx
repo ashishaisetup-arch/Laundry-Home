@@ -10,8 +10,10 @@ export interface PlaceResult {
   latitude: number;
   longitude: number;
   city: string;
+  state: string;
   pincode: string;
   area: string;
+  building: string;
   streetAddress: string;
   formattedAddress: string;
 }
@@ -68,10 +70,24 @@ function extractPlace(place: google.maps.places.PlaceResult): PlaceResult | null
 
   const city = extract(["locality", "administrative_area_level_3", "administrative_area_level_2", "administrative_area_level_1"]);
 
+  const state = extract(["administrative_area_level_1"]);
+
   let pincode = extract(["postal_code"]);
   if (!pincode) {
     const match = formattedAddress.match(/\b(\d{6})\b/);
     if (match) pincode = match[1];
+  }
+
+  const placeTypes = place.types || [];
+  let building = "";
+  if (placeTypes.some((t) => t === "establishment" || t === "point_of_interest" || t === "premise")) {
+    building = place.name || extract(["premise"]);
+  }
+  if (!building) {
+    building = extract(["premise"]);
+  }
+  if (building && (building === streetAddress || building === area || building === city || (area && building.includes(area)))) {
+    building = "";
   }
 
   if (!streetAddress && formattedAddress) {
@@ -97,8 +113,10 @@ function extractPlace(place: google.maps.places.PlaceResult): PlaceResult | null
     latitude: lat,
     longitude: lng,
     city: city || "Bengaluru",
+    state,
     pincode: pincode || "",
     area: area || city,
+    building,
     streetAddress,
     formattedAddress,
   };
@@ -172,7 +190,7 @@ export function AddressAutocomplete({ value, onChange, placeholder, className, d
       placesService.getDetails(
         {
           placeId,
-          fields: ["place_id", "formatted_address", "geometry", "address_components", "name"],
+          fields: ["place_id", "formatted_address", "geometry", "address_components", "name", "types"],
         },
         (place, status) => {
           if (status === google.maps.places.PlacesServiceStatus.OK && place) {

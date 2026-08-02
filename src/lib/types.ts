@@ -154,10 +154,14 @@ export interface Address {
   label: string;
   line: string;
   flatNo?: string;
+  buildingName?: string;
   area: string;
+  landmark?: string;
   city: string;
+  state?: string;
   pincode: string;
   fullAddress?: string;
+  placeId?: string;
   isDefault: boolean;
   lat: number;
   lng: number;

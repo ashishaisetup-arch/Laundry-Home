@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react
 import { useServiceCatalog, useVendors, useAddresses, useOrders } from "@/lib/hooks";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api/client";
+import { formatAddress } from "@/lib/address";
 import { toast } from "sonner";
 import type { ServiceItem } from "@/lib/types";
 import {
@@ -270,13 +271,13 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
           return sum + (weightMap[i.itemId] || 0) * i.qty;
         }, 0),
         vendor_id: vendorId,
-        pickup_address: selectedAddr?.fullAddress || selectedAddr?.line || "",
+        pickup_address: selectedAddr ? formatAddress(selectedAddr) : "",
         pickup_area: selectedAddr?.area || "",
         pickup_date: resolveDate(pickupDate),
         pickup_slot: pickupSlot,
         delivery_date: resolveDate(deliveryDate),
         delivery_slot: deliverySlot,
-        delivery_address: selectedDelAddr?.fullAddress || selectedDelAddr?.line || "",
+        delivery_address: selectedDelAddr ? formatAddress(selectedDelAddr) : "",
         delivery_area: selectedDelAddr?.area || "",
         payment_method: "cod",
         notes,
