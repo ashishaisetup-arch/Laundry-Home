@@ -45,6 +45,7 @@ function composeGoogleAddress(flatNo: string, street: string, city: string, pinc
 
 export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDialogProps) {
   const googleAvailable = useGoogleMapsAvailable();
+  const [googleFailed, setGoogleFailed] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [fullAddress, setFullAddress] = useState("");
   const [fullAddressTouched, setFullAddressTouched] = useState(false);
@@ -57,6 +58,7 @@ export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDial
       setFullAddress("");
       setFullAddressTouched(false);
       setPlace(null);
+      setGoogleFailed(false);
     }
   }, [open]);
 
@@ -133,8 +135,12 @@ export function AddAddressDialog({ open, onOpenChange, onSaved }: AddAddressDial
             <Input value={form.label} onChange={(e) => setForm((prev) => ({ ...prev, label: e.target.value }))} placeholder="Home, Work, etc." className="mt-1" />
           </div>
 
-          {googleAvailable ? (
-            <APIProvider apiKey={import.meta.env.VITE_GOOGLE_MAPS_API_KEY} libraries={["places"]}>
+          {googleAvailable && !googleFailed ? (
+            <APIProvider
+              apiKey={import.meta.env.VITE_GOOGLE_MAPS_API_KEY}
+              libraries={["places"]}
+              onError={() => setGoogleFailed(true)}
+            >
               <div>
                 <Label className="text-xs">Search Address</Label>
                 <div className="mt-1">

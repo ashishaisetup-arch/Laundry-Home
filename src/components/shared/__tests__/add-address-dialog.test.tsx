@@ -1,9 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { AddAddressDialog } from "../add-address-dialog";
 
+const { googleAvailableMock, providerErrorCallback } = vi.hoisted(() => ({
+  googleAvailableMock: { value: false },
+  providerErrorCallback: { fn: (null as unknown) as ((error: unknown) => void) | null },
+}));
+
 vi.mock("@/lib/hooks/useGoogleMaps", () => ({
-  useGoogleMapsAvailable: () => false,
+  useGoogleMapsAvailable: () => googleAvailableMock.value,
+}));
+
+vi.mock("@vis.gl/react-google-maps", () => ({
+  APIProvider: ({ children, onError }: any) => {
+    providerErrorCallback.fn = onError;
+    return <div>{children}</div>;
+  },
+}));
+
+vi.mock("@/components/shared/address-autocomplete", () => ({
+  AddressAutocomplete: () => <input aria-label="search-address" />,
 }));
 
 const { postMock, toastMock } = vi.hoisted(() => ({
@@ -21,6 +37,8 @@ vi.mock("sonner", () => ({
 
 describe("AddAddressDialog", () => {
   beforeEach(() => {
+    googleAvailableMock.value = false;
+    providerErrorCallback.fn = null;
     postMock.mockClear();
     toastMock.success.mockClear();
   });
@@ -70,5 +88,18 @@ describe("AddAddressDialog", () => {
     render(<AddAddressDialog open onOpenChange={onOpenChange} />);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("falls back to the manual form when Google Maps fails to load", () => {
+    googleAvailableMock.value = true;
+    render(<AddAddressDialog open onOpenChange={vi.fn()} />);
+
+    expect(providerErrorCallback.fn).toBeTruthy();
+    expect(screen.getByPlaceholderText("Flat No 202")).toBeTruthy();
+
+    act(() => providerErrorCallback.fn!(new Error("Invalid API key")));
+
+    expect(screen.getByPlaceholderText("Flat / House no, Street")).toBeTruthy();
+    expect(screen.queryByPlaceholderText("Flat No 202")).toBeNull();
   });
 });
