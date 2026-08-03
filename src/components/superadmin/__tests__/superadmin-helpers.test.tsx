@@ -6,6 +6,7 @@ describe("pageTitle", () => {
   it("returns title for known views", () => {
     expect(pageTitle("dashboard")).toBe("Control Center");
     expect(pageTitle("vendors")).toBe("Vendors");
+    expect(pageTitle("areas")).toBe("Locations");
     expect(pageTitle("rbac")).toBe("Roles & Permissions");
     expect(pageTitle("users")).toBe("User Management");
     expect(pageTitle("audit")).toBe("Audit Logs");
@@ -38,7 +39,7 @@ describe("NAV_GROUPS", () => {
   it("has the super admin group with all items", () => {
     expect(NAV_GROUPS).toHaveLength(1);
     expect(NAV_GROUPS[0].label).toBe("Super Admin");
-    expect(NAV_GROUPS[0].items).toHaveLength(10);
+    expect(NAV_GROUPS[0].items).toHaveLength(11);
   });
 
   it("includes all required nav items", () => {
@@ -46,6 +47,7 @@ describe("NAV_GROUPS", () => {
     expect(ids).toContain("dashboard");
     expect(ids).toContain("onboard");
     expect(ids).toContain("vendors");
+    expect(ids).toContain("areas");
     expect(ids).toContain("rbac");
     expect(ids).toContain("users");
     expect(ids).toContain("audit");

@@ -55,6 +55,10 @@ vi.mock("../superadmin-vendors", () => ({
   SuperAdminVendors: () => <div data-testid="superadmin-vendors" />,
 }));
 
+vi.mock("../locations-manager", () => ({
+  LocationsManager: () => <div data-testid="superadmin-locations" />,
+}));
+
 vi.mock("../superadmin-rbac", () => ({
   RbacMatrix: () => <div data-testid="superadmin-rbac" />,
 }));
@@ -108,5 +112,11 @@ describe("SuperAdminApp", () => {
     mockPathname = "/superadmin/catalog";
     render(<SuperAdminApp />);
     expect(screen.getByTestId("superadmin-catalog")).toBeInTheDocument();
+  });
+
+  it("renders locations view when active", () => {
+    mockPathname = "/superadmin/areas";
+    render(<SuperAdminApp />);
+    expect(screen.getByTestId("superadmin-locations")).toBeInTheDocument();
   });
 });

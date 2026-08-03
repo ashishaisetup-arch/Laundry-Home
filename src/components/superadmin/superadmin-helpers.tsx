@@ -7,6 +7,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "dashboard", label: "Control Center", icon: "LayoutDashboard" },
       { id: "onboard", label: "Onboard Vendor", icon: "Store", badge: "New" },
       { id: "vendors", label: "Vendors", icon: "Store" },
+      { id: "areas", label: "Locations", icon: "MapPin" },
       { id: "rbac", label: "Roles & Permissions", icon: "Shield" },
       { id: "users", label: "User Management", icon: "UserCog" },
       { id: "audit", label: "Audit Logs", icon: "ScrollText" },
@@ -22,6 +23,7 @@ export function pageTitle(view: string) {
   return {
       dashboard: "Control Center",
     vendors: "Vendors",
+    areas: "Locations",
     rbac: "Roles & Permissions",
     users: "User Management",
     audit: "Audit Logs",
@@ -40,6 +42,7 @@ export function pageSubtitle(view: string) {
     profile: "Manage your account details",
     settings: "Account and app preferences",
     vendors: "All platform vendors · KYC status, approvals and management",
+    areas: "Manage cities, service areas and vendor coverage",
     rbac: "Configure role-based access control across all modules",
     users: "Manage platform users, staff and administrators",
     audit: "Track every action across the platform",

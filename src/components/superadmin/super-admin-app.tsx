@@ -12,6 +12,7 @@ import { SettingsPage } from "@/components/shared/settings-page";
 import { NAV_GROUPS, pageTitle, pageSubtitle } from "./superadmin-helpers";
 import { SuperAdminOverview } from "./superadmin-overview";
 import { SuperAdminVendors } from "./superadmin-vendors";
+import { LocationsManager } from "./locations-manager";
 import { RbacMatrix } from "./superadmin-rbac";
 import { UserManagement } from "./superadmin-users";
 import { AuditLogs } from "./superadmin-audit";
@@ -58,6 +59,7 @@ export function SuperAdminApp() {
       <AnimatePresence mode="wait">
         {view === "dashboard" && <SuperAdminOverview key="dashboard" onOnboard={() => setShowOnboarding(true)} onNavigate={setView} totalUsers={users?.length || 0} totalVendors={vendorsList?.length || 0} />}
         {view === "vendors" && <SuperAdminVendors key="vendors" />}
+        {view === "areas" && <LocationsManager key="areas" />}
         {view === "rbac" && <RbacMatrix key="rbac" />}
         {view === "users" && <UserManagement key="users" />}
         {view === "audit" && <AuditLogs key="audit" />}
