@@ -17,6 +17,37 @@ export interface LiveExecutive {
 
 export type ConnectionState = "live" | "connecting" | "offline";
 
+export type ExecFreshness = "live" | "idle" | "offline";
+
+const EXEC_COLORS: Record<ExecFreshness, string> = {
+  live: "#10b981",
+  idle: "#eab308",
+  offline: "#9ca3af",
+};
+
+const LIVE_THRESHOLD_MS = 60_000;
+const IDLE_THRESHOLD_MS = 5 * 60_000;
+
+export function execStatus(lastSeenAt: string | null | undefined, now: number): { state: ExecFreshness; color: string } {
+  if (!lastSeenAt) return { state: "offline", color: EXEC_COLORS.offline };
+  const age = now - new Date(lastSeenAt).getTime();
+  if (age < LIVE_THRESHOLD_MS) return { state: "live", color: EXEC_COLORS.live };
+  if (age < IDLE_THRESHOLD_MS) return { state: "idle", color: EXEC_COLORS.idle };
+  return { state: "offline", color: EXEC_COLORS.offline };
+}
+
+export function formatAge(lastSeenAt: string | null | undefined, now: number): string {
+  if (!lastSeenAt) return "never";
+  const ms = Math.max(0, now - new Date(lastSeenAt).getTime());
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  if (m < 60) return `${m}m ${rem}s ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m ago`;
+}
+
 const POLL_INTERVAL_MS = 60_000;
 const BATCH_FLUSH_MS = 100;
 const TICK_MS = 5_000;

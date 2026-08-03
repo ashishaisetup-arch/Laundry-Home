@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { LeafletMap } from "@/components/shared/leaflet-map";
 import { api } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
-import { useAdminLiveMap } from "@/lib/hooks/useAdminLiveMap";
+import { useAdminLiveMap, execStatus, formatAge } from "@/lib/hooks/useAdminLiveMap";
 
 interface MapMarker {
   lat: number; lng: number; label: string; color: string; type: "vendor" | "pickup" | "delivery" | "customer" | "exec";
@@ -50,7 +50,7 @@ const DEFAULT_RADIUS_KM = 2;
 export function AdminLiveMap() {
   const {
     vendors, executives, orders, areas, tasks, addresses,
-    connection, loading, lastUpdated, loadAll,
+    connection, loading, lastUpdated, now, loadAll,
   } = useAdminLiveMap();
 
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
@@ -95,16 +95,17 @@ export function AdminLiveMap() {
           lat: Number(e.currentLat),
           lng: Number(e.currentLng),
           label: e.name || "Exec",
-          color: LAYER_CONFIG.execs.color,
+          color: execStatus(e.lastSeenAt ?? null, now).color,
           type: "exec" as const,
           sublabel: `${e.assignedOrders || 0} tasks`,
           popup: `<div style="font-size:13px;line-height:1.5">
             <strong>${e.name || "Delivery Partner"}</strong><br/>
             <span style="color:#666">${e.email || ""}</span><br/>
-            <span style="color:#888;font-size:11px">${e.assignedOrders || 0} active \u00b7 ${e.isAvailable ? "\ud83d\udfe2 Available" : "\ud83d\udd34 Busy"}</span>
+            <span style="color:#888;font-size:11px">${e.assignedOrders || 0} active \u00b7 ${e.isAvailable ? "\ud83d\udfe2 Available" : "\ud83d\udd34 Busy"}</span><br/>
+            <span style="color:#888;font-size:11px">Last seen ${formatAge(e.lastSeenAt ?? null, now)} \u00b7 Source: ${e.locationSource || "profile"}</span>
           </div>`,
         })),
-    [executives]
+    [executives, now]
   );
 
   const customerMarkers = useMemo<MapMarker[]>(
@@ -294,7 +295,7 @@ export function AdminLiveMap() {
 
         <LeafletMap
           markers={filteredMarkers.map((m) => ({
-            lat: m.lat, lng: m.lng, label: m.label, color: m.color, type: m.type, popup: m.popup,
+            id: m.id, lat: m.lat, lng: m.lng, label: m.label, color: m.color, type: m.type, popup: m.popup,
           }))}
           circles={layers.zones ? circles : []}
           routes={layers.routes ? routes : []}

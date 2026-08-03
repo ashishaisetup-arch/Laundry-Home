@@ -10,6 +10,7 @@ interface MapMarker {
   icon?: string;
   type?: "vendor" | "pickup" | "delivery" | "customer" | "exec";
   popup?: string;
+  id?: string;
 }
 
 interface MapCircle {
@@ -62,6 +63,7 @@ export function LeafletMap({
   const mapRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<L.Map | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
+  const markersByIdRef = useRef<Map<string, L.Marker>>(new Map());
   const routeLayerRef = useRef<L.Polyline | null>(null);
   const routesLayerRef = useRef<L.LayerGroup | null>(null);
   const circlesLayerRef = useRef<L.LayerGroup | null>(null);
@@ -110,19 +112,61 @@ export function LeafletMap({
   useEffect(() => {
     const layer = markersLayerRef.current;
     if (!layer) return;
-    layer.clearLayers();
 
-    markers.forEach((m) => {
+    const buildIcon = (m: MapMarker) => {
       const color = m.color || "#14b8a6";
       const size = m.type === "exec" ? 28 : 32;
       const html = m.type === "exec"
         ? `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:2px solid white;">${m.label?.[0] || "●"}</div>`
         : `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};color:white;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.3);border:2px solid white;">${m.label?.[0] || "●"}</div>`;
+      return L.divIcon({ html, className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
+    };
 
-      const icon = L.divIcon({ html, className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
-      const marker = L.marker([m.lat, m.lng], { icon });
-      if (m.popup) marker.bindPopup(m.popup);
-      marker.addTo(layer);
+    // Full rebuild when any marker lacks an id (existing consumers)
+    if (!markers.every((m) => m.id)) {
+      layer.clearLayers();
+      markersByIdRef.current.clear();
+      markers.forEach((m) => {
+        const marker = L.marker([m.lat, m.lng], { icon: buildIcon(m) });
+        if (m.popup) marker.bindPopup(m.popup);
+        marker.addTo(layer);
+      });
+      return;
+    }
+
+    // In-place diff by id: preserves open popups and avoids layer churn
+    const byId = markersByIdRef.current;
+    const wanted = new Set(markers.map((m) => m.id as string));
+    byId.forEach((marker, id) => {
+      if (!wanted.has(id)) {
+        layer.removeLayer(marker);
+        byId.delete(id);
+      }
+    });
+
+    markers.forEach((m) => {
+      const existing = byId.get(m.id as string);
+      if (existing) {
+        existing.setLatLng([m.lat, m.lng]);
+        const icon = buildIcon(m);
+        const oldHtml = (existing.getIcon() as L.DivIcon | null)?.options?.html;
+        if (oldHtml !== icon.options.html) existing.setIcon(icon);
+        const popup = existing.getPopup();
+        if (m.popup) {
+          if (popup) {
+            if (popup.getContent() !== m.popup) popup.setContent(m.popup);
+          } else {
+            existing.bindPopup(m.popup);
+          }
+        } else if (popup) {
+          existing.unbindPopup();
+        }
+      } else {
+        const marker = L.marker([m.lat, m.lng], { icon: buildIcon(m) });
+        if (m.popup) marker.bindPopup(m.popup);
+        marker.addTo(layer);
+        byId.set(m.id as string, marker);
+      }
     });
   }, [markers]);
 
