@@ -22,10 +22,10 @@ router.get("/", async (_req: Request, res: Response) => {
 router.post("/", async (req: Request, res: Response) => {
   try {
     const supabase = createAdminClient();
-    const { name, description, icon, display_order, is_active, grouping } = req.body;
+    const { name, slug, description, icon, display_order, is_active, grouping } = req.body;
     const { data, error } = await supabase
       .from("service_categories")
-      .insert({ name, description, icon, display_order, is_active, grouping })
+      .insert({ name, slug, description, icon, display_order, is_active, grouping })
       .select()
       .single();
     if (error) { res.status(500).json({ error: error.message }); return; }
@@ -39,10 +39,10 @@ router.post("/", async (req: Request, res: Response) => {
 router.put("/:id", async (req: Request, res: Response) => {
   try {
     const supabase = createAdminClient();
-    const { name, description, icon, display_order, is_active, grouping } = req.body;
+    const { name, slug, description, icon, display_order, is_active, grouping } = req.body;
     const { data, error } = await supabase
       .from("service_categories")
-      .update({ name, description, icon, display_order, is_active, grouping })
+      .update({ name, slug, description, icon, display_order, is_active, grouping })
       .eq("id", req.params.id)
       .select()
       .single();

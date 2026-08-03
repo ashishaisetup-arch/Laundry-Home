@@ -65,4 +65,72 @@ router.get("/catalog", async (req: Request, res: Response) => {
   }
 });
 
+// POST — create service
+router.post("/", async (req: Request, res: Response) => {
+  try {
+    const supabase = createAdminClient();
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { data, error } = await supabase
+      .from("services")
+      .insert({
+        category_id: categoryId,
+        name,
+        description,
+        unit,
+        image_url: imageUrl || null,
+        taxable: taxable ?? true,
+        display_order: displayOrder ?? 0,
+        is_active: isActive ?? true,
+      })
+      .select()
+      .single();
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /:id — update service
+router.put("/:id", async (req: Request, res: Response) => {
+  try {
+    const supabase = createAdminClient();
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { data, error } = await supabase
+      .from("services")
+      .update({
+        category_id: categoryId,
+        name,
+        description,
+        unit,
+        image_url: imageUrl || null,
+        taxable,
+        display_order: displayOrder ?? 0,
+        is_active: isActive,
+      })
+      .eq("id", req.params.id)
+      .select()
+      .single();
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /:id — delete service
+router.delete("/:id", async (req: Request, res: Response) => {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase
+      .from("services")
+      .delete()
+      .eq("id", req.params.id);
+    if (error) { res.status(500).json({ error: error.message }); return; }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
