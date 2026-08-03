@@ -123,9 +123,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           const role: Role = (meta?.role as Role) || "customer";
           const name = meta?.name || session.user.email?.split("@")[0] || "User";
           const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
-          url.searchParams.delete("code");
-          url.searchParams.delete("state");
-          window.history.replaceState(window.history.state, "", url.toString());
 
           fetch("/api/auth/session").catch(() => {});
 
@@ -194,11 +191,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       console.warn("[auth] initializeAuth error:", e);
     }
-    const url = new URL(window.location.href);
-    if (url.searchParams.has("code")) {
-      url.searchParams.delete("code");
-      window.history.replaceState(window.history.state, "", url.toString());
-    }
     set({ authLoading: false });
   },
 
@@ -227,15 +219,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           userName = d.profile.name || userName;
           userEmail = d.profile.email || userEmail;
           userPhone = d.profile.phone || "";
-        }
-      } catch {}
-
-      try {
-        const u = new URL(window.location.href);
-        if (u.searchParams.has("clear") || u.searchParams.has("landing")) {
-          u.searchParams.delete("clear");
-          u.searchParams.delete("landing");
-          window.history.replaceState(window.history.state, "", u.toString());
         }
       } catch {}
 
@@ -290,15 +273,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       } catch {}
 
-      try {
-        const u = new URL(window.location.href);
-        if (u.searchParams.has("clear") || u.searchParams.has("landing")) {
-          u.searchParams.delete("clear");
-          u.searchParams.delete("landing");
-          window.history.replaceState(window.history.state, "", u.toString());
-        }
-      } catch {}
-
       set({
         isAuthenticated: true,
         role,
@@ -347,15 +321,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (data.user) {
         const role: Role = "customer";
         const avatar = displayName.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
-
-        try {
-          const u = new URL(window.location.href);
-          if (u.searchParams.has("clear") || u.searchParams.has("landing")) {
-            u.searchParams.delete("clear");
-            u.searchParams.delete("landing");
-            window.history.replaceState(window.history.state, "", u.toString());
-          }
-        } catch {}
 
         set({
           isAuthenticated: true,

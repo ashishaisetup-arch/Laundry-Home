@@ -1,7 +1,7 @@
 
 import { useEffect, Component, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation, useNavigate } from "react-router-dom";
 import { useAppStore } from "@/lib/store";
 import { AuthLanding } from "@/components/auth/landing";
 import { ResetPasswordPage } from "@/components/auth/reset-password";
@@ -89,6 +89,7 @@ function AuthenticatedApp() {
 function AuthGate() {
   const { role, isAuthenticated, authLoading, initializeAuth } = useAppStore();
   const location = useLocation();
+  const navigate = useNavigate();
   const forceLanding = new URLSearchParams(location.search).has("landing") || new URLSearchParams(location.search).has("clear");
   const isAuthRoute = location.pathname.startsWith("/auth/");
 
@@ -103,10 +104,13 @@ function AuthGate() {
         const name = eq > -1 ? c.substring(0, eq).trim() : c.trim();
         document.cookie = `${name}=; path=/; max-age=0; domain=${window.location.hostname};`;
       });
-      url.searchParams.delete("clear");
-      window.history.replaceState(window.history.state, "", url.toString());
     }
     initializeAuth();
+    const dirty = ["clear", "landing", "code", "state"].filter((p) => url.searchParams.has(p));
+    if (dirty.length > 0) {
+      dirty.forEach((p) => url.searchParams.delete(p));
+      navigate(`${url.pathname}${url.search}`, { replace: true });
+    }
   }, []);
 
   if (authLoading && !isAuthRoute) {

@@ -135,6 +135,15 @@ describe("AuthGate routing", () => {
     expect(window.location.pathname).toBe("/");
   });
 
+  it("resolves a stale ?landing=1 URL for an authenticated user without a refresh", async () => {
+    mocks.setStore({ authLoading: false, isAuthenticated: true, role: "admin" });
+    window.history.replaceState({}, "", "/?landing=1");
+    render(<App />);
+    expect(await screen.findByText("AdminApp")).toBeInTheDocument();
+    expect(screen.queryByText("Sign in")).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/admin/dashboard");
+  });
+
   it("redirects an authenticated admin away from a /superadmin URL", async () => {
     mocks.setStore({ authLoading: false, isAuthenticated: true, role: "admin" });
     window.history.replaceState({}, "", "/superadmin/dashboard");
