@@ -5,6 +5,14 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -27,21 +35,13 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// server/api-entry.ts
-var api_entry_exports = {};
-__export(api_entry_exports, {
-  default: () => api_entry_default
-});
-module.exports = __toCommonJS(api_entry_exports);
-
-// server/app.ts
-var import_express42 = __toESM(require("express"));
-var import_cors = __toESM(require("cors"));
-var import_cookie_parser = __toESM(require("cookie-parser"));
-
 // server/supabase.ts
-var import_supabase_js = require("@supabase/supabase-js");
-var import_ssr = require("@supabase/ssr");
+var supabase_exports = {};
+__export(supabase_exports, {
+  createAdminClient: () => createAdminClient,
+  createServerClientWithCookies: () => createServerClientWithCookies,
+  ensureSystemTables: () => ensureSystemTables
+});
 function env(name) {
   const val = process.env[name];
   if (!val) throw new Error(`Missing env: ${name}`);
@@ -68,8 +68,97 @@ function createServerClientWithCookies(cookieGetter, cookieSetter, cookieRemover
     }
   });
 }
+async function ensureSystemTables() {
+  const admin = createAdminClient();
+  const { error: rolesErr } = await admin.rpc("exec_sql", {
+    query: `
+      create table if not exists roles (
+        name text primary key,
+        label text not null,
+        description text,
+        is_system_role boolean not null default true,
+        created_at timestamptz not null default now()
+      );
+
+      create table if not exists role_permissions (
+        id uuid primary key default gen_random_uuid(),
+        role text not null references roles(name) on delete cascade,
+        resource text not null,
+        action text not null,
+        allowed boolean not null default false,
+        created_at timestamptz not null default now(),
+        unique(role, resource, action)
+      );
+
+      insert into roles (name, label, description) values
+        ('customer',   'Customer',     'End users who place laundry orders'),
+        ('vendor',     'Vendor',       'Laundry service providers'),
+        ('delivery',   'Delivery Exec','Delivery personnel for pickup/drop-off'),
+        ('admin',      'Admin',        'Platform administrators with elevated access'),
+        ('superadmin', 'Super Admin',  'Full platform control with all permissions')
+      on conflict (name) do nothing;
+    `
+  });
+  if (rolesErr) {
+    const { data: existingRoles } = await admin.from("roles").select("name").limit(1);
+    if (!existingRoles || existingRoles.length === 0) {
+      console.warn("RBAC tables not yet created. Run migration 00008_rbac_tables.sql manually via Supabase dashboard SQL editor.");
+    }
+    return;
+  }
+  const allResources = ["users", "vendors", "orders", "system_config", "features", "audit_logs", "integrations", "rbac", "campaigns", "reports"];
+  async function seedRole(role, resources, actions, allowed) {
+    for (const r of resources) {
+      for (const action of actions) {
+        try {
+          await admin.from("role_permissions").upsert(
+            { role, resource: r, action, allowed },
+            { onConflict: "role,resource,action", ignoreDuplicates: false }
+          );
+        } catch {
+        }
+      }
+    }
+  }
+  const allActions = ["view", "create", "edit", "delete", "manage"];
+  const adminResources = ["users", "vendors", "orders", "features", "audit_logs", "integrations", "campaigns", "reports"];
+  const crud = ["view", "create", "edit", "delete"];
+  const vewEdt = ["view", "edit"];
+  const vewCrt = ["view", "create"];
+  await seedRole("superadmin", allResources, allActions, true);
+  await seedRole("admin", adminResources, crud, true);
+  await seedRole("admin", ["rbac", "system_config"], ["view"], true);
+  await seedRole("vendor", ["orders"], vewCrt, true);
+  await seedRole("vendor", ["vendors"], vewEdt, true);
+  await seedRole("delivery", ["orders"], vewEdt, true);
+  await seedRole("delivery", ["vendors"], ["view"], true);
+  await seedRole("customer", ["orders"], vewCrt, true);
+  await seedRole("customer", ["vendors"], ["view"], true);
+  console.log("RBAC tables and permissions seeded.");
+}
+var import_supabase_js, import_ssr;
+var init_supabase = __esm({
+  "server/supabase.ts"() {
+    "use strict";
+    import_supabase_js = require("@supabase/supabase-js");
+    import_ssr = require("@supabase/ssr");
+  }
+});
+
+// server/api-entry.ts
+var api_entry_exports = {};
+__export(api_entry_exports, {
+  default: () => api_entry_default
+});
+module.exports = __toCommonJS(api_entry_exports);
+
+// server/app.ts
+var import_express43 = __toESM(require("express"));
+var import_cors = __toESM(require("cors"));
+var import_cookie_parser = __toESM(require("cookie-parser"));
 
 // server/middleware/auth.ts
+init_supabase();
 var ROLE_ROUTES = {
   "/api/admin": ["admin", "superadmin"],
   "/api/vendor": ["vendor", "admin", "superadmin"],
@@ -143,6 +232,7 @@ async function authMiddleware(req, res, next) {
 
 // server/routes/addresses.ts
 var import_express = require("express");
+init_supabase();
 var router = (0, import_express.Router)();
 router.get("/", async (req, res) => {
   try {
@@ -208,10 +298,232 @@ router.delete("/:id", async (req, res) => {
 });
 var addresses_default = router;
 
-// server/routes/auth.ts
+// server/routes/areas.ts
 var import_express2 = require("express");
+init_supabase();
+
+// server/lib/area-cache.ts
+init_supabase();
+var cache = null;
+var lastFetch = 0;
+var TTL_MS = 5 * 60 * 1e3;
+function invalidateAreaCache() {
+  cache = null;
+  lastFetch = 0;
+}
+
+// server/routes/areas.ts
 var router2 = (0, import_express2.Router)();
-router2.post("/login", async (req, res) => {
+router2.get("/", async (req, res) => {
+  try {
+    const city = req.query.city;
+    const supabase = createAdminClient();
+    let query = supabase.from("service_areas").select("*, cities!inner(name, state)").eq("is_active", true);
+    if (city) {
+      query = query.eq("cities.name", city);
+    }
+    const { data, error } = await query.order("area_name");
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.get("/cities", async (_req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("cities").select("id, name, state").eq("is_active", true).order("name");
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.get("/vendor/:vendorId", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("vendor_service_areas").select("service_areas(*)").eq("vendor_id", req.params.vendorId);
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json((data || []).map((vsa) => vsa.service_areas).filter(Boolean));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.post("/cities", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { name, state } = req.body;
+    if (!name) {
+      res.status(400).json({ error: "City name is required" });
+      return;
+    }
+    const { data, error } = await supabase.from("cities").insert({ name, state: state || "Karnataka" }).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.post("/", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { city_id, zone, area_name, pincode, lat, lng, has_pickup, has_delivery, express_available } = req.body;
+    if (!city_id || !area_name) {
+      res.status(400).json({ error: "city_id and area_name are required" });
+      return;
+    }
+    const { data, error } = await supabase.from("service_areas").insert({
+      city_id,
+      zone: zone || null,
+      area_name,
+      pincode: pincode || null,
+      lat: lat || null,
+      lng: lng || null,
+      has_pickup: has_pickup ?? true,
+      has_delivery: has_delivery ?? true,
+      express_available: express_available ?? false
+    }).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    invalidateAreaCache();
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.put("/cities/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("cities").update(req.body).eq("id", req.params.id).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.put("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("service_areas").update(req.body).eq("id", req.params.id).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    invalidateAreaCache();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.delete("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("service_areas").update({ is_active: false }).eq("id", req.params.id);
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    invalidateAreaCache();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.post("/vendor", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { vendor_id, area_ids } = req.body;
+    if (!vendor_id || !area_ids || !Array.isArray(area_ids)) {
+      res.status(400).json({ error: "vendor_id and area_ids[] are required" });
+      return;
+    }
+    await supabase.from("vendor_service_areas").delete().eq("vendor_id", vendor_id);
+    if (area_ids.length > 0) {
+      const { error } = await supabase.from("vendor_service_areas").insert(
+        area_ids.map((area_id) => ({ vendor_id, area_id }))
+      );
+      if (error) {
+        res.status(400).json({ error: error.message });
+        return;
+      }
+    }
+    res.json({ success: true, assignedAreas: area_ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.post("/waitlist", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { area_name, pincode, contact, contact_type } = req.body;
+    if (!area_name || !contact) {
+      res.status(400).json({ error: "area_name and contact are required" });
+      return;
+    }
+    const { data, error } = await supabase.from("area_waitlist").insert({
+      area_name,
+      pincode: pincode || null,
+      contact,
+      contact_type: contact_type || "email"
+    }).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.get("/waitlist", async (req, res) => {
+  try {
+    const { createServerClientWithCookies: createServerClientWithCookies2 } = await Promise.resolve().then(() => (init_supabase(), supabase_exports));
+    const cookieClient = createServerClientWithCookies2((name) => req.cookies?.[name]);
+    const { data: { user } } = await cookieClient.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data: profile } = await admin.from("user_profiles").select("role").eq("id", user.id).single();
+    if (!["admin", "superadmin"].includes(profile?.role || "customer")) {
+      res.status(403).json({ error: "Forbidden" });
+      return;
+    }
+    const { data, error } = await admin.from("area_waitlist").select("*, cities(name)").order("created_at", { ascending: false });
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var areas_default = router2;
+
+// server/routes/auth.ts
+var import_express3 = require("express");
+init_supabase();
+var router3 = (0, import_express3.Router)();
+router3.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
     const supabase = createServerClientWithCookies(
@@ -229,7 +541,7 @@ router2.post("/login", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router2.post("/signup", async (req, res) => {
+router3.post("/signup", async (req, res) => {
   try {
     const { email, password, name, phone, role } = req.body;
     const supabase = createAdminClient();
@@ -272,7 +584,7 @@ router2.post("/signup", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router2.post("/logout", async (req, res) => {
+router3.post("/logout", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies(
       (name) => req.cookies?.[name],
@@ -292,7 +604,7 @@ router2.post("/logout", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router2.get("/session", async (req, res) => {
+router3.get("/session", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies(
       (name) => req.cookies?.[name],
@@ -333,7 +645,7 @@ router2.get("/session", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router2.post("/otp", async (req, res) => {
+router3.post("/otp", async (req, res) => {
   try {
     const { phone } = req.body;
     const supabase = createServerClientWithCookies(
@@ -351,7 +663,7 @@ router2.post("/otp", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router2.patch("/profile", async (req, res) => {
+router3.patch("/profile", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies(
       (name2) => req.cookies?.[name2],
@@ -380,18 +692,20 @@ router2.patch("/profile", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router2.get("/callback", (req, res) => {
+router3.get("/callback", (req, res) => {
   const host = req.headers.host || "localhost:8080";
   const proto = req.headers["x-forwarded-proto"] || "http";
   const base = `${proto}://${host}`;
   res.redirect(`${base}/?${new URLSearchParams(req.query).toString()}`);
 });
-var auth_default = router2;
+var auth_default = router3;
 
 // server/routes/orders.ts
-var import_express3 = require("express");
+var import_express4 = require("express");
+init_supabase();
 
 // server/pricing.ts
+init_supabase();
 var PLATFORM_FEE = 25;
 var DELIVERY_FEE = 40;
 var EXPRESS_SURCHARGE = 50;
@@ -592,8 +906,8 @@ var STAGES = [
   "delivered",
   "completed"
 ];
-var router3 = (0, import_express3.Router)();
-router3.get("/", async (req, res) => {
+var router4 = (0, import_express4.Router)();
+router4.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     const deliveryExecutiveId = req.query.deliveryExecutiveId;
@@ -624,7 +938,7 @@ router3.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.post("/pricing", async (req, res) => {
+router4.post("/pricing", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -648,7 +962,7 @@ router3.post("/pricing", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.post("/", async (req, res) => {
+router4.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -758,7 +1072,7 @@ router3.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.get("/:id", async (req, res) => {
+router4.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
@@ -773,7 +1087,7 @@ router3.get("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.patch("/:id", async (req, res) => {
+router4.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const body = req.body;
@@ -857,7 +1171,7 @@ router3.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.post("/:id/reject", async (req, res) => {
+router4.post("/:id/reject", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
@@ -891,7 +1205,7 @@ router3.post("/:id/reject", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.post("/:id/assign-delivery", async (req, res) => {
+router4.post("/:id/assign-delivery", async (req, res) => {
   try {
     const { id } = req.params;
     const { delivery_executive_id } = req.body;
@@ -925,7 +1239,7 @@ router3.post("/:id/assign-delivery", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.post("/:id/cancel", async (req, res) => {
+router4.post("/:id/cancel", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
@@ -978,7 +1292,7 @@ router3.post("/:id/cancel", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router3.post("/reorder/:id", async (req, res) => {
+router4.post("/reorder/:id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -1009,10 +1323,11 @@ router3.post("/reorder/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var orders_default = router3;
+var orders_default = router4;
 
 // server/routes/vendors.ts
-var import_express4 = require("express");
+var import_express5 = require("express");
+init_supabase();
 var KNOWN_AREAS2 = {
   "Indiranagar": { lat: 12.9719, lng: 77.6413 },
   "Koramangala": { lat: 12.9352, lng: 77.6245 },
@@ -1055,8 +1370,8 @@ function haversineKm(lat1, lng1, lat2, lng2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-var router4 = (0, import_express4.Router)();
-router4.get("/", async (req, res) => {
+var router5 = (0, import_express5.Router)();
+router5.get("/", async (req, res) => {
   try {
     const area = req.query.area;
     const isOpen = req.query.isOpen;
@@ -1103,7 +1418,7 @@ router4.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/", async (req, res) => {
+router5.post("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("vendors").insert(req.body).select().single();
@@ -1116,7 +1431,7 @@ router4.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.get("/:id", async (req, res) => {
+router5.get("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
@@ -1130,7 +1445,7 @@ router4.get("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.patch("/:id", async (req, res) => {
+router5.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
@@ -1144,10 +1459,11 @@ router4.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendors_default = router4;
+var vendors_default = router5;
 
 // server/routes/delivery-tasks.ts
-var import_express5 = require("express");
+var import_express6 = require("express");
+init_supabase();
 var TASK_TO_ORDER_STAGE = {
   heading_to_pickup: { status: "pickup_scheduled", index: 3 },
   picked_up: { status: "pickup_completed", index: 4 },
@@ -1165,8 +1481,8 @@ async function completeOrder(supabase, orderId) {
   }
   await supabase.from("orders").update({ status: "completed", current_stage_index: 17 }).eq("id", orderId);
 }
-var router5 = (0, import_express5.Router)();
-router5.get("/", async (req, res) => {
+var router6 = (0, import_express6.Router)();
+router6.get("/", async (req, res) => {
   try {
     const execId = req.query.execId;
     const status = req.query.status;
@@ -1197,7 +1513,7 @@ router5.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router5.patch("/:id", async (req, res) => {
+router6.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
@@ -1251,7 +1567,7 @@ router5.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router5.post("/:id/otp", async (req, res) => {
+router6.post("/:id/otp", async (req, res) => {
   try {
     const { id } = req.params;
     const admin = createAdminClient();
@@ -1270,7 +1586,7 @@ router5.post("/:id/otp", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router5.post("/:id/verify-otp", async (req, res) => {
+router6.post("/:id/verify-otp", async (req, res) => {
   try {
     const { id } = req.params;
     const { otp } = req.body;
@@ -1300,7 +1616,7 @@ router5.post("/:id/verify-otp", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router5.post("/:id/photo", async (req, res) => {
+router6.post("/:id/photo", async (req, res) => {
   try {
     const { id } = req.params;
     let { photo_url, photo_data } = req.body;
@@ -1326,7 +1642,7 @@ router5.post("/:id/photo", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router5.post("/:id/signature", async (req, res) => {
+router6.post("/:id/signature", async (req, res) => {
   try {
     const { id } = req.params;
     const { signature_data } = req.body;
@@ -1348,11 +1664,12 @@ router5.post("/:id/signature", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var delivery_tasks_default = router5;
+var delivery_tasks_default = router6;
 
 // server/routes/delivery-executives.ts
-var import_express6 = require("express");
-var router6 = (0, import_express6.Router)();
+var import_express7 = require("express");
+init_supabase();
+var router7 = (0, import_express7.Router)();
 function toRad(deg) {
   return deg * Math.PI / 180;
 }
@@ -1363,7 +1680,7 @@ function haversineKm2(lat1, lng1, lat2, lng2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-router6.get("/", async (_req, res) => {
+router7.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("user_profiles").select("id, name, email, phone, avatar, is_available, current_lat, current_lng, max_daily_orders").eq("role", "delivery").order("name");
@@ -1399,7 +1716,7 @@ router6.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router6.get("/available", async (req, res) => {
+router7.get("/available", async (req, res) => {
   try {
     const admin = createAdminClient();
     const pickupLat = req.query.pickup_lat ? parseFloat(req.query.pickup_lat) : null;
@@ -1462,7 +1779,7 @@ router6.get("/available", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router6.get("/earnings", async (req, res) => {
+router7.get("/earnings", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -1525,12 +1842,13 @@ router6.get("/earnings", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var delivery_executives_default = router6;
+var delivery_executives_default = router7;
 
 // server/routes/notifications.ts
-var import_express7 = require("express");
-var router7 = (0, import_express7.Router)();
-router7.get("/", async (req, res) => {
+var import_express8 = require("express");
+init_supabase();
+var router8 = (0, import_express8.Router)();
+router8.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -1549,7 +1867,7 @@ router7.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router7.patch("/:id", async (req, res) => {
+router8.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const supabase = createAdminClient();
@@ -1563,11 +1881,12 @@ router7.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var notifications_default = router7;
+var notifications_default = router8;
 
 // server/routes/slots.ts
-var import_express8 = require("express");
-var router8 = (0, import_express8.Router)();
+var import_express9 = require("express");
+init_supabase();
+var router9 = (0, import_express9.Router)();
 var DEFAULT_PICKUP_SLOTS = [
   { slot: "7:00 AM - 9:00 AM", available: true, premium: false },
   { slot: "9:00 AM - 11:00 AM", available: true, premium: false },
@@ -1584,7 +1903,7 @@ var DEFAULT_DELIVERY_SLOTS = [
   { slot: "3:00 PM - 5:00 PM", available: true },
   { slot: "5:00 PM - 7:00 PM", available: true }
 ];
-router8.get("/", async (_req, res) => {
+router9.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data: pickup, error: psErr } = await supabase.from("pickup_slots").select("*").order("slot");
@@ -1614,12 +1933,13 @@ router8.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var slots_default = router8;
+var slots_default = router9;
 
 // server/routes/wallet.ts
-var import_express9 = require("express");
-var router9 = (0, import_express9.Router)();
-router9.get("/", async (req, res) => {
+var import_express10 = require("express");
+init_supabase();
+var router10 = (0, import_express10.Router)();
+router10.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -1635,7 +1955,7 @@ router9.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router9.post("/", async (req, res) => {
+router10.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -1661,12 +1981,13 @@ router9.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var wallet_default = router9;
+var wallet_default = router10;
 
 // server/routes/reviews.ts
-var import_express10 = require("express");
-var router10 = (0, import_express10.Router)();
-router10.get("/", async (req, res) => {
+var import_express11 = require("express");
+init_supabase();
+var router11 = (0, import_express11.Router)();
+router11.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     const orderId = req.query.orderId;
@@ -1691,7 +2012,7 @@ router10.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router10.post("/", async (req, res) => {
+router11.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -1710,12 +2031,13 @@ router10.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var reviews_default = router10;
+var reviews_default = router11;
 
 // server/routes/service-categories.ts
-var import_express11 = require("express");
-var router11 = (0, import_express11.Router)();
-router11.get("/", async (_req, res) => {
+var import_express12 = require("express");
+init_supabase();
+var router12 = (0, import_express12.Router)();
+router12.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("service_categories").select("*").order("display_order");
@@ -1728,7 +2050,7 @@ router11.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router11.post("/", async (req, res) => {
+router12.post("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { name, slug, description, icon, display_order, is_active, grouping } = req.body;
@@ -1742,7 +2064,7 @@ router11.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router11.put("/:id", async (req, res) => {
+router12.put("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { name, slug, description, icon, display_order, is_active, grouping } = req.body;
@@ -1756,7 +2078,7 @@ router11.put("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router11.delete("/:id", async (req, res) => {
+router12.delete("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { error } = await supabase.from("service_categories").delete().eq("id", req.params.id);
@@ -1769,12 +2091,13 @@ router11.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var service_categories_default = router11;
+var service_categories_default = router12;
 
 // server/routes/service-items.ts
-var import_express12 = require("express");
-var router12 = (0, import_express12.Router)();
-router12.get("/", async (req, res) => {
+var import_express13 = require("express");
+init_supabase();
+var router13 = (0, import_express13.Router)();
+router13.get("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
     let query = supabase.from("service_items").select("*, services(name, unit)");
@@ -1808,7 +2131,7 @@ router12.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router12.get("/:id", async (req, res) => {
+router13.get("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("service_items").select("*, services(name, unit)").eq("id", req.params.id).single();
@@ -1838,7 +2161,7 @@ router12.get("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router12.post("/", async (req, res) => {
+router13.post("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { serviceId, itemName, itemCategory, unit, defaultPrice, estimatedTime, estimatedWeightKg, isActive } = req.body;
@@ -1872,7 +2195,7 @@ router12.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router12.put("/:id", async (req, res) => {
+router13.put("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { serviceId, itemName, itemCategory, unit, defaultPrice, estimatedTime, estimatedWeightKg, isActive } = req.body;
@@ -1906,7 +2229,7 @@ router12.put("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router12.delete("/:id", async (req, res) => {
+router13.delete("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { error } = await supabase.from("service_items").delete().eq("id", req.params.id);
@@ -1919,12 +2242,13 @@ router12.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var service_items_default = router12;
+var service_items_default = router13;
 
 // server/routes/services.ts
-var import_express13 = require("express");
-var router13 = (0, import_express13.Router)();
-router13.get("/", async (_req, res) => {
+var import_express14 = require("express");
+init_supabase();
+var router14 = (0, import_express14.Router)();
+router14.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("services").select("*");
@@ -1937,7 +2261,7 @@ router13.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router13.get("/catalog", async (req, res) => {
+router14.get("/catalog", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const includeInactive = req.query.includeInactive === "true";
@@ -1977,7 +2301,7 @@ router13.get("/catalog", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router13.post("/", async (req, res) => {
+router14.post("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
@@ -2000,7 +2324,7 @@ router13.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router13.put("/:id", async (req, res) => {
+router14.put("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
@@ -2023,7 +2347,7 @@ router13.put("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router13.delete("/:id", async (req, res) => {
+router14.delete("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { error } = await supabase.from("services").delete().eq("id", req.params.id);
@@ -2036,12 +2360,13 @@ router13.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var services_default = router13;
+var services_default = router14;
 
 // server/routes/coupons.ts
-var import_express14 = require("express");
-var router14 = (0, import_express14.Router)();
-router14.get("/", async (_req, res) => {
+var import_express15 = require("express");
+init_supabase();
+var router15 = (0, import_express15.Router)();
+router15.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("coupons").select("*").eq("active", true).order("max_discount", { ascending: false });
@@ -2054,14 +2379,15 @@ router14.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var coupons_default = router14;
+var coupons_default = router15;
 
 // server/routes/admin.ts
-var import_express15 = require("express");
-var router15 = (0, import_express15.Router)();
+var import_express16 = require("express");
+init_supabase();
+var router16 = (0, import_express16.Router)();
 var DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-router15.get("/kpis", async (_req, res) => {
+router16.get("/kpis", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const todayStart = /* @__PURE__ */ new Date();
@@ -2123,7 +2449,7 @@ router15.get("/kpis", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router15.get("/analytics", async (_req, res) => {
+router16.get("/analytics", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const sevenDaysAgo = /* @__PURE__ */ new Date();
@@ -2221,7 +2547,7 @@ router15.get("/analytics", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router15.get("/orders", async (req, res) => {
+router16.get("/orders", async (req, res) => {
   try {
     const supabase = createAdminClient();
     let query = supabase.from("orders").select("*");
@@ -2277,14 +2603,15 @@ router15.get("/orders", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_default = router15;
+var admin_default = router16;
 
 // server/routes/vendor-analytics.ts
-var import_express16 = require("express");
-var router16 = (0, import_express16.Router)();
+var import_express17 = require("express");
+init_supabase();
+var router17 = (0, import_express17.Router)();
 var COLORS = ["#0d9488", "#10b981", "#8b5cf6", "#f59e0b", "#06b6d4", "#ec4899", "#f97316"];
 var DAY_LABELS2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-router16.get("/", async (req, res) => {
+router17.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2302,7 +2629,7 @@ router16.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router16.get("/weekly-revenue", async (req, res) => {
+router17.get("/weekly-revenue", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2339,7 +2666,7 @@ router16.get("/weekly-revenue", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router16.get("/service-revenue", async (req, res) => {
+router17.get("/service-revenue", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2375,7 +2702,7 @@ router16.get("/service-revenue", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router16.get("/stats", async (req, res) => {
+router17.get("/stats", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2430,7 +2757,7 @@ router16.get("/stats", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router16.get("/inventory", async (req, res) => {
+router17.get("/inventory", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     if (!vendorId) {
@@ -2444,12 +2771,13 @@ router16.get("/inventory", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_analytics_default = router16;
+var vendor_analytics_default = router17;
 
 // server/routes/subscriptions.ts
-var import_express17 = require("express");
-var router17 = (0, import_express17.Router)();
-router17.get("/plans", async (_req, res) => {
+var import_express18 = require("express");
+init_supabase();
+var router18 = (0, import_express18.Router)();
+router18.get("/plans", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("subscription_plans").select("*").order("price");
@@ -2472,7 +2800,7 @@ router17.get("/plans", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router17.get("/", async (req, res) => {
+router18.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2491,7 +2819,7 @@ router17.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router17.post("/", async (req, res) => {
+router18.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2510,7 +2838,7 @@ router17.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router17.delete("/:id", async (req, res) => {
+router18.delete("/:id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2529,12 +2857,13 @@ router17.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var subscriptions_default = router17;
+var subscriptions_default = router18;
 
 // server/routes/vendor-staff.ts
-var import_express18 = require("express");
-var router18 = (0, import_express18.Router)();
-router18.get("/", async (req, res) => {
+var import_express19 = require("express");
+init_supabase();
+var router19 = (0, import_express19.Router)();
+router19.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     const admin = createAdminClient();
@@ -2550,7 +2879,7 @@ router18.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router18.post("/", async (req, res) => {
+router19.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2569,7 +2898,7 @@ router18.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router18.patch("/:id", async (req, res) => {
+router19.patch("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("vendor_staff").update(req.body).eq("id", req.params.id).select().single();
@@ -2582,7 +2911,7 @@ router18.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router18.delete("/:id", async (req, res) => {
+router19.delete("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("vendor_staff").delete().eq("id", req.params.id);
@@ -2595,12 +2924,13 @@ router18.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_staff_default = router18;
+var vendor_staff_default = router19;
 
 // server/routes/garments.ts
-var import_express19 = require("express");
-var router19 = (0, import_express19.Router)();
-router19.get("/", async (req, res) => {
+var import_express20 = require("express");
+init_supabase();
+var router20 = (0, import_express20.Router)();
+router20.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
     const admin = createAdminClient();
@@ -2616,7 +2946,7 @@ router19.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router19.post("/", async (req, res) => {
+router20.post("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("garment_inventory").insert(req.body).select().single();
@@ -2629,7 +2959,7 @@ router19.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router19.patch("/:id", async (req, res) => {
+router20.patch("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("garment_inventory").update(req.body).eq("id", req.params.id).select().single();
@@ -2642,7 +2972,7 @@ router19.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router19.delete("/:id", async (req, res) => {
+router20.delete("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("garment_inventory").delete().eq("id", req.params.id);
@@ -2655,12 +2985,13 @@ router19.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var garments_default = router19;
+var garments_default = router20;
 
 // server/routes/wallet-methods.ts
-var import_express20 = require("express");
-var router20 = (0, import_express20.Router)();
-router20.get("/", async (req, res) => {
+var import_express21 = require("express");
+init_supabase();
+var router21 = (0, import_express21.Router)();
+router21.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2679,7 +3010,7 @@ router20.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.post("/", async (req, res) => {
+router21.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2701,7 +3032,7 @@ router20.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.patch("/:id/default", async (req, res) => {
+router21.patch("/:id/default", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2717,7 +3048,7 @@ router20.patch("/:id/default", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router20.delete("/:id", async (req, res) => {
+router21.delete("/:id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2736,12 +3067,13 @@ router20.delete("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var wallet_methods_default = router20;
+var wallet_methods_default = router21;
 
 // server/routes/coupon-validate.ts
-var import_express21 = require("express");
-var router21 = (0, import_express21.Router)();
-router21.post("/", async (req, res) => {
+var import_express22 = require("express");
+init_supabase();
+var router22 = (0, import_express22.Router)();
+router22.post("/", async (req, res) => {
   try {
     const { code, subtotal } = req.body;
     if (!code) {
@@ -2777,12 +3109,13 @@ router21.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var coupon_validate_default = router21;
+var coupon_validate_default = router22;
 
 // server/routes/support-tickets.ts
-var import_express22 = require("express");
-var router22 = (0, import_express22.Router)();
-router22.get("/", async (req, res) => {
+var import_express23 = require("express");
+init_supabase();
+var router23 = (0, import_express23.Router)();
+router23.get("/", async (req, res) => {
   try {
     const status = req.query.status;
     const supabase = createAdminClient();
@@ -2798,7 +3131,7 @@ router22.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router22.post("/", async (req, res) => {
+router23.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -2817,7 +3150,7 @@ router22.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router22.patch("/:id", async (req, res) => {
+router23.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const admin = createAdminClient();
@@ -2832,7 +3165,7 @@ router22.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router22.post("/:id/assign", async (req, res) => {
+router23.post("/:id/assign", async (req, res) => {
   try {
     const { id } = req.params;
     const { assigned_to } = req.body;
@@ -2855,7 +3188,7 @@ router22.post("/:id/assign", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router22.post("/:id/respond", async (req, res) => {
+router23.post("/:id/respond", async (req, res) => {
   try {
     const { id } = req.params;
     const { response } = req.body;
@@ -2884,7 +3217,7 @@ router22.post("/:id/respond", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router22.post("/:id/close", async (req, res) => {
+router23.post("/:id/close", async (req, res) => {
   try {
     const { id } = req.params;
     const admin = createAdminClient();
@@ -2902,12 +3235,13 @@ router22.post("/:id/close", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var support_tickets_default = router22;
+var support_tickets_default = router23;
 
 // server/routes/admin-campaigns.ts
-var import_express23 = require("express");
-var router23 = (0, import_express23.Router)();
-router23.get("/", async (req, res) => {
+var import_express24 = require("express");
+init_supabase();
+var router24 = (0, import_express24.Router)();
+router24.get("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("campaigns").select("*").order("created_at", { ascending: false });
@@ -2920,7 +3254,7 @@ router23.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router23.post("/", async (req, res) => {
+router24.post("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("campaigns").insert(req.body).select().single();
@@ -2933,7 +3267,7 @@ router23.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router23.patch("/:id", async (req, res) => {
+router24.patch("/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("campaigns").update(req.body).eq("id", req.params.id).select().single();
@@ -2946,12 +3280,13 @@ router23.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_campaigns_default = router23;
+var admin_campaigns_default = router24;
 
 // server/routes/admin-features.ts
-var import_express24 = require("express");
-var router24 = (0, import_express24.Router)();
-router24.get("/", async (_req, res) => {
+var import_express25 = require("express");
+init_supabase();
+var router25 = (0, import_express25.Router)();
+router25.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("feature_flags").select("*").order("key");
@@ -2964,7 +3299,7 @@ router24.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router24.patch("/:key", async (req, res) => {
+router25.patch("/:key", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("feature_flags").update({ enabled: req.body.enabled, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("key", req.params.key).select().single();
@@ -2977,12 +3312,13 @@ router24.patch("/:key", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_features_default = router24;
+var admin_features_default = router25;
 
 // server/routes/admin-audit-logs.ts
-var import_express25 = require("express");
-var router25 = (0, import_express25.Router)();
-router25.get("/", async (req, res) => {
+var import_express26 = require("express");
+init_supabase();
+var router26 = (0, import_express26.Router)();
+router26.get("/", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
     const admin = createAdminClient();
@@ -2996,13 +3332,14 @@ router25.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_audit_logs_default = router25;
+var admin_audit_logs_default = router26;
 
 // server/routes/admin-integrations.ts
-var import_express26 = require("express");
+var import_express27 = require("express");
+init_supabase();
 var import_crypto = __toESM(require("crypto"));
-var router26 = (0, import_express26.Router)();
-router26.get("/api-keys", async (_req, res) => {
+var router27 = (0, import_express27.Router)();
+router27.get("/api-keys", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("api_keys").select("*").order("created_at", { ascending: false });
@@ -3015,7 +3352,7 @@ router26.get("/api-keys", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router26.post("/api-keys", async (req, res) => {
+router27.post("/api-keys", async (req, res) => {
   try {
     const admin = createAdminClient();
     const keyValue = `lh_${import_crypto.default.randomBytes(24).toString("hex")}`;
@@ -3029,7 +3366,7 @@ router26.post("/api-keys", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router26.delete("/api-keys/:id", async (req, res) => {
+router27.delete("/api-keys/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("api_keys").delete().eq("id", req.params.id);
@@ -3042,7 +3379,7 @@ router26.delete("/api-keys/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router26.get("/webhooks", async (_req, res) => {
+router27.get("/webhooks", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("webhooks").select("*").order("created_at", { ascending: false });
@@ -3055,7 +3392,7 @@ router26.get("/webhooks", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router26.post("/webhooks", async (req, res) => {
+router27.post("/webhooks", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("webhooks").insert(req.body).select().single();
@@ -3068,7 +3405,7 @@ router26.post("/webhooks", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router26.delete("/webhooks/:id", async (req, res) => {
+router27.delete("/webhooks/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("webhooks").delete().eq("id", req.params.id);
@@ -3081,12 +3418,13 @@ router26.delete("/webhooks/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_integrations_default = router26;
+var admin_integrations_default = router27;
 
 // server/routes/admin-reports.ts
-var import_express27 = require("express");
-var router27 = (0, import_express27.Router)();
-router27.get("/", async (_req, res) => {
+var import_express28 = require("express");
+init_supabase();
+var router28 = (0, import_express28.Router)();
+router28.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data: reports, error: rErr } = await admin.from("reports").select("*").order("created_at", { ascending: false });
@@ -3104,7 +3442,7 @@ router27.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router27.post("/", async (req, res) => {
+router28.post("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("reports").insert(req.body).select().single();
@@ -3117,7 +3455,7 @@ router27.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router27.post("/scheduled", async (req, res) => {
+router28.post("/scheduled", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("scheduled_reports").insert(req.body).select().single();
@@ -3130,7 +3468,7 @@ router27.post("/scheduled", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router27.delete("/scheduled/:id", async (req, res) => {
+router28.delete("/scheduled/:id", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { error } = await admin.from("scheduled_reports").delete().eq("id", req.params.id);
@@ -3143,12 +3481,13 @@ router27.delete("/scheduled/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_reports_default = router27;
+var admin_reports_default = router28;
 
 // server/routes/admin-users.ts
-var import_express28 = require("express");
-var router28 = (0, import_express28.Router)();
-router28.get("/", async (_req, res) => {
+var import_express29 = require("express");
+init_supabase();
+var router29 = (0, import_express29.Router)();
+router29.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data: profiles, error } = await admin.from("user_profiles").select("id, name, email, phone, role, avatar, suspended, created_at, updated_at").order("created_at", { ascending: false });
@@ -3172,7 +3511,7 @@ router28.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router28.patch("/:id", async (req, res) => {
+router29.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, role, status } = req.body;
@@ -3205,12 +3544,13 @@ router28.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_users_default = router28;
+var admin_users_default = router29;
 
 // server/routes/admin-config.ts
-var import_express29 = require("express");
-var router29 = (0, import_express29.Router)();
-router29.get("/", async (_req, res) => {
+var import_express30 = require("express");
+init_supabase();
+var router30 = (0, import_express30.Router)();
+router30.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
@@ -3223,7 +3563,7 @@ router29.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router29.patch("/", async (req, res) => {
+router30.patch("/", async (req, res) => {
   try {
     const admin = createAdminClient();
     const { data: existing, error: getErr } = await admin.from("system_config").select("config").eq("id", 1).single();
@@ -3250,12 +3590,13 @@ router29.patch("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_config_default = router29;
+var admin_config_default = router30;
 
 // server/routes/admin-rbac.ts
-var import_express30 = require("express");
-var router30 = (0, import_express30.Router)();
-router30.get("/", async (_req, res) => {
+var import_express31 = require("express");
+init_supabase();
+var router31 = (0, import_express31.Router)();
+router31.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data: roles, error: rolesErr } = await admin.from("roles").select("*").order("name");
@@ -3278,7 +3619,7 @@ router30.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router30.patch("/:id", async (req, res) => {
+router31.patch("/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { allowed } = req.body;
@@ -3293,11 +3634,12 @@ router30.patch("/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_rbac_default = router30;
+var admin_rbac_default = router31;
 
 // server/routes/admin-commission.ts
-var import_express31 = require("express");
-var router31 = (0, import_express31.Router)();
+var import_express32 = require("express");
+init_supabase();
+var router32 = (0, import_express32.Router)();
 function getConfig(supabase) {
   return supabase.from("system_config").select("config").eq("id", 1).single().then((r) => r.data?.config || {});
 }
@@ -3318,7 +3660,7 @@ async function ensureRules(supabase) {
   await saveConfig(supabase, config);
   return config;
 }
-router31.get("/rules", async (_req, res) => {
+router32.get("/rules", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3327,7 +3669,7 @@ router31.get("/rules", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.post("/rules", async (req, res) => {
+router32.post("/rules", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3345,7 +3687,7 @@ router31.post("/rules", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.patch("/rules/:id", async (req, res) => {
+router32.patch("/rules/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3367,7 +3709,7 @@ router31.patch("/rules/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.delete("/rules/:id", async (req, res) => {
+router32.delete("/rules/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await ensureRules(supabase);
@@ -3383,7 +3725,7 @@ router31.delete("/rules/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.get("/settlements", async (_req, res) => {
+router32.get("/settlements", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await getConfig(supabase);
@@ -3392,7 +3734,7 @@ router31.get("/settlements", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.post("/settlements", async (req, res) => {
+router32.post("/settlements", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await getConfig(supabase);
@@ -3410,7 +3752,7 @@ router31.post("/settlements", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.patch("/settlements/:id/settle", async (req, res) => {
+router32.patch("/settlements/:id/settle", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const config = await getConfig(supabase);
@@ -3433,7 +3775,7 @@ router31.patch("/settlements/:id/settle", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router31.get("/summary", async (_req, res) => {
+router32.get("/summary", async (_req, res) => {
   try {
     const supabase = createAdminClient();
     const { data: vendors, error: vErr } = await supabase.from("vendors").select("id, name, monthly_revenue, rating, logo_initials, logo_color");
@@ -3467,12 +3809,13 @@ router31.get("/summary", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var admin_commission_default = router31;
+var admin_commission_default = router32;
 
 // server/routes/order-stages.ts
-var import_express32 = require("express");
-var router32 = (0, import_express32.Router)();
-router32.get("/", async (_req, res) => {
+var import_express33 = require("express");
+init_supabase();
+var router33 = (0, import_express33.Router)();
+router33.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("order_stage_definitions").select("*").order("sort_order");
@@ -3485,12 +3828,13 @@ router32.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var order_stages_default = router32;
+var order_stages_default = router33;
 
 // server/routes/chat.ts
-var import_express33 = require("express");
-var router33 = (0, import_express33.Router)();
-router33.get("/", async (req, res) => {
+var import_express34 = require("express");
+init_supabase();
+var router34 = (0, import_express34.Router)();
+router34.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3510,7 +3854,7 @@ router33.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router33.post("/", async (req, res) => {
+router34.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3529,7 +3873,7 @@ router33.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router33.post("/ask", async (req, res) => {
+router34.post("/ask", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3619,12 +3963,13 @@ How can I assist you today?`;
     res.status(500).json({ error: err.message });
   }
 });
-var chat_default = router33;
+var chat_default = router34;
 
 // server/routes/favorites.ts
-var import_express34 = require("express");
-var router34 = (0, import_express34.Router)();
-router34.get("/", async (req, res) => {
+var import_express35 = require("express");
+init_supabase();
+var router35 = (0, import_express35.Router)();
+router35.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3643,7 +3988,7 @@ router34.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router34.post("/", async (req, res) => {
+router35.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3667,7 +4012,7 @@ router34.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router34.delete("/:vendor_id", async (req, res) => {
+router35.delete("/:vendor_id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3687,22 +4032,22 @@ router34.delete("/:vendor_id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var favorites_default = router34;
+var favorites_default = router35;
 
 // server/routes/geocode.ts
-var import_express35 = require("express");
-var cache = /* @__PURE__ */ new Map();
+var import_express36 = require("express");
+var cache2 = /* @__PURE__ */ new Map();
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 function getCached(key) {
-  const entry = cache.get(key);
+  const entry = cache2.get(key);
   if (!entry || Date.now() > entry.ttl) {
-    cache.delete(key);
+    cache2.delete(key);
     return null;
   }
   return entry.data;
 }
 function setCache(key, data) {
-  cache.set(key, { data, ttl: Date.now() + CACHE_TTL_MS });
+  cache2.set(key, { data, ttl: Date.now() + CACHE_TTL_MS });
 }
 var lastNominatimCall = 0;
 async function nominatimFetch(url) {
@@ -3751,8 +4096,8 @@ function findClosestArea(lat, lng) {
   }
   return closest;
 }
-var router35 = (0, import_express35.Router)();
-router35.get("/reverse", async (req, res) => {
+var router36 = (0, import_express36.Router)();
+router36.get("/reverse", async (req, res) => {
   try {
     const lat = req.query.lat;
     const lng = req.query.lng;
@@ -3812,7 +4157,7 @@ router35.get("/reverse", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router35.get("/search", async (req, res) => {
+router36.get("/search", async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
     if (!q || q.length < 2) {
@@ -3864,13 +4209,13 @@ function haversineKm3(lat1, lng1, lat2, lng2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-var geocode_default = router35;
+var geocode_default = router36;
 
 // server/routes/routing.ts
-var import_express36 = require("express");
+var import_express37 = require("express");
 var ORS_BASE = "https://api.openrouteservice.org/v2";
-var router36 = (0, import_express36.Router)();
-router36.get("/directions", async (req, res) => {
+var router37 = (0, import_express37.Router)();
+router37.get("/directions", async (req, res) => {
   try {
     const apiKey = process.env.OPENROUTESERVICE_API_KEY;
     if (!apiKey) {
@@ -3904,7 +4249,7 @@ router36.get("/directions", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router36.get("/geocode/search", async (req, res) => {
+router37.get("/geocode/search", async (req, res) => {
   try {
     const apiKey = process.env.OPENROUTESERVICE_API_KEY;
     if (!apiKey) {
@@ -3931,12 +4276,13 @@ router36.get("/geocode/search", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var routing_default = router36;
+var routing_default = router37;
 
 // server/routes/delivery-location.ts
-var import_express37 = require("express");
-var router37 = (0, import_express37.Router)();
-router37.post("/", async (req, res) => {
+var import_express38 = require("express");
+init_supabase();
+var router38 = (0, import_express38.Router)();
+router38.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -3971,7 +4317,7 @@ router37.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router37.get("/:execId", async (req, res) => {
+router38.get("/:execId", async (req, res) => {
   try {
     const { execId } = req.params;
     const admin = createAdminClient();
@@ -3985,12 +4331,13 @@ router37.get("/:execId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var delivery_location_default = router37;
+var delivery_location_default = router38;
 
 // server/routes/vendor-onboarding.ts
-var import_express38 = require("express");
-var router38 = (0, import_express38.Router)();
-router38.post("/approve", async (req, res) => {
+var import_express39 = require("express");
+init_supabase();
+var router39 = (0, import_express39.Router)();
+router39.post("/approve", async (req, res) => {
   try {
     const { vendor_id, owner_id } = req.body;
     if (!vendor_id) {
@@ -4020,7 +4367,7 @@ router38.post("/approve", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router38.post("/reject", async (req, res) => {
+router39.post("/reject", async (req, res) => {
   try {
     const { vendor_id, reason } = req.body;
     if (!vendor_id) {
@@ -4042,7 +4389,7 @@ router38.post("/reject", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router38.get("/pending", async (_req, res) => {
+router39.get("/pending", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("vendors").select("*, owner:owner_id(id, name, email, phone)").in("kyc_status", ["pending"]).order("created_at", { ascending: false });
@@ -4055,12 +4402,13 @@ router38.get("/pending", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_onboarding_default = router38;
+var vendor_onboarding_default = router39;
 
 // server/routes/payments.ts
-var import_express39 = require("express");
-var router39 = (0, import_express39.Router)();
-router39.post("/create-order", async (req, res) => {
+var import_express40 = require("express");
+init_supabase();
+var router40 = (0, import_express40.Router)();
+router40.post("/create-order", async (req, res) => {
   try {
     const { amount, currency, order_id } = req.body;
     if (!amount || !order_id) {
@@ -4097,7 +4445,7 @@ router39.post("/create-order", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router39.post("/verify", async (req, res) => {
+router40.post("/verify", async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -4123,7 +4471,7 @@ router39.post("/verify", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router39.post("/wallet/add", async (req, res) => {
+router40.post("/wallet/add", async (req, res) => {
   try {
     const { amount } = req.body;
     if (!amount || amount <= 0) {
@@ -4158,11 +4506,12 @@ router39.post("/wallet/add", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var payments_default = router39;
+var payments_default = router40;
 
 // server/routes/customer-config.ts
-var import_express40 = require("express");
-var router40 = (0, import_express40.Router)();
+var import_express41 = require("express");
+init_supabase();
+var router41 = (0, import_express41.Router)();
 var CUSTOMER_FEATURE_DEFAULTS = {
   enableSubscriptions: true,
   enableCoupons: true,
@@ -4173,7 +4522,7 @@ var CUSTOMER_FEATURE_DEFAULTS = {
   enableDiscover: true,
   enableOrders: true
 };
-router40.get("/", async (_req, res) => {
+router41.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
@@ -4191,13 +4540,14 @@ router40.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var customer_config_default = router40;
+var customer_config_default = router41;
 
 // server/routes/settings.ts
-var import_express41 = require("express");
-var router41 = (0, import_express41.Router)();
+var import_express42 = require("express");
+init_supabase();
+var router42 = (0, import_express42.Router)();
 var DEFAULTS = { pushEnabled: true, orderUpdates: true, promotions: false };
-router41.get("/", async (req, res) => {
+router42.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4222,7 +4572,7 @@ router41.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.patch("/notifications", async (req, res) => {
+router42.patch("/notifications", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4253,7 +4603,7 @@ router41.patch("/notifications", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.patch("/password", async (req, res) => {
+router42.patch("/password", async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
@@ -4292,12 +4642,12 @@ router41.patch("/password", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var settings_default = router41;
+var settings_default = router42;
 
 // server/app.ts
-var app = (0, import_express42.default)();
+var app = (0, import_express43.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
-app.use(import_express42.default.json());
+app.use(import_express43.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -4305,6 +4655,7 @@ app.use("/api/auth", auth_default);
 app.use("/api/orders", orders_default);
 app.use("/api/vendors", vendors_default);
 app.use("/api/addresses", addresses_default);
+app.use("/api/areas", areas_default);
 app.use("/api/delivery-tasks", delivery_tasks_default);
 app.use("/api/delivery-executives", delivery_executives_default);
 app.use("/api/notifications", notifications_default);
