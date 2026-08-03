@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { AdminApp } from "../admin-app";
 
+let mockPathname = "/admin/dashboard";
+
 vi.mock("react-router-dom", () => ({
   useParams: () => ({ role: "admin" }),
   useNavigate: () => vi.fn(),
-  useLocation: () => ({ pathname: "/admin/dashboard" }),
+  useLocation: () => ({ pathname: mockPathname }),
 }));
 
 vi.mock("framer-motion", () => ({
@@ -68,6 +70,10 @@ vi.mock("../admin-reports", () => ({
   AdminReports: () => <div data-testid="admin-reports" />,
 }));
 
+vi.mock("../admin-live-map", () => ({
+  AdminLiveMap: () => <div data-testid="admin-livemap" />,
+}));
+
 vi.mock("../admin-ai", () => ({
   AdminAI: () => <div data-testid="admin-ai" />,
 }));
@@ -87,5 +93,11 @@ describe("AdminApp", () => {
   it("shows correct page subtitle for dashboard", () => {
     render(<AdminApp />);
     expect(screen.getByTestId("page-subtitle")).toHaveTextContent("Centralised view");
+  });
+
+  it("renders live map view when active", () => {
+    mockPathname = "/admin/livemap";
+    render(<AdminApp />);
+    expect(screen.getByTestId("admin-livemap")).toBeInTheDocument();
   });
 });

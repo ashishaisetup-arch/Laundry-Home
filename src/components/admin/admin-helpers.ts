@@ -11,6 +11,7 @@ export function pageTitle(view: string) {
     support: "Customer Support",
     marketing: "Marketing & Campaigns",
     reports: "Reports & Analytics",
+    livemap: "Live Map",
     ai: "AI Features",
     profile: "My Profile",
     settings: "Settings",
@@ -28,6 +29,7 @@ export function pageSubtitle(view: string) {
     support: "Handle complaints, refunds and disputes",
     marketing: "Coupons, campaigns and customer engagement",
     reports: "Generate and export business reports",
+    livemap: "Real-time tracking of vendors, orders and delivery partners",
     ai: "AI-powered automation and insights",
   }[view];
 }
@@ -43,6 +45,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "support", label: "Customer Support", icon: "Headphones", badge: 7 },
       { id: "marketing", label: "Marketing", icon: "Megaphone" },
       { id: "reports", label: "Reports", icon: "FileText" },
+      { id: "livemap", label: "Live Map", icon: "MapPin" },
       { id: "ai", label: "AI Features", icon: "Sparkles", badge: "AI" },
     ],
   },

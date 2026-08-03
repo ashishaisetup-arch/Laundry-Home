@@ -14,6 +14,7 @@ import { AdminCommission } from "./admin-commission";
 import { AdminSupport } from "./admin-support";
 import { AdminMarketing } from "./admin-marketing";
 import { AdminReports } from "./admin-reports";
+import { AdminLiveMap } from "./admin-live-map";
 import { AdminAI } from "./admin-ai";
 
 export function AdminApp() {
@@ -49,6 +50,7 @@ export function AdminApp() {
         {view === "support" && <AdminSupport key="s" />}
         {view === "marketing" && <AdminMarketing key="m" />}
         {view === "reports" && <AdminReports key="r" />}
+        {view === "livemap" && <AdminLiveMap key="lm" />}
         {view === "ai" && <AdminAI key="a" />}
         {view === "profile" && <ProfilePage key="profile" />}
         {view === "settings" && <SettingsPage key="settings" />}

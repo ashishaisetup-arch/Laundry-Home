@@ -10,6 +10,7 @@ describe("pageTitle", () => {
     expect(pageTitle("support")).toBe("Customer Support");
     expect(pageTitle("marketing")).toBe("Marketing & Campaigns");
     expect(pageTitle("reports")).toBe("Reports & Analytics");
+    expect(pageTitle("livemap")).toBe("Live Map");
     expect(pageTitle("ai")).toBe("AI Features");
     expect(pageTitle("profile")).toBe("My Profile");
     expect(pageTitle("settings")).toBe("Settings");
@@ -36,7 +37,7 @@ describe("NAV_GROUPS", () => {
   it("has the control center group with all items", () => {
     expect(NAV_GROUPS).toHaveLength(1);
     expect(NAV_GROUPS[0].label).toBe("Control Center");
-    expect(NAV_GROUPS[0].items).toHaveLength(8);
+    expect(NAV_GROUPS[0].items).toHaveLength(9);
   });
 
   it("includes all required nav items", () => {
@@ -48,6 +49,7 @@ describe("NAV_GROUPS", () => {
     expect(ids).toContain("support");
     expect(ids).toContain("marketing");
     expect(ids).toContain("reports");
+    expect(ids).toContain("livemap");
     expect(ids).toContain("ai");
   });
 });

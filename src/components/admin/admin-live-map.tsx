@@ -330,7 +330,6 @@ export function AdminLiveMap() {
           zoom={12}
           height="h-[600px]"
           flyTo={flyTo}
-          clustered={true}
         />
         {/* Legend overlay */}
         <div className="absolute bottom-4 left-4 z-[1000] bg-background/90 backdrop-blur rounded-lg p-3 shadow-lg border text-xs space-y-1.5 min-w-[130px]">
