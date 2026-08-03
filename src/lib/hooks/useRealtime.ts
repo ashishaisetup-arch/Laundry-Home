@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { createClient } from "@/lib/supabase";
+import { subscribePostgresChanges } from "./realtimeChannel";
 
 export function useRealtime(
   table: string,
@@ -15,20 +15,12 @@ export function useRealtime(
 
   useEffect(() => {
     if (!enabled) return;
-    const supabase = createClient();
     const channelName = `realtime-${table}-${filter || "all"}`;
-    const existing = supabase.getChannels().find(c => c.topic === channelName);
-    if (existing) return;
-
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table, filter },
-        (payload) => onChangeRef.current(payload),
-      )
-      .subscribe((status) => onStatusRef.current?.(status));
-
-    return () => { supabase.removeChannel(channel); };
+    return subscribePostgresChanges(
+      channelName,
+      { event: "*", schema: "public", table, filter },
+      (payload) => onChangeRef.current(payload),
+      (status) => onStatusRef.current?.(status),
+    );
   }, [table, filter, enabled]);
 }

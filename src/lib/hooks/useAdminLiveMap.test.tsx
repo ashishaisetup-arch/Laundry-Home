@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { execStatus, formatAge, useAdminLiveMap } from "./useAdminLiveMap";
 import { api } from "@/lib/api/client";
+import { resetRealtimeRegistry } from "./realtimeChannel";
 
 const mocks = vi.hoisted(() => {
   const statusCallbacks: Array<(s: string) => void> = [];
@@ -52,6 +53,7 @@ const execCalls = () => apiGet.mock.calls.filter((c) => c[0] === "/api/delivery-
 const locationPayload = (payload: any) => mocks.payloadCallbacks[0](payload);
 
 beforeEach(() => {
+  resetRealtimeRegistry();
   vi.clearAllMocks();
   mocks.statusCallbacks.length = 0;
   mocks.payloadCallbacks.length = 0;
