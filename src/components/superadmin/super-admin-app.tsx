@@ -16,6 +16,7 @@ import { RbacMatrix } from "./superadmin-rbac";
 import { UserManagement } from "./superadmin-users";
 import { AuditLogs } from "./superadmin-audit";
 import { FeatureFlags } from "./superadmin-features";
+import { ServiceCatalogManager } from "./service-catalog-manager";
 import { Integrations } from "./superadmin-integrations";
 import { SystemConfig } from "./superadmin-system-config";
 
@@ -61,6 +62,7 @@ export function SuperAdminApp() {
         {view === "users" && <UserManagement key="users" />}
         {view === "audit" && <AuditLogs key="audit" />}
         {view === "features" && <FeatureFlags key="features" />}
+        {view === "catalog" && <ServiceCatalogManager key="catalog" />}
         {view === "integrations" && <Integrations key="integrations" />}
         {view === "system" && <SystemConfig key="system" />}
         {view === "profile" && <ProfilePage key="profile" />}

@@ -11,6 +11,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "users", label: "User Management", icon: "UserCog" },
       { id: "audit", label: "Audit Logs", icon: "ScrollText" },
       { id: "features", label: "Feature Flags", icon: "Flag" },
+      { id: "catalog", label: "Service Catalog", icon: "Package" },
       { id: "integrations", label: "API & Webhooks", icon: "Plug" },
       { id: "system", label: "System Config", icon: "Settings" },
     ],
@@ -25,6 +26,7 @@ export function pageTitle(view: string) {
     users: "User Management",
     audit: "Audit Logs",
     features: "Feature Flags",
+    catalog: "Service Catalog",
     integrations: "API & Webhooks",
     system: "System Configuration",
     profile: "My Profile",
@@ -42,6 +44,7 @@ export function pageSubtitle(view: string) {
     users: "Manage platform users, staff and administrators",
     audit: "Track every action across the platform",
     features: "Toggle features on/off without deploying",
+    catalog: "Manage service categories, services and item pricing",
     integrations: "API keys, third-party integrations and webhooks",
     system: "Global platform settings and configuration",
   }[view];

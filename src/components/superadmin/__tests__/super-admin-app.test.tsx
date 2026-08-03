@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SuperAdminApp } from "../super-admin-app";
 
+let mockPathname = "/superadmin/dashboard";
+
 vi.mock("react-router-dom", () => ({
   useParams: () => ({ role: "superadmin" }),
   useNavigate: () => vi.fn(),
-  useLocation: () => ({ pathname: "/superadmin/dashboard" }),
+  useLocation: () => ({ pathname: mockPathname }),
 }));
 
 vi.mock("framer-motion", () => ({
@@ -69,6 +71,10 @@ vi.mock("../superadmin-features", () => ({
   FeatureFlags: () => <div data-testid="superadmin-features" />,
 }));
 
+vi.mock("../service-catalog-manager", () => ({
+  ServiceCatalogManager: () => <div data-testid="superadmin-catalog" />,
+}));
+
 vi.mock("../superadmin-integrations", () => ({
   Integrations: () => <div data-testid="superadmin-integrations" />,
 }));
@@ -96,5 +102,11 @@ describe("SuperAdminApp", () => {
   it("shows correct page subtitle for dashboard", () => {
     render(<SuperAdminApp />);
     expect(screen.getByTestId("page-subtitle")).toHaveTextContent("Full platform access");
+  });
+
+  it("renders catalog view when active", () => {
+    mockPathname = "/superadmin/catalog";
+    render(<SuperAdminApp />);
+    expect(screen.getByTestId("superadmin-catalog")).toBeInTheDocument();
   });
 });

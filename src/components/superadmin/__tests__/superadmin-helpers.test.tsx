@@ -10,6 +10,7 @@ describe("pageTitle", () => {
     expect(pageTitle("users")).toBe("User Management");
     expect(pageTitle("audit")).toBe("Audit Logs");
     expect(pageTitle("features")).toBe("Feature Flags");
+    expect(pageTitle("catalog")).toBe("Service Catalog");
     expect(pageTitle("integrations")).toBe("API & Webhooks");
     expect(pageTitle("system")).toBe("System Configuration");
     expect(pageTitle("profile")).toBe("My Profile");
@@ -37,7 +38,7 @@ describe("NAV_GROUPS", () => {
   it("has the super admin group with all items", () => {
     expect(NAV_GROUPS).toHaveLength(1);
     expect(NAV_GROUPS[0].label).toBe("Super Admin");
-    expect(NAV_GROUPS[0].items).toHaveLength(9);
+    expect(NAV_GROUPS[0].items).toHaveLength(10);
   });
 
   it("includes all required nav items", () => {
@@ -49,6 +50,7 @@ describe("NAV_GROUPS", () => {
     expect(ids).toContain("users");
     expect(ids).toContain("audit");
     expect(ids).toContain("features");
+    expect(ids).toContain("catalog");
     expect(ids).toContain("integrations");
     expect(ids).toContain("system");
   });
