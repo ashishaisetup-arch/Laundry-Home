@@ -1731,8 +1731,8 @@ router11.get("/", async (_req, res) => {
 router11.post("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
-    const { name, description, icon, display_order, is_active, grouping } = req.body;
-    const { data, error } = await supabase.from("service_categories").insert({ name, description, icon, display_order, is_active, grouping }).select().single();
+    const { name, slug, description, icon, display_order, is_active, grouping } = req.body;
+    const { data, error } = await supabase.from("service_categories").insert({ name, slug, description, icon, display_order, is_active, grouping }).select().single();
     if (error) {
       res.status(500).json({ error: error.message });
       return;
@@ -1745,8 +1745,8 @@ router11.post("/", async (req, res) => {
 router11.put("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
-    const { name, description, icon, display_order, is_active, grouping } = req.body;
-    const { data, error } = await supabase.from("service_categories").update({ name, description, icon, display_order, is_active, grouping }).eq("id", req.params.id).select().single();
+    const { name, slug, description, icon, display_order, is_active, grouping } = req.body;
+    const { data, error } = await supabase.from("service_categories").update({ name, slug, description, icon, display_order, is_active, grouping }).eq("id", req.params.id).select().single();
     if (error) {
       res.status(500).json({ error: error.message });
       return;
@@ -1973,6 +1973,65 @@ router13.get("/catalog", async (req, res) => {
       return { ...rest, services };
     });
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router13.post("/", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { data, error } = await supabase.from("services").insert({
+      category_id: categoryId,
+      name,
+      description,
+      unit,
+      image_url: imageUrl || null,
+      taxable: taxable ?? true,
+      display_order: displayOrder ?? 0,
+      is_active: isActive ?? true
+    }).select().single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router13.put("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { data, error } = await supabase.from("services").update({
+      category_id: categoryId,
+      name,
+      description,
+      unit,
+      image_url: imageUrl || null,
+      taxable,
+      display_order: displayOrder ?? 0,
+      is_active: isActive
+    }).eq("id", req.params.id).select().single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router13.delete("/:id", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("services").delete().eq("id", req.params.id);
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

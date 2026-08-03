@@ -17,6 +17,7 @@ async function request<T>(url: string, opts?: RequestInit): Promise<T> {
 export const api = {
   get: async <T>(url: string) => convertKeys(await request<T>(url)),
   post: async <T>(url: string, body?: unknown) => convertKeys(await request<T>(url, { method: "POST", body: JSON.stringify(body) })),
+  put: async <T>(url: string, body?: unknown) => convertKeys(await request<T>(url, { method: "PUT", body: JSON.stringify(body) })),
   patch: async <T>(url: string, body?: unknown) => convertKeys(await request<T>(url, { method: "PATCH", body: JSON.stringify(body) })),
   delete: async <T>(url: string) => convertKeys(await request<T>(url, { method: "DELETE" })),
 };

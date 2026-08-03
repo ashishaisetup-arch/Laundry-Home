@@ -276,6 +276,31 @@ export interface ServiceItem {
   service?: { id: string; name: string; unit: string };
 }
 
+export interface CatalogService {
+  id: string;
+  categoryId: string;
+  name: string;
+  description: string;
+  unit: string;
+  imageUrl: string;
+  taxable: boolean;
+  displayOrder: number;
+  isActive: boolean;
+  items: ServiceItem[];
+}
+
+export interface CatalogCategory {
+  id: string;
+  slug: string;
+  name: string;
+  icon: string;
+  description: string;
+  displayOrder: number;
+  grouping: string;
+  isActive: boolean;
+  services: CatalogService[];
+}
+
 export interface VendorServicePrice {
   id: string;
   vendorId: string;
