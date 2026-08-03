@@ -56,11 +56,8 @@ router.get("/", async (req: Request, res: Response) => {
     if (status) query = query.eq("status", status);
     if (search) query = query.or(`code.ilike.%${search}%,customer_name.ilike.%${search}%,vendor_name.ilike.%${search}%,status.ilike.%${search}%`);
 
-    console.log("[orders] GET", { vendorId, deliveryExecutiveId, customerId, status, limit, isAdminQuery });
-
     const { data, error } = await query;
     if (error) { console.error("[orders] DB error:", error.message); res.status(500).json({ error: error.message }); return; }
-    console.log("[orders] returning", data?.length || 0, "orders");
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });

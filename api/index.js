@@ -925,14 +925,12 @@ router4.get("/", async (req, res) => {
     if (deliveryExecutiveId) query = query.eq("delivery_executive_id", deliveryExecutiveId);
     if (status) query = query.eq("status", status);
     if (search) query = query.or(`code.ilike.%${search}%,customer_name.ilike.%${search}%,vendor_name.ilike.%${search}%,status.ilike.%${search}%`);
-    console.log("[orders] GET", { vendorId, deliveryExecutiveId, customerId, status, limit, isAdminQuery });
     const { data, error } = await query;
     if (error) {
       console.error("[orders] DB error:", error.message);
       res.status(500).json({ error: error.message });
       return;
     }
-    console.log("[orders] returning", data?.length || 0, "orders");
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1699,18 +1697,32 @@ router7.get("/", async (_req, res) => {
         }
       }
     }
-    const result = (data || []).map((e) => ({
-      id: e.id,
-      name: e.name,
-      email: e.email,
-      phone: e.phone,
-      avatar: e.avatar,
-      isAvailable: e.is_available,
-      currentLat: e.current_lat ? Number(e.current_lat) : null,
-      currentLng: e.current_lng ? Number(e.current_lng) : null,
-      maxDailyOrders: e.max_daily_orders,
-      assignedOrders: workloads[e.id] || 0
-    }));
+    let liveLocations = {};
+    if (execIds.length > 0) {
+      const { data: live } = await admin.from("delivery_live_locations").select("exec_id, lat, lng, updated_at").in("exec_id", execIds);
+      for (const row of live || []) {
+        liveLocations[row.exec_id] = row;
+      }
+    }
+    const result = (data || []).map((e) => {
+      const live = liveLocations[e.id];
+      const currentLat = live?.lat != null ? Number(live.lat) : e.current_lat ? Number(e.current_lat) : null;
+      const currentLng = live?.lng != null ? Number(live.lng) : e.current_lng ? Number(e.current_lng) : null;
+      return {
+        id: e.id,
+        name: e.name,
+        email: e.email,
+        phone: e.phone,
+        avatar: e.avatar,
+        isAvailable: e.is_available,
+        currentLat,
+        currentLng,
+        lastSeenAt: live?.updated_at || null,
+        locationSource: live ? "live" : "profile",
+        maxDailyOrders: e.max_daily_orders,
+        assignedOrders: workloads[e.id] || 0
+      };
+    });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });

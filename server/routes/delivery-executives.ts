@@ -45,18 +45,37 @@ router.get("/", async (_req: Request, res: Response) => {
       }
     }
 
-    const result = (data || []).map((e) => ({
-      id: e.id,
-      name: e.name,
-      email: e.email,
-      phone: e.phone,
-      avatar: e.avatar,
-      isAvailable: e.is_available,
-      currentLat: e.current_lat ? Number(e.current_lat) : null,
-      currentLng: e.current_lng ? Number(e.current_lng) : null,
-      maxDailyOrders: e.max_daily_orders,
-      assignedOrders: workloads[e.id] || 0,
-    }));
+    // Overlay live locations (latest per exec) for accurate positions
+    let liveLocations: Record<string, any> = {};
+    if (execIds.length > 0) {
+      const { data: live } = await admin
+        .from("delivery_live_locations")
+        .select("exec_id, lat, lng, updated_at")
+        .in("exec_id", execIds);
+      for (const row of live || []) {
+        liveLocations[row.exec_id] = row;
+      }
+    }
+
+    const result = (data || []).map((e) => {
+      const live = liveLocations[e.id];
+      const currentLat = live?.lat != null ? Number(live.lat) : e.current_lat ? Number(e.current_lat) : null;
+      const currentLng = live?.lng != null ? Number(live.lng) : e.current_lng ? Number(e.current_lng) : null;
+      return {
+        id: e.id,
+        name: e.name,
+        email: e.email,
+        phone: e.phone,
+        avatar: e.avatar,
+        isAvailable: e.is_available,
+        currentLat,
+        currentLng,
+        lastSeenAt: live?.updated_at || null,
+        locationSource: live ? "live" : "profile",
+        maxDailyOrders: e.max_daily_orders,
+        assignedOrders: workloads[e.id] || 0,
+      };
+    });
 
     res.json(result);
   } catch (err: any) {
