@@ -42,6 +42,7 @@ import deliveryLocationRouter from "./routes/delivery-location";
 import vendorOnboardingRouter from "./routes/vendor-onboarding";
 import paymentsRouter from "./routes/payments";
 import customerConfigRouter from "./routes/customer-config";
+import settingsRouter from "./routes/settings";
 
 const app = express();
 
@@ -92,5 +93,6 @@ app.use("/api/delivery/location", deliveryLocationRouter);
 app.use("/api/vendor/onboarding", vendorOnboardingRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/config/customer", customerConfigRouter);
+app.use("/api/settings", settingsRouter);
 
 export default app;
