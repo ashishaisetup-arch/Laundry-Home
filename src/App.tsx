@@ -1,7 +1,7 @@
 
 import { useEffect, Component, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation } from "react-router-dom";
 import { useAppStore } from "@/lib/store";
 import { AuthLanding } from "@/components/auth/landing";
 import { ResetPasswordPage } from "@/components/auth/reset-password";
@@ -44,7 +44,6 @@ class AppErrorBoundary extends Component<{ children: React.ReactNode }, { error:
 function RoleAppWrapper() {
   const { role } = useParams<{ role: string }>();
   const storeRole = useAppStore((s) => s.role);
-  const effectiveRole = role || storeRole;
 
   const apps: Record<string, React.ComponentType> = {
     customer: CustomerApp,
@@ -54,8 +53,12 @@ function RoleAppWrapper() {
     superadmin: SuperAdminApp,
   };
 
-  const App = apps[effectiveRole];
-  if (!App) return <Navigate to={`/${storeRole}/dashboard`} replace />;
+  if (role && role !== storeRole) {
+    return <Navigate to={`/${storeRole}/dashboard`} replace />;
+  }
+
+  const App = apps[role || storeRole];
+  if (!App) return <Navigate to="/" replace />;
 
   return (
     <Suspense fallback={
@@ -85,8 +88,9 @@ function AuthenticatedApp() {
 
 function AuthGate() {
   const { role, isAuthenticated, authLoading, initializeAuth } = useAppStore();
-  const forceLanding = new URLSearchParams(window.location.search).has("landing") || new URLSearchParams(window.location.search).has("clear");
-  const isAuthRoute = window.location.pathname.startsWith("/auth/");
+  const location = useLocation();
+  const forceLanding = new URLSearchParams(location.search).has("landing") || new URLSearchParams(location.search).has("clear");
+  const isAuthRoute = location.pathname.startsWith("/auth/");
 
   useEffect(() => {
     if (isAuthRoute) return;
@@ -114,6 +118,10 @@ function AuthGate() {
         </div>
       </div>
     );
+  }
+
+  if (!isAuthenticated && !forceLanding && !isAuthRoute && location.pathname !== "/") {
+    return <Navigate to="/" replace />;
   }
 
   return (

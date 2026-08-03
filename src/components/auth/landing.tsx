@@ -125,16 +125,25 @@ export function AuthLanding() {
     }
   };
 
-  const handlePasswordLogin = async () => {
-    if (!email || !password) {
+  const handlePasswordLogin = async (form?: HTMLFormElement) => {
+    let submittedEmail = email.trim();
+    let submittedPassword = password;
+    if (form) {
+      const fd = new FormData(form);
+      const fEmail = String(fd.get("email") || "").trim();
+      const fPassword = String(fd.get("password") || "");
+      if (fEmail) submittedEmail = fEmail;
+      if (fPassword) submittedPassword = fPassword;
+    }
+    if (!submittedEmail || !submittedPassword) {
       toast.error("Please fill in all fields");
       return;
     }
     try {
       if (isSignUp) {
-        await signUp(email, password, signupName);
+        await signUp(submittedEmail, submittedPassword, signupName);
       } else {
-        await signInWithEmail(email, password);
+        await signInWithEmail(submittedEmail, submittedPassword);
       }
     } catch (e: any) {
       toast.error(e.message || "Authentication failed");

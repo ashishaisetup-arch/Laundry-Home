@@ -4,7 +4,7 @@ import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
-  { ignores: ["node_modules/**", "dist/**", "build/**", "examples/**", "skills/**", ".next/**", "scripts/**", "supabase/**", "mini-services/**"] },
+  { ignores: ["node_modules/**", "dist/**", "build/**", "examples/**", "skills/**", ".next/**", "scripts/**", "supabase/**", "mini-services/**", "api/index.js"] },
   js.configs.recommended,
   tseslint.configs.recommended,
   react.configs.flat.recommended,

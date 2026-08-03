@@ -58,7 +58,7 @@ export function AuthModal({
   setStep: (s: AuthStep) => void;
   onAuth: (m: AuthMethod) => void;
   onVerifyOtp: () => void;
-  onPasswordLogin: () => void;
+  onPasswordLogin: (form?: HTMLFormElement) => void;
   onResetPassword: () => void;
   resetSent: boolean;
   resetError: string | null;
@@ -189,7 +189,9 @@ export function AuthModal({
                         </div>
                         <Input
                           id="phone"
+                          name="phone"
                           type="tel"
+                          autoComplete="tel"
                           placeholder="98765 43210"
                           value={phone}
                           onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
@@ -267,14 +269,19 @@ export function AuthModal({
                 )}
 
                 {step === "password" && (
-                  <motion.div
+                  <motion.form
                     key="password"
                     initial={{ opacity: 0, x: 10 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -10 }}
                     className="space-y-4"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      onPasswordLogin(e.currentTarget);
+                    }}
                   >
                     <button
+                      type="button"
                       onClick={() => setStep("method")}
                       className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
                     >
@@ -289,7 +296,7 @@ export function AuthModal({
                     {isSignUp && (
                       <div>
                         <Label htmlFor="signupName" className="text-xs font-semibold">Full name</Label>
-                        <Input id="signupName" placeholder="Your name" value={signupName} onChange={(e) => setSignupName(e.target.value)} className="mt-1.5" />
+                        <Input id="signupName" name="name" autoComplete="name" placeholder="Your name" value={signupName} onChange={(e) => setSignupName(e.target.value)} className="mt-1.5" />
                       </div>
                     )}
 
@@ -297,7 +304,9 @@ export function AuthModal({
                       <Label htmlFor="email" className="text-xs font-semibold">Email address</Label>
                       <Input
                         id="email"
+                        name="email"
                         type="email"
+                        autoComplete="email"
                         placeholder="you@email.com"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
@@ -309,7 +318,9 @@ export function AuthModal({
                       <div className="relative mt-1.5">
                         <Input
                           id="password"
+                          name="password"
                           type="password"
+                          autoComplete={isSignUp ? "new-password" : "current-password"}
                           placeholder="••••••••"
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
@@ -318,18 +329,14 @@ export function AuthModal({
                         <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       </div>
                     </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input type="checkbox" className="rounded" />
-                        <span className="text-muted-foreground">Remember me</span>
-                      </label>
+                    <div className="flex items-center justify-end text-xs">
                       <button type="button" onClick={() => setStep("forgot")} className="text-primary hover:underline">
                         Forgot password?
                       </button>
                     </div>
                     <Button
+                      type="submit"
                       className="w-full bg-primary hover:bg-primary/90 h-11"
-                      onClick={onPasswordLogin}
                       disabled={authLoading}
                     >
                       {authLoading ? (
@@ -341,7 +348,7 @@ export function AuthModal({
                       )}
                       {!authLoading && <ArrowRight className="ml-2 h-4 w-4" />}
                     </Button>
-                  </motion.div>
+                  </motion.form>
                 )}
 
                 {step === "forgot" && (
@@ -373,7 +380,9 @@ export function AuthModal({
                           <Label htmlFor="forgotEmail" className="text-xs font-semibold">Email address</Label>
                           <Input
                             id="forgotEmail"
+                            name="email"
                             type="email"
+                            autoComplete="email"
                             placeholder="you@email.com"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}

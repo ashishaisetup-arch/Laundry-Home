@@ -76,6 +76,13 @@ router.post("/logout", async (req: Request, res: Response) => {
       (name) => res.clearCookie(name, { path: "/" }),
     );
     await supabase.auth.signOut();
+    const paths = ["/", "/api", "/auth"];
+    for (const name of Object.keys(req.cookies || {})) {
+      for (const p of paths) {
+        res.clearCookie(name, { path: p });
+        res.clearCookie(name, { path: p, domain: req.hostname });
+      }
+    }
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

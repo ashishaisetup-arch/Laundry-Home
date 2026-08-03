@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { AuthLanding, resetErrorMessage } from "../landing";
 
@@ -14,14 +14,19 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+const mocks = vi.hoisted(() => ({
+  signInWithEmail: vi.fn(),
+  signUp: vi.fn(),
+}));
+
 vi.mock("@/lib/store", () => ({
   useAppStore: vi.fn((selector) => {
     const state = {
       signInWithOAuth: vi.fn(),
       signInWithPhone: vi.fn(),
       verifyOtp: vi.fn(),
-      signInWithEmail: vi.fn(),
-      signUp: vi.fn(),
+      signInWithEmail: mocks.signInWithEmail,
+      signUp: mocks.signUp,
       resetPassword: vi.fn(),
       authLoading: false,
     };
@@ -58,6 +63,10 @@ vi.mock("../vendor-dashboard-preview", () => ({
 }));
 
 describe("AuthLanding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("renders the landing page with hero section", () => {
     render(<AuthLanding />);
     expect(screen.getByText(/picked up, washed/i)).toBeInTheDocument();

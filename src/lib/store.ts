@@ -5,6 +5,15 @@ import { api } from "./api/client";
 
 let notifChannel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
 
+async function getCurrentUser(supabase: ReturnType<typeof createClient>) {
+  try {
+    const { data } = await supabase.auth.getUser();
+    return data.user ?? null;
+  } catch {
+    return null;
+  }
+}
+
 interface AppState {
   // Auth
   role: Role;
@@ -26,6 +35,14 @@ interface AppState {
   resetPassword: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   setProfile: (name: string, phone: string, email?: string) => Promise<void>;
+
+  // Settings
+  pushEnabled: boolean;
+  orderUpdatesEnabled: boolean;
+  promotionsEnabled: boolean;
+  fetchSettings: () => Promise<void>;
+  updateNotificationSettings: (patch: { pushEnabled?: boolean; orderUpdates?: boolean; promotions?: boolean }) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 
   // UI state
   theme: "light" | "dark";
@@ -122,21 +139,23 @@ export const useAppStore = create<AppState>((set, get) => ({
             authLoading: false,
           });
           get().fetchNotifications().catch(() => {});
+          get().fetchSettings().catch(() => {});
           get().fetchWallet().catch(() => {});
           get().setupRealtimeNotifications();
           return;
         }
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
+      const user = await getCurrentUser(supabase);
 
-        if (session?.user) {
+        if (user) {
           get().fetchNotifications().catch(() => {});
+          get().fetchSettings().catch(() => {});
           get().fetchWallet().catch(() => {});
           get().setupRealtimeNotifications();
-          const meta = session.user.user_metadata;
+          const meta = user.user_metadata;
           const role: Role = (meta?.role as Role) || "customer";
-          const name = meta?.name || session.user.email?.split("@")[0] || "User";
+          const name = meta?.name || user.email?.split("@")[0] || "User";
           const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
 
           try {
@@ -146,9 +165,9 @@ export const useAppStore = create<AppState>((set, get) => ({
               set({
                 isAuthenticated: true,
                 role: data.profile.role || role,
-                userId: session.user.id,
+                userId: user.id,
                 userName: data.profile.name || name,
-                userEmail: data.profile.email || session.user.email || "",
+                userEmail: data.profile.email || user.email || "",
                 userPhone: data.profile.phone || "",
                 userAvatar: data.profile.avatar || avatar,
                 authLoading: false,
@@ -160,13 +179,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           set({
             isAuthenticated: true,
             role,
-            userId: session.user.id,
+            userId: user.id,
             userName: name,
-            userEmail: session.user.email || "",
+            userEmail: user.email || "",
             userAvatar: avatar,
             authLoading: false,
           });
           get().fetchNotifications().catch(() => {});
+          get().fetchSettings().catch(() => {});
           get().fetchWallet().catch(() => {});
           get().setupRealtimeNotifications();
           return;
@@ -230,6 +250,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
 
       get().fetchNotifications().catch(() => {});
+      get().fetchSettings().catch(() => {});
       get().fetchWallet().catch(() => {});
       get().setupRealtimeNotifications();
     } catch (e: any) {
@@ -290,6 +311,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       get().fetchNotifications().catch(() => {});
       get().fetchWallet().catch(() => {});
+      get().fetchSettings().catch(() => {});
       get().setupRealtimeNotifications();
     } catch (e: any) {
       set({ authError: e.message || "Verification failed", authLoading: false });
@@ -345,6 +367,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
 
         get().fetchNotifications().catch(() => {});
+        get().fetchSettings().catch(() => {});
         get().fetchWallet().catch(() => {});
         get().setupRealtimeNotifications();
       }
@@ -374,6 +397,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const supabase = createClient();
       await supabase.auth.signOut();
+    } catch {}
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
     } catch {}
     localStorage.clear();
     sessionStorage.clear();
@@ -421,6 +447,57 @@ export const useAppStore = create<AppState>((set, get) => ({
   }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebar: (open) => set({ sidebarOpen: open }),
+
+  // Settings
+  pushEnabled: true,
+  orderUpdatesEnabled: true,
+  promotionsEnabled: false,
+  fetchSettings: async () => {
+    try {
+      const data = await api.get<{ notifications: { pushEnabled?: boolean; orderUpdates?: boolean; promotions?: boolean } }>("/api/settings");
+      if (data?.notifications) {
+        set({
+          pushEnabled: data.notifications.pushEnabled ?? true,
+          orderUpdatesEnabled: data.notifications.orderUpdates ?? true,
+          promotionsEnabled: data.notifications.promotions ?? false,
+        });
+      }
+    } catch {}
+  },
+  updateNotificationSettings: async (patch) => {
+    const prev = {
+      pushEnabled: get().pushEnabled,
+      orderUpdatesEnabled: get().orderUpdatesEnabled,
+      promotionsEnabled: get().promotionsEnabled,
+    };
+    set((s) => ({
+      pushEnabled: patch.pushEnabled ?? s.pushEnabled,
+      orderUpdatesEnabled: patch.orderUpdates ?? s.orderUpdatesEnabled,
+      promotionsEnabled: patch.promotions ?? s.promotionsEnabled,
+    }));
+    try {
+      const res = await api.patch<{ notifications: { pushEnabled?: boolean; orderUpdates?: boolean; promotions?: boolean } }>("/api/settings/notifications", patch);
+      if (res?.notifications) {
+        set({
+          pushEnabled: res.notifications.pushEnabled ?? get().pushEnabled,
+          orderUpdatesEnabled: res.notifications.orderUpdates ?? get().orderUpdatesEnabled,
+          promotionsEnabled: res.notifications.promotions ?? get().promotionsEnabled,
+        });
+      }
+    } catch (e: any) {
+      set(prev);
+      set({ authError: e.message || "Failed to update settings" });
+      throw e;
+    }
+  },
+  changePassword: async (currentPassword, newPassword) => {
+    try {
+      await api.patch("/api/settings/password", { currentPassword, newPassword });
+    } catch (e: any) {
+      set({ authError: e.message || "Failed to change password" });
+      throw e;
+    }
+  },
 
   // Notifications
   notifications: [],

@@ -80,6 +80,12 @@ vi.mock("@/components/auth/auth-modal", () => ({ AuthModal: () => null }));
 vi.mock("@/components/auth/phone-mockup", () => ({ PhoneMockup: () => null }));
 vi.mock("@/components/auth/vendor-dashboard-preview", () => ({ VendorDashboardPreview: () => null }));
 
+vi.mock("@/components/customer/customer-app", () => ({ CustomerApp: () => <div>CustomerApp</div> }));
+vi.mock("@/components/vendor/vendor-app", () => ({ VendorApp: () => <div>VendorApp</div> }));
+vi.mock("@/components/delivery/delivery-app", () => ({ DeliveryApp: () => <div>DeliveryApp</div> }));
+vi.mock("@/components/admin/admin-app", () => ({ AdminApp: () => <div>AdminApp</div> }));
+vi.mock("@/components/superadmin/super-admin-app", () => ({ SuperAdminApp: () => <div>SuperAdminApp</div> }));
+
 const mockedCreateClient = vi.mocked(createClient);
 
 describe("AuthGate routing", () => {
@@ -126,5 +132,23 @@ describe("AuthGate routing", () => {
     window.history.replaceState({}, "", "/customer/dashboard");
     render(<App />);
     expect(await screen.findByText("Sign in")).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/");
+  });
+
+  it("redirects an authenticated admin away from a /superadmin URL", async () => {
+    mocks.setStore({ authLoading: false, isAuthenticated: true, role: "admin" });
+    window.history.replaceState({}, "", "/superadmin/dashboard");
+    render(<App />);
+    expect(await screen.findByText("AdminApp")).toBeInTheDocument();
+    expect(screen.queryByText("SuperAdminApp")).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/admin/dashboard");
+  });
+
+  it("renders the app matching the session role on its own URL", async () => {
+    mocks.setStore({ authLoading: false, isAuthenticated: true, role: "admin" });
+    window.history.replaceState({}, "", "/admin/orders");
+    render(<App />);
+    expect(await screen.findByText("AdminApp")).toBeInTheDocument();
+    expect(screen.queryByText("SuperAdminApp")).not.toBeInTheDocument();
   });
 });
