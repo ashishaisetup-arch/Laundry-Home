@@ -8,6 +8,7 @@ const supabaseServiceKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
 export function createClient() {
   return createBrowserClient(supabaseUrl, supabaseAnonKey, {
     cookieOptions: { secure: false },
+    auth: { persistSession: true, autoRefreshToken: true },
   });
 }
 

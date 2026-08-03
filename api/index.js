@@ -35,7 +35,7 @@ __export(api_entry_exports, {
 module.exports = __toCommonJS(api_entry_exports);
 
 // server/app.ts
-var import_express41 = __toESM(require("express"));
+var import_express42 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
 
@@ -280,6 +280,13 @@ router2.post("/logout", async (req, res) => {
       (name) => res.clearCookie(name, { path: "/" })
     );
     await supabase.auth.signOut();
+    const paths = ["/", "/api", "/auth"];
+    for (const name of Object.keys(req.cookies || {})) {
+      for (const p of paths) {
+        res.clearCookie(name, { path: p });
+        res.clearCookie(name, { path: p, domain: req.hostname });
+      }
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4127,10 +4134,111 @@ router40.get("/", async (_req, res) => {
 });
 var customer_config_default = router40;
 
+// server/routes/settings.ts
+var import_express41 = require("express");
+var router41 = (0, import_express41.Router)();
+var DEFAULTS = { pushEnabled: true, orderUpdates: true, promotions: false };
+router41.get("/", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("user_settings").select("push_enabled, order_updates, promotions").eq("user_id", user.id).single();
+    if (error && error.code !== "PGRST116") {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({
+      notifications: {
+        pushEnabled: data?.push_enabled ?? DEFAULTS.pushEnabled,
+        orderUpdates: data?.order_updates ?? DEFAULTS.orderUpdates,
+        promotions: data?.promotions ?? DEFAULTS.promotions
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.patch("/notifications", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { pushEnabled, orderUpdates, promotions } = req.body;
+    const updates = { updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+    if (typeof pushEnabled === "boolean") updates.push_enabled = pushEnabled;
+    if (typeof orderUpdates === "boolean") updates.order_updates = orderUpdates;
+    if (typeof promotions === "boolean") updates.promotions = promotions;
+    const admin = createAdminClient();
+    const { error } = await admin.from("user_settings").upsert({ user_id: user.id, ...updates }, { onConflict: "user_id" });
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    const { data } = await admin.from("user_settings").select("push_enabled, order_updates, promotions").eq("user_id", user.id).single();
+    res.json({
+      notifications: {
+        pushEnabled: data?.push_enabled ?? DEFAULTS.pushEnabled,
+        orderUpdates: data?.order_updates ?? DEFAULTS.orderUpdates,
+        promotions: data?.promotions ?? DEFAULTS.promotions
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.patch("/password", async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ error: "Current and new password are required" });
+      return;
+    }
+    if (newPassword.length < 6) {
+      res.status(400).json({ error: "New password must be at least 6 characters" });
+      return;
+    }
+    const supabase = createServerClientWithCookies(
+      (name) => req.cookies?.[name],
+      (name, value, options) => res.cookie(name, value, { ...options, httpOnly: true, secure: false, sameSite: "lax", path: "/" }),
+      (name) => res.clearCookie(name, { path: "/" })
+    );
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || !user.email) {
+      res.status(401).json({ error: "Unauthorized: email account required to change password" });
+      return;
+    }
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword
+    });
+    if (signInError) {
+      res.status(400).json({ error: "Current password is incorrect" });
+      return;
+    }
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+    if (updateError) {
+      res.status(400).json({ error: updateError.message });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var settings_default = router41;
+
 // server/app.ts
-var app = (0, import_express41.default)();
+var app = (0, import_express42.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
-app.use(import_express41.default.json());
+app.use(import_express42.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -4174,6 +4282,7 @@ app.use("/api/delivery/location", delivery_location_default);
 app.use("/api/vendor/onboarding", vendor_onboarding_default);
 app.use("/api/payments", payments_default);
 app.use("/api/config/customer", customer_config_default);
+app.use("/api/settings", settings_default);
 var app_default = app;
 
 // server/api-entry.ts
