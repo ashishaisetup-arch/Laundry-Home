@@ -7,11 +7,26 @@ import { useBookingSelection } from "../use-booking";
 export function StepCategory() {
   const {
     mainCategories,
+    servicesData,
     selectedCategoryIds,
     setSelectedCategoryIds,
     setSelectedServiceIds,
     setItemQtys,
   } = useBookingSelection();
+
+  const pruneServicesOfRemovedCategory = (removedId: string) => {
+    const removedIds = new Set(
+      servicesData.filter((s) => s.categoryId === removedId).map((s) => s.id)
+    );
+    setSelectedServiceIds((prev) => prev.filter((id) => !removedIds.has(id)));
+    setItemQtys((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) {
+        if (removedIds.has(key.split(":")[0])) delete next[key];
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="space-y-4">
@@ -28,11 +43,10 @@ export function StepCategory() {
               key={cat.id}
               type="button"
               onClick={() => {
+                if (selected) pruneServicesOfRemovedCategory(cat.id);
                 setSelectedCategoryIds((prev) =>
                   selected ? prev.filter((id) => id !== cat.id) : [...prev, cat.id]
                 );
-                setSelectedServiceIds([]);
-                setItemQtys({});
               }}
               className={cn(
                 "rounded-xl border p-4 text-left transition-all flex flex-col gap-2 active:scale-[0.98]",

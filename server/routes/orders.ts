@@ -1,6 +1,38 @@
 import { Router, Request, Response } from "express";
 import { createAdminClient, createServerClientWithCookies } from "../supabase";
 import { calculatePricing, applyPricingToOrder } from "../pricing";
+import { validateSchedule, SCHEDULE_ADD_ON_SLUGS } from "../lib/schedule";
+
+// Derives the fulfillment mode / delivery SLA from the time-based add-ons
+// present in the order lines (identified by service slug).
+function deriveScheduleModes(
+  serviceSlugs: Map<string, string>,
+  orderItems: { serviceId?: string }[]
+): { pickupMode: string; deliverySpeed: string } {
+  const enabled = new Set<string>();
+  for (const line of orderItems) {
+    const slug = line.serviceId ? serviceSlugs.get(line.serviceId) : undefined;
+    if (slug) enabled.add(slug);
+  }
+  const pickupMode = enabled.has(SCHEDULE_ADD_ON_SLUGS.EXPRESS_PICKUP) ? "express" : "scheduled";
+  const deliverySpeed = enabled.has(SCHEDULE_ADD_ON_SLUGS.SAME_DAY)
+    ? "same_day"
+    : enabled.has(SCHEDULE_ADD_ON_SLUGS.TWENTY_FOUR_HOUR)
+      ? "24_hour"
+      : "standard";
+  return { pickupMode, deliverySpeed };
+}
+
+function scheduleValidationPayload(body: any, modes: { pickupMode: string; deliverySpeed: string }) {
+  return {
+    pickupDate: body.pickup_date || null,
+    pickupSlot: body.pickup_slot || "",
+    deliveryDate: body.delivery_date || null,
+    deliverySlot: body.delivery_slot || "",
+    pickupMode: body.pickup_mode ?? modes.pickupMode,
+    deliverySpeed: body.delivery_speed ?? modes.deliverySpeed,
+  };
+}
 
 const KNOWN_AREAS: Record<string, { lat: number; lng: number }> = {
   "Indiranagar":     { lat: 12.9719, lng: 77.6413 },
@@ -96,6 +128,9 @@ router.post("/", async (req: Request, res: Response) => {
     const body = req.body;
     const adminClient = createAdminClient();
 
+    // Order lines — accept both `items` and legacy `orderItems` payload keys
+    const orderItems: any[] = body.items || body.orderItems || [];
+
     const { data: profile, error: profileErr } = await adminClient
       .from("user_profiles")
       .select("name, avatar")
@@ -134,7 +169,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     // Server-side pricing recalculation
     const pricing = await calculatePricing({
-      items: body.items || [],
+      items: orderItems,
       vendorId: body.vendorId || body.vendor_id,
       couponCode: body.couponCode,
       redeemPoints: body.redeemPoints || body.redeem_points,
@@ -144,6 +179,56 @@ router.post("/", async (req: Request, res: Response) => {
       pickupDate: body.pickup_date,
       pickupSlot: body.pickup_slot,
     });
+
+    // Enrich lines with service + item names for the JSONB snapshot
+    const serviceIds = [...new Set(orderItems.map((i) => i.serviceId).filter(Boolean))];
+    const itemIds = [...new Set(orderItems.map((i) => i.itemId).filter(Boolean))];
+    const [{ data: svcRows }, { data: itemRows }] = await Promise.all([
+      serviceIds.length
+        ? adminClient.from("services").select("id, name, pricing_type, slug").in("id", serviceIds)
+        : Promise.resolve({ data: [] }),
+      itemIds.length
+        ? adminClient.from("item_master").select("id, item_name").in("id", itemIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const svcMap = new Map((svcRows || []).map((s: any) => [s.id, s]));
+    const itemMap = new Map((itemRows || []).map((i: any) => [i.id, i]));
+    const linePrices = new Map((pricing.lines || []).map((l: any) => [`${l.serviceId}|${l.itemId || ""}`, l]));
+
+    // Server-authoritative schedule validation against the time-based add-ons
+    const scheduleModes = deriveScheduleModes(
+      new Map((svcRows || []).map((s: any) => [s.id, s.slug])),
+      orderItems
+    );
+    const scheduleCheck = validateSchedule(scheduleValidationPayload(body, scheduleModes));
+    if (!scheduleCheck.ok) {
+      res.status(400).json({ error: scheduleCheck.error, message: scheduleCheck.message });
+      return;
+    }
+
+    const itemsSnapshot = orderItems.map((i: any) => {
+      const svc = svcMap.get(i.serviceId) || {};
+      const line = linePrices.get(`${i.serviceId}|${i.itemId || ""}`);
+      const pricingType = svc.pricing_type || "ITEM";
+      return {
+        serviceId: i.serviceId,
+        serviceName: svc.name || "Service",
+        itemId: i.itemId || null,
+        itemName: (i.itemId && itemMap.get(i.itemId)?.item_name) || i.itemName || "",
+        qty: i.qty || 0,
+        unit: pricingType === "BAG" ? "bag" : i.unit || "pc",
+        unitPrice: line?.unitPrice || 0,
+        express: !!i.express,
+        specialInstructions: i.specialInstructions || [],
+      };
+    });
+
+    const bagLines = itemsSnapshot.filter((i: any) => (svcMap.get(i.serviceId) as any)?.pricing_type === "BAG");
+    const itemLines = itemsSnapshot.filter((i: any) => (svcMap.get(i.serviceId) as any)?.pricing_type !== "BAG");
+    const bookingType = bagLines.length > 0 && itemLines.length > 0 ? "mixed"
+      : bagLines.length > 0 ? "laundry_bag"
+      : "count_items";
+    const laundryBagQty = bagLines.reduce((sum: number, i: any) => sum + i.qty, 0);
 
     const orderData = {
       code,
@@ -156,13 +241,18 @@ router.post("/", async (req: Request, res: Response) => {
       vendor_logo_color: vendorLogoColor,
       status: hasVendor ? "vendor_assigned" : "placed",
       current_stage_index: hasVendor ? 1 : 0,
-      items: body.items || [],
+      items: itemsSnapshot,
+      booking_type: bookingType,
+      laundry_bag_qty: laundryBagQty > 0 ? laundryBagQty : null,
+      items_v2: true,
       pickup_address: body.pickup_address || "",
       pickup_area: body.pickup_area || "",
-      pickup_date: body.pickup_date || "",
+      pickup_date: body.pickup_date || null,
       pickup_slot: body.pickup_slot || "",
-      delivery_date: body.delivery_date || "",
+      delivery_date: body.delivery_date || null,
       delivery_slot: body.delivery_slot || "",
+      pickup_mode: scheduleModes.pickupMode,
+      delivery_speed: scheduleModes.deliverySpeed,
       estimated_delivery_at: body.estimated_delivery_at || null,
       amount: pricing.subtotal,
       taxes: pricing.taxes,
@@ -190,6 +280,23 @@ router.post("/", async (req: Request, res: Response) => {
     };
     const { data, error } = await adminClient.from("orders").insert(orderData).select().single();
     if (error) { res.status(400).json({ error: error.message }); return; }
+
+    // Persist normalized order line items (order_items)
+    const orderItemRows = itemsSnapshot
+      .filter((i: any) => i.itemId)
+      .map((i: any) => ({
+        order_id: data.id,
+        service_id: i.serviceId,
+        item_id: i.itemId,
+        booking_type: (svcMap.get(i.serviceId) as any)?.pricing_type === "BAG" ? "laundry_bag" : "count_items",
+        customer_qty: i.qty,
+        unit_price: i.unitPrice,
+        special_instructions: i.specialInstructions || [],
+      }));
+    if (orderItemRows.length > 0) {
+      const { error: itemsErr } = await adminClient.from("order_items").insert(orderItemRows);
+      if (itemsErr) console.error("[orders] order_items insert error:", itemsErr.message);
+    }
 
     // Apply reward/wallet deductions and increment coupon usage
     await applyPricingToOrder(orderData, pricing, user.id);
@@ -337,6 +444,35 @@ router.patch("/:id", async (req: Request, res: Response) => {
     }
 
     if (body.status && !updatePayload.status) updatePayload.status = body.status;
+
+    // Schedule updates are validated against the order's time-based add-ons
+    const scheduleFields = ["pickup_date", "pickup_slot", "delivery_date", "delivery_slot", "pickup_mode", "delivery_speed"];
+    if (scheduleFields.some((f) => body[f] !== undefined)) {
+      const items: any[] = order.items || [];
+      const svcIds = [...new Set(items.map((i) => i.serviceId).filter(Boolean))];
+      const svcSlugs = new Map<string, string>();
+      if (svcIds.length > 0) {
+        const { data: svcRows } = await supabase.from("services").select("id, slug").in("id", svcIds);
+        for (const s of svcRows || []) if (s.slug) svcSlugs.set(s.id, s.slug);
+      }
+      const orderModes = deriveScheduleModes(svcSlugs, items);
+      const mergedBody = {
+        pickup_date: body.pickup_date ?? order.pickup_date,
+        pickup_slot: body.pickup_slot ?? order.pickup_slot ?? "",
+        delivery_date: body.delivery_date ?? order.delivery_date,
+        delivery_slot: body.delivery_slot ?? order.delivery_slot ?? "",
+        pickup_mode: body.pickup_mode ?? order.pickup_mode ?? orderModes.pickupMode,
+        delivery_speed: body.delivery_speed ?? order.delivery_speed ?? orderModes.deliverySpeed,
+      };
+      const scheduleCheck = validateSchedule(scheduleValidationPayload(mergedBody, orderModes));
+      if (!scheduleCheck.ok) {
+        res.status(400).json({ error: scheduleCheck.error, message: scheduleCheck.message });
+        return;
+      }
+      for (const f of scheduleFields) {
+        if (body[f] !== undefined) updatePayload[f] = body[f];
+      }
+    }
 
     const { data, error } = await supabase.from("orders").update(updatePayload).eq("id", id).select().single();
     if (error) { res.status(400).json({ error: error.message }); return; }

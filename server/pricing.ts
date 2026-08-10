@@ -26,6 +26,13 @@ export interface PricingInput {
   pickupSlot?: string;
 }
 
+export interface PricingLine {
+  serviceId: string;
+  itemId: string | null;
+  qty: number;
+  unitPrice: number;
+}
+
 export interface PricingBreakdown {
   subtotal: number;
   couponDiscount: number;
@@ -44,11 +51,22 @@ export interface PricingBreakdown {
     label: string;
     amount: number;
   }[];
+  lines?: PricingLine[];
 }
 
-async function computeSubtotal(items: CartItem[], admin: ReturnType<typeof createAdminClient>, vendorId?: string): Promise<{ subtotal: number; hasExpress: boolean }> {
+async function computeSubtotal(items: CartItem[], admin: ReturnType<typeof createAdminClient>, vendorId?: string): Promise<{ subtotal: number; hasExpress: boolean; lines: PricingLine[] }> {
   const itemMasterIds = [...new Set(items.map(i => i.itemId).filter(Boolean) as string[])];
   const serviceIds = [...new Set(items.map(i => i.serviceId).filter(Boolean) as string[])];
+
+  // Service pricing strategy (ITEM / BAG / WEIGHT / FIXED) + bag price
+  let serviceMap: Record<string, { pricing_type?: string; bag_price?: number }> = {};
+  if (serviceIds.length > 0) {
+    const { data: services } = await admin
+      .from("services")
+      .select("id, pricing_type, bag_price")
+      .in("id", serviceIds);
+    for (const s of services || []) serviceMap[s.id] = s;
+  }
 
   let defaultMap: Record<string, number> = {};
   if (itemMasterIds.length > 0) {
@@ -78,22 +96,33 @@ async function computeSubtotal(items: CartItem[], admin: ReturnType<typeof creat
 
   let subtotal = 0;
   let hasExpress = false;
+  const lines: PricingLine[] = [];
   for (const item of items) {
     if (!item.serviceId) continue;
     const key = `${item.serviceId}|${item.itemId || ""}`;
-    const unitPrice = vendorMap[key] || defaultMap[key] || 0;
+    const svc = serviceMap[item.serviceId] || {};
+    const pricingType = svc.pricing_type || "ITEM";
+    let unitPrice = 0;
+    if (pricingType === "BAG") {
+      unitPrice = svc.bag_price || 0;
+    } else if (pricingType === "WEIGHT") {
+      unitPrice = 0; // reserved — weight-based pricing not implemented yet
+    } else {
+      unitPrice = vendorMap[key] || defaultMap[key] || 0;
+    }
     const multiplier = item.express ? 1.5 : 1;
     subtotal += unitPrice * item.qty * multiplier;
     if (item.express) hasExpress = true;
+    lines.push({ serviceId: item.serviceId, itemId: item.itemId || null, qty: item.qty, unitPrice });
   }
-  return { subtotal, hasExpress };
+  return { subtotal, hasExpress, lines };
 }
 
 export async function calculatePricing(input: PricingInput): Promise<PricingBreakdown> {
   const admin = createAdminClient();
   const steps: { label: string; amount: number }[] = [];
 
-  const { subtotal, hasExpress } = await computeSubtotal(input.items, admin, input.vendorId);
+  const { subtotal, hasExpress, lines } = await computeSubtotal(input.items, admin, input.vendorId);
   steps.push({ label: "Subtotal", amount: subtotal });
   let remaining = subtotal;
 
@@ -200,6 +229,7 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
     surgeCharge,
     total,
     breakdown: steps,
+    lines,
   };
 }
 

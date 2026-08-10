@@ -12,6 +12,9 @@ const CUSTOMER_FEATURE_DEFAULTS: Record<string, boolean> = {
   enableReviews: true,
   enableDiscover: true,
   enableOrders: true,
+  enableCountItems: true,
+  enableLaundryBag: true,
+  enableMixedBooking: true,
 };
 
 // GET /api/config/customer — customer-visible feature toggles (admin-controlled)

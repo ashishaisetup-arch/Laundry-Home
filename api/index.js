@@ -714,6 +714,11 @@ var REWARD_POINTS_RATE = 100;
 async function computeSubtotal(items, admin, vendorId) {
   const itemMasterIds = [...new Set(items.map((i) => i.itemId).filter(Boolean))];
   const serviceIds = [...new Set(items.map((i) => i.serviceId).filter(Boolean))];
+  let serviceMap = {};
+  if (serviceIds.length > 0) {
+    const { data: services } = await admin.from("services").select("id, pricing_type, bag_price").in("id", serviceIds);
+    for (const s of services || []) serviceMap[s.id] = s;
+  }
   let defaultMap = {};
   if (itemMasterIds.length > 0) {
     const { data: serviceItems } = await admin.from("service_items").select("service_id, item_master_id, default_price").in("item_master_id", itemMasterIds);
@@ -733,20 +738,31 @@ async function computeSubtotal(items, admin, vendorId) {
   }
   let subtotal = 0;
   let hasExpress = false;
+  const lines = [];
   for (const item of items) {
     if (!item.serviceId) continue;
     const key = `${item.serviceId}|${item.itemId || ""}`;
-    const unitPrice = vendorMap[key] || defaultMap[key] || 0;
+    const svc = serviceMap[item.serviceId] || {};
+    const pricingType = svc.pricing_type || "ITEM";
+    let unitPrice = 0;
+    if (pricingType === "BAG") {
+      unitPrice = svc.bag_price || 0;
+    } else if (pricingType === "WEIGHT") {
+      unitPrice = 0;
+    } else {
+      unitPrice = vendorMap[key] || defaultMap[key] || 0;
+    }
     const multiplier = item.express ? 1.5 : 1;
     subtotal += unitPrice * item.qty * multiplier;
     if (item.express) hasExpress = true;
+    lines.push({ serviceId: item.serviceId, itemId: item.itemId || null, qty: item.qty, unitPrice });
   }
-  return { subtotal, hasExpress };
+  return { subtotal, hasExpress, lines };
 }
 async function calculatePricing(input) {
   const admin = createAdminClient();
   const steps = [];
-  const { subtotal, hasExpress } = await computeSubtotal(input.items, admin, input.vendorId);
+  const { subtotal, hasExpress, lines } = await computeSubtotal(input.items, admin, input.vendorId);
   steps.push({ label: "Subtotal", amount: subtotal });
   let remaining = subtotal;
   let couponDiscount = 0;
@@ -830,7 +846,8 @@ async function calculatePricing(input) {
     expressSurcharge,
     surgeCharge,
     total,
-    breakdown: steps
+    breakdown: steps,
+    lines
   };
 }
 async function applyPricingToOrder(orderData, pricing, userId) {
@@ -863,7 +880,134 @@ async function applyPricingToOrder(orderData, pricing, userId) {
   }
 }
 
+// server/lib/schedule.ts
+var SCHEDULE_ADD_ON_SLUGS = {
+  SAME_DAY: "same_day_delivery",
+  TWENTY_FOUR_HOUR: "24_hour_delivery",
+  EXPRESS_PICKUP: "express_pickup"
+};
+var EXPRESS_PICKUP_SLOT = "Express Pickup (within 30 mins)";
+var EXPRESS_PICKUP_CUTOFF = { hours: 18, minutes: 30 };
+var PICKUP_SLOTS = [
+  "7:00 AM - 9:00 AM",
+  "9:00 AM - 11:00 AM",
+  "11:00 AM - 1:00 PM",
+  "1:00 PM - 3:00 PM",
+  "3:00 PM - 5:00 PM",
+  "5:00 PM - 7:00 PM"
+];
+var DELIVERY_SLOTS = [...PICKUP_SLOTS];
+function toMinutes(t) {
+  return t.hours * 60 + t.minutes;
+}
+function parseSlot(slot) {
+  const parts = slot.split(" - ");
+  const parse = (t) => {
+    const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!m) return null;
+    let h = parseInt(m[1]);
+    const min = parseInt(m[2]);
+    if (m[3]?.toUpperCase() === "PM" && h !== 12) h += 12;
+    if (m[3]?.toUpperCase() === "AM" && h === 12) h = 0;
+    return { hours: h, minutes: min };
+  };
+  const start = parse(parts[0]?.trim() || "");
+  const end = parse(parts[1]?.trim() || "");
+  if (!start || !end) return null;
+  return { start, end };
+}
+function toMs(date) {
+  return Date.parse(`${date}T00:00:00Z`);
+}
+function dateDiffDays(a, b) {
+  return Math.round((toMs(a) - toMs(b)) / 864e5);
+}
+function todayISO(now) {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+function expressAvailable(now) {
+  return now.getHours() < EXPRESS_PICKUP_CUTOFF.hours || now.getHours() === EXPRESS_PICKUP_CUTOFF.hours && now.getMinutes() < EXPRESS_PICKUP_CUTOFF.minutes;
+}
+function validateSchedule(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const pickupDate = input.pickupDate;
+  const deliveryDate = input.deliveryDate;
+  const pickupMode = input.pickupMode || "scheduled";
+  const deliverySpeed = input.deliverySpeed || "standard";
+  if (!pickupDate || !deliveryDate) {
+    return fail("Pickup and delivery dates are required.");
+  }
+  if (pickupMode === "express") {
+    if (pickupDate !== todayISO(now)) {
+      return fail("Express pickup is only available for today.");
+    }
+    if (!expressAvailable(now)) {
+      return fail("Express pickup is no longer available today (cutoff is 6:30 PM).");
+    }
+    if (input.pickupSlot && input.pickupSlot !== EXPRESS_PICKUP_SLOT && !PICKUP_SLOTS.includes(input.pickupSlot)) {
+      return fail("The selected pickup slot is not available.");
+    }
+  } else if (!PICKUP_SLOTS.includes(input.pickupSlot)) {
+    return fail("The selected pickup slot is not available.");
+  }
+  if (!DELIVERY_SLOTS.includes(input.deliverySlot)) {
+    return fail("The selected delivery slot is not available.");
+  }
+  if (dateDiffDays(deliveryDate, pickupDate) < 0) {
+    return fail("Delivery cannot be scheduled before pickup.");
+  }
+  if (deliverySpeed === "standard" && dateDiffDays(deliveryDate, pickupDate) < 2) {
+    return fail("Standard delivery requires delivery at least 48 hours after pickup.");
+  }
+  if (deliverySpeed === "same_day") {
+    if (dateDiffDays(deliveryDate, pickupDate) !== 0) {
+      return fail("Same-day delivery requires delivery on the pickup date.");
+    }
+    const p = parseSlot(input.pickupSlot);
+    const d = parseSlot(input.deliverySlot);
+    if (p && d && toMinutes(d.start) < toMinutes(p.end)) {
+      return fail("The same-day delivery slot must start after the pickup window ends.");
+    }
+  } else if (deliverySpeed === "24_hour") {
+    if (dateDiffDays(deliveryDate, pickupDate) !== 1) {
+      return fail("24-hour delivery requires delivery the day after pickup.");
+    }
+    const p = parseSlot(input.pickupSlot);
+    const d = parseSlot(input.deliverySlot);
+    if (p && d && toMinutes(d.end) > toMinutes(p.end)) {
+      return fail("The 24-hour delivery window must end within 24 hours of the pickup window.");
+    }
+  }
+  return { ok: true };
+}
+function fail(message) {
+  return { ok: false, error: "SCHEDULE_SLOT_UNAVAILABLE", message };
+}
+
 // server/routes/orders.ts
+function deriveScheduleModes(serviceSlugs, orderItems) {
+  const enabled = /* @__PURE__ */ new Set();
+  for (const line of orderItems) {
+    const slug = line.serviceId ? serviceSlugs.get(line.serviceId) : void 0;
+    if (slug) enabled.add(slug);
+  }
+  const pickupMode = enabled.has(SCHEDULE_ADD_ON_SLUGS.EXPRESS_PICKUP) ? "express" : "scheduled";
+  const deliverySpeed = enabled.has(SCHEDULE_ADD_ON_SLUGS.SAME_DAY) ? "same_day" : enabled.has(SCHEDULE_ADD_ON_SLUGS.TWENTY_FOUR_HOUR) ? "24_hour" : "standard";
+  return { pickupMode, deliverySpeed };
+}
+function scheduleValidationPayload(body, modes) {
+  return {
+    pickupDate: body.pickup_date || null,
+    pickupSlot: body.pickup_slot || "",
+    deliveryDate: body.delivery_date || null,
+    deliverySlot: body.delivery_slot || "",
+    pickupMode: body.pickup_mode ?? modes.pickupMode,
+    deliverySpeed: body.delivery_speed ?? modes.deliverySpeed
+  };
+}
 var KNOWN_AREAS = {
   "Indiranagar": { lat: 12.9719, lng: 77.6413 },
   "Koramangala": { lat: 12.9352, lng: 77.6245 },
@@ -970,6 +1114,7 @@ router4.post("/", async (req, res) => {
     }
     const body = req.body;
     const adminClient = createAdminClient();
+    const orderItems = body.items || body.orderItems || [];
     const { data: profile, error: profileErr } = await adminClient.from("user_profiles").select("name, avatar").eq("id", user.id).single();
     if (profileErr) {
       console.error("[orders] profile lookup error for user", user.id, profileErr);
@@ -994,7 +1139,7 @@ router4.post("/", async (req, res) => {
     ) : void 0;
     const vendorCoords = vendorAreaKey ? KNOWN_AREAS[vendorAreaKey] : void 0;
     const pricing = await calculatePricing({
-      items: body.items || [],
+      items: orderItems,
       vendorId: body.vendorId || body.vendor_id,
       couponCode: body.couponCode,
       redeemPoints: body.redeemPoints || body.redeem_points,
@@ -1004,6 +1149,44 @@ router4.post("/", async (req, res) => {
       pickupDate: body.pickup_date,
       pickupSlot: body.pickup_slot
     });
+    const serviceIds = [...new Set(orderItems.map((i) => i.serviceId).filter(Boolean))];
+    const itemIds = [...new Set(orderItems.map((i) => i.itemId).filter(Boolean))];
+    const [{ data: svcRows }, { data: itemRows }] = await Promise.all([
+      serviceIds.length ? adminClient.from("services").select("id, name, pricing_type, slug").in("id", serviceIds) : Promise.resolve({ data: [] }),
+      itemIds.length ? adminClient.from("item_master").select("id, item_name").in("id", itemIds) : Promise.resolve({ data: [] })
+    ]);
+    const svcMap = new Map((svcRows || []).map((s) => [s.id, s]));
+    const itemMap = new Map((itemRows || []).map((i) => [i.id, i]));
+    const linePrices = new Map((pricing.lines || []).map((l) => [`${l.serviceId}|${l.itemId || ""}`, l]));
+    const scheduleModes = deriveScheduleModes(
+      new Map((svcRows || []).map((s) => [s.id, s.slug])),
+      orderItems
+    );
+    const scheduleCheck = validateSchedule(scheduleValidationPayload(body, scheduleModes));
+    if (!scheduleCheck.ok) {
+      res.status(400).json({ error: scheduleCheck.error, message: scheduleCheck.message });
+      return;
+    }
+    const itemsSnapshot = orderItems.map((i) => {
+      const svc = svcMap.get(i.serviceId) || {};
+      const line = linePrices.get(`${i.serviceId}|${i.itemId || ""}`);
+      const pricingType = svc.pricing_type || "ITEM";
+      return {
+        serviceId: i.serviceId,
+        serviceName: svc.name || "Service",
+        itemId: i.itemId || null,
+        itemName: i.itemId && itemMap.get(i.itemId)?.item_name || i.itemName || "",
+        qty: i.qty || 0,
+        unit: pricingType === "BAG" ? "bag" : i.unit || "pc",
+        unitPrice: line?.unitPrice || 0,
+        express: !!i.express,
+        specialInstructions: i.specialInstructions || []
+      };
+    });
+    const bagLines = itemsSnapshot.filter((i) => svcMap.get(i.serviceId)?.pricing_type === "BAG");
+    const itemLines = itemsSnapshot.filter((i) => svcMap.get(i.serviceId)?.pricing_type !== "BAG");
+    const bookingType = bagLines.length > 0 && itemLines.length > 0 ? "mixed" : bagLines.length > 0 ? "laundry_bag" : "count_items";
+    const laundryBagQty = bagLines.reduce((sum, i) => sum + i.qty, 0);
     const orderData = {
       code,
       customer_id: user.id,
@@ -1015,13 +1198,18 @@ router4.post("/", async (req, res) => {
       vendor_logo_color: vendorLogoColor,
       status: hasVendor ? "vendor_assigned" : "placed",
       current_stage_index: hasVendor ? 1 : 0,
-      items: body.items || [],
+      items: itemsSnapshot,
+      booking_type: bookingType,
+      laundry_bag_qty: laundryBagQty > 0 ? laundryBagQty : null,
+      items_v2: true,
       pickup_address: body.pickup_address || "",
       pickup_area: body.pickup_area || "",
-      pickup_date: body.pickup_date || "",
+      pickup_date: body.pickup_date || null,
       pickup_slot: body.pickup_slot || "",
-      delivery_date: body.delivery_date || "",
+      delivery_date: body.delivery_date || null,
       delivery_slot: body.delivery_slot || "",
+      pickup_mode: scheduleModes.pickupMode,
+      delivery_speed: scheduleModes.deliverySpeed,
       estimated_delivery_at: body.estimated_delivery_at || null,
       amount: pricing.subtotal,
       taxes: pricing.taxes,
@@ -1051,6 +1239,19 @@ router4.post("/", async (req, res) => {
     if (error) {
       res.status(400).json({ error: error.message });
       return;
+    }
+    const orderItemRows = itemsSnapshot.filter((i) => i.itemId).map((i) => ({
+      order_id: data.id,
+      service_id: i.serviceId,
+      item_id: i.itemId,
+      booking_type: svcMap.get(i.serviceId)?.pricing_type === "BAG" ? "laundry_bag" : "count_items",
+      customer_qty: i.qty,
+      unit_price: i.unitPrice,
+      special_instructions: i.specialInstructions || []
+    }));
+    if (orderItemRows.length > 0) {
+      const { error: itemsErr } = await adminClient.from("order_items").insert(orderItemRows);
+      if (itemsErr) console.error("[orders] order_items insert error:", itemsErr.message);
     }
     await applyPricingToOrder(orderData, pricing, user.id);
     const { data: stages } = await adminClient.from("order_stage_definitions").select("*").order("sort_order");
@@ -1159,6 +1360,33 @@ router4.patch("/:id", async (req, res) => {
       }
     }
     if (body.status && !updatePayload.status) updatePayload.status = body.status;
+    const scheduleFields = ["pickup_date", "pickup_slot", "delivery_date", "delivery_slot", "pickup_mode", "delivery_speed"];
+    if (scheduleFields.some((f) => body[f] !== void 0)) {
+      const items = order.items || [];
+      const svcIds = [...new Set(items.map((i) => i.serviceId).filter(Boolean))];
+      const svcSlugs = /* @__PURE__ */ new Map();
+      if (svcIds.length > 0) {
+        const { data: svcRows } = await supabase.from("services").select("id, slug").in("id", svcIds);
+        for (const s of svcRows || []) if (s.slug) svcSlugs.set(s.id, s.slug);
+      }
+      const orderModes = deriveScheduleModes(svcSlugs, items);
+      const mergedBody = {
+        pickup_date: body.pickup_date ?? order.pickup_date,
+        pickup_slot: body.pickup_slot ?? order.pickup_slot ?? "",
+        delivery_date: body.delivery_date ?? order.delivery_date,
+        delivery_slot: body.delivery_slot ?? order.delivery_slot ?? "",
+        pickup_mode: body.pickup_mode ?? order.pickup_mode ?? orderModes.pickupMode,
+        delivery_speed: body.delivery_speed ?? order.delivery_speed ?? orderModes.deliverySpeed
+      };
+      const scheduleCheck = validateSchedule(scheduleValidationPayload(mergedBody, orderModes));
+      if (!scheduleCheck.ok) {
+        res.status(400).json({ error: scheduleCheck.error, message: scheduleCheck.message });
+        return;
+      }
+      for (const f of scheduleFields) {
+        if (body[f] !== void 0) updatePayload[f] = body[f];
+      }
+    }
     const { data, error } = await supabase.from("orders").update(updatePayload).eq("id", id).select().single();
     if (error) {
       res.status(400).json({ error: error.message });
@@ -2268,11 +2496,20 @@ router14.get("/", async (_req, res) => {
       res.status(500).json({ error: error.message });
       return;
     }
-    res.json(data);
+    res.json((data || []).map(serializeService));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+function serializeService(s) {
+  const { pricing_type, bag_price, is_active, ...rest } = s;
+  return {
+    ...rest,
+    pricingType: pricing_type || "ITEM",
+    bagPrice: bag_price ?? void 0,
+    isActive: is_active
+  };
+}
 router14.get("/catalog", async (req, res) => {
   try {
     const supabase = createAdminClient();
@@ -2288,9 +2525,12 @@ router14.get("/catalog", async (req, res) => {
     }
     const result = (data || []).map((cat) => {
       const services = (cat.services || []).filter((s) => includeInactive || s.is_active !== false).map((s) => {
-        const { service_items: _2, ...serviceRest } = s;
+        const { service_items: _2, pricing_type, bag_price, is_active, ...serviceRest } = s;
         return {
           ...serviceRest,
+          pricingType: pricing_type || "ITEM",
+          bagPrice: bag_price ?? void 0,
+          isActive: is_active,
           items: (s.service_items || []).filter((i) => includeInactive || i.is_active !== false).map((i) => ({
             id: i.id,
             serviceId: i.service_id,
@@ -2316,7 +2556,7 @@ router14.get("/catalog", async (req, res) => {
 router14.post("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
-    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive, pricingType, bagPrice } = req.body;
     const { data, error } = await supabase.from("services").insert({
       category_id: categoryId,
       name,
@@ -2325,7 +2565,9 @@ router14.post("/", async (req, res) => {
       image_url: imageUrl || null,
       taxable: taxable ?? true,
       display_order: displayOrder ?? 0,
-      is_active: isActive ?? true
+      is_active: isActive ?? true,
+      pricing_type: pricingType || "ITEM",
+      bag_price: bagPrice ?? null
     }).select().single();
     if (error) {
       res.status(500).json({ error: error.message });
@@ -2339,7 +2581,7 @@ router14.post("/", async (req, res) => {
 router14.put("/:id", async (req, res) => {
   try {
     const supabase = createAdminClient();
-    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive, pricingType, bagPrice } = req.body;
     const { data, error } = await supabase.from("services").update({
       category_id: categoryId,
       name,
@@ -2348,7 +2590,9 @@ router14.put("/:id", async (req, res) => {
       image_url: imageUrl || null,
       taxable,
       display_order: displayOrder ?? 0,
-      is_active: isActive
+      is_active: isActive,
+      pricing_type: pricingType || "ITEM",
+      bag_price: bagPrice ?? null
     }).eq("id", req.params.id).select().single();
     if (error) {
       res.status(500).json({ error: error.message });
@@ -4532,7 +4776,10 @@ var CUSTOMER_FEATURE_DEFAULTS = {
   enableFavorites: true,
   enableReviews: true,
   enableDiscover: true,
-  enableOrders: true
+  enableOrders: true,
+  enableCountItems: true,
+  enableLaundryBag: true,
+  enableMixedBooking: true
 };
 router41.get("/", async (_req, res) => {
   try {

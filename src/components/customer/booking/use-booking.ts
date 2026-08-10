@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { Address, ServiceItem, Vendor } from "@/lib/types";
 import type { CustomerFeatures } from "@/lib/hooks";
+import type { ScheduleKinds } from "./schedule-windows";
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -9,6 +10,7 @@ export type BookingType = "count_items" | "laundry_bag" | "mixed";
 export type StepV2 = "category" | "serviceType" | "inventory" | "addons" | "schedule" | "vendor" | "review" | "confirmed";
 
 export interface ItemQty {
+  serviceId: string;
   itemId: string;
   qty: number;
   instructions: string[];
@@ -29,6 +31,7 @@ export interface PricingBreakdown {
   surgeCharge: number;
   total: number;
   breakdown: { label: string; amount: number }[];
+  lines?: { serviceId: string; itemId: string | null; qty: number; unitPrice: number }[];
 }
 
 export interface ConfirmedOrder {
@@ -51,10 +54,13 @@ export interface BookingStep {
 export interface CatalogService {
   id: string;
   name: string;
+  slug?: string;
   description?: string;
   unit?: string;
   categoryId?: string;
   isActive?: boolean;
+  pricingType?: string;
+  bagPrice?: number;
   items?: ServiceItem[];
 }
 
@@ -117,15 +123,16 @@ export interface BookingSelectionValue {
   totalWeight: number;
   vendorsList: Vendor[] | null;
   bookingType: BookingType;
-  setBookingType: Dispatch<SetStateAction<BookingType>>;
-  laundryBagQty: number;
-  setLaundryBagQty: Dispatch<SetStateAction<number>>;
+  setBookingType: (type: BookingType) => void;
+  bagQty: number;
+  bagServices: CatalogServiceWithCategory[];
   itemQtys: Record<string, ItemQty>;
   setItemQtys: Dispatch<SetStateAction<Record<string, ItemQty>>>;
-  addonQtys: Record<string, number>;
-  setAddonQtys: Dispatch<SetStateAction<Record<string, number>>>;
+  addonEnabled: Record<string, boolean>;
+  setAddonEnabled: Dispatch<SetStateAction<Record<string, boolean>>>;
   selectedAddonCat: string | null;
   setSelectedAddonCat: Dispatch<SetStateAction<string | null>>;
+  timeAddonKinds: ScheduleKinds;
   addrList: Address[];
   pickupAddr: string;
   setPickupAddr: Dispatch<SetStateAction<string>>;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useServiceCatalog, useVendors, useAddresses, useOrders, useCustomerFeatures } from "@/lib/hooks";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api/client";
@@ -22,6 +22,11 @@ import {
   type PricingBreakdown,
   type ConfirmedOrder,
 } from "./use-booking";
+import {
+  getAddonKinds,
+  reconcileSchedule,
+  type ScheduleKinds,
+} from "./schedule-windows";
 
 interface BookingProviderProps {
   location?: { lat: number; lng: number } | null;
@@ -34,6 +39,8 @@ function resolveDate(label: string): string {
   if (label === "Tomorrow") d.setDate(d.getDate() + 1);
   else if (label === "Day after") d.setDate(d.getDate() + 2);
   else if (label === "3 days") d.setDate(d.getDate() + 3);
+  else if (label === "4 days") d.setDate(d.getDate() + 4);
+  else if (label === "5 days") d.setDate(d.getDate() + 5);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -56,9 +63,11 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [bookingType, setBookingType] = useState<BookingType>("count_items");
-  const [laundryBagQty, setLaundryBagQty] = useState(0);
   const [itemQtys, setItemQtys] = useState<Record<string, ItemQty>>({});
-  const [addonQtys, setAddonQtys] = useState<Record<string, number>>({});
+  // Non-bag selections stashed while laundry_bag mode hides them, restored on
+  // switching back to count_items / mixed so mode changes never lose services.
+  const stashRef = useRef<{ services: string[]; qtys: Record<string, ItemQty> } | null>(null);
+  const [addonEnabled, setAddonEnabled] = useState<Record<string, boolean>>({});
   const [selectedAddonCat, setSelectedAddonCat] = useState<string | null>(null);
 
   const [pickupAddr, setPickupAddr] = useState("");
@@ -86,6 +95,9 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       catalogData.flatMap((cat) =>
         (cat.services || []).map((s) => ({
           ...s,
+          pricingType: s.pricingType ?? (s as any).pricing_type ?? "ITEM",
+          bagPrice: s.bagPrice ?? (s as any).bag_price,
+          isActive: s.isActive ?? (s as any).is_active ?? true,
           categoryName: cat.name,
           categorySlug: cat.slug,
         }))
@@ -99,6 +111,22 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     () => addonCategories.flatMap((c) => (c.services || []).filter((s) => s.isActive !== false)),
     [addonCategories]
   );
+  // Time-based add-ons (by slug) drive the schedule windows shown to the user.
+  const timeAddonKinds = useMemo<ScheduleKinds>(() => getAddonKinds(addonEnabled, addonServices), [addonEnabled, addonServices]);
+  const pickupMode = timeAddonKinds.express ? "express" : "scheduled";
+  const deliverySpeed = timeAddonKinds.sameDay ? "same_day" : timeAddonKinds.twentyFourHour ? "24_hour" : "standard";
+  // Main categories that offer item (non-bag) services — auto-selected when
+  // switching to Mixed / Count Items mode with no item category chosen, so
+  // service selection is always visible.
+  const itemMainCategoryIds = useMemo(() => {
+    const itemCatIds = new Set(
+      servicesData
+        .filter((s) => s.pricingType !== "BAG" && s.isActive !== false)
+        .map((s) => s.categoryId)
+        .filter(Boolean) as string[]
+    );
+    return mainCategories.filter((c) => itemCatIds.has(c.id)).map((c) => c.id);
+  }, [mainCategories, servicesData]);
   const selectedCategoryObjs = useMemo(
     () => catalogData.filter((c) => selectedCategoryIds.includes(c.id)),
     [catalogData, selectedCategoryIds]
@@ -115,11 +143,33 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     }
     return map;
   }, [catalogItems]);
-  const totalItems = useMemo(() => Object.values(itemQtys).reduce((sum, i) => sum + i.qty, 0), [itemQtys]);
-  const totalAddonItems = useMemo(() => Object.values(addonQtys).reduce((sum, q) => sum + q, 0), [addonQtys]);
+
+  // BAG-type services selected by the customer (Laundry Bag, Premium Laundry Bag, …)
+  const bagServices = useMemo(
+    () => selectedServiceObjs.filter((s) => s.pricingType === "BAG"),
+    [selectedServiceObjs]
+  );
+  const bagServiceIds = useMemo(() => new Set(bagServices.map((s) => s.id)), [bagServices]);
+  const isBagLine = useCallback((iq: ItemQty) => bagServiceIds.has(iq.serviceId), [bagServiceIds]);
+
+  // Non-bag (item) lines only
+  const itemLines = useMemo(
+    () => Object.values(itemQtys).filter((iq) => iq.qty > 0 && !isBagLine(iq)),
+    [itemQtys, isBagLine]
+  );
+  const bagLines = useMemo(
+    () => Object.values(itemQtys).filter((iq) => iq.qty > 0 && isBagLine(iq)),
+    [itemQtys, isBagLine]
+  );
+  const totalItems = useMemo(() => itemLines.reduce((sum, i) => sum + i.qty, 0), [itemLines]);
+  const bagQty = useMemo(() => bagLines.reduce((sum, i) => sum + i.qty, 0), [bagLines]);
+  const totalAddonItems = useMemo(
+    () => Object.values(addonEnabled).filter((on) => on).length,
+    [addonEnabled]
+  );
   const totalWeight = useMemo(
-    () => Object.entries(itemQtys).reduce((sum, [id, q]) => sum + (weightMap[id] || 0) * q.qty, 0),
-    [itemQtys, weightMap]
+    () => itemLines.reduce((sum, i) => sum + (weightMap[i.itemId] || 0) * i.qty, 0),
+    [itemLines, weightMap]
   );
   const defaultPrices = useMemo(() => {
     const map: Record<string, number> = {};
@@ -131,8 +181,8 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     return map;
   }, [selectedServiceObjs]);
   const totalPrice = useMemo(
-    () => Object.entries(itemQtys).reduce((sum, [id, q]) => sum + (defaultPrices[id] || 0) * q.qty, 0),
-    [itemQtys, defaultPrices]
+    () => itemLines.reduce((sum, i) => sum + (defaultPrices[i.itemId] || 0) * i.qty, 0),
+    [itemLines, defaultPrices]
   );
 
   const currentIndex = STEPS.findIndex((s) => s.id === step);
@@ -144,7 +194,11 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
         : step === "serviceType"
           ? selectedServiceIds.length > 0
           : step === "inventory"
-            ? (bookingType === "laundry_bag" ? laundryBagQty > 0 : totalItems > 0) || (bookingType === "mixed" && (laundryBagQty > 0 || totalItems > 0))
+            ? bookingType === "laundry_bag"
+              ? bagQty > 0
+              : bookingType === "mixed"
+                ? bagQty > 0 || totalItems > 0
+                : totalItems > 0
             : step === "addons"
               ? true
               : step === "schedule"
@@ -152,7 +206,7 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
                 : step === "vendor"
                   ? vendorMode === "auto" || !!selectedVendor
                   : true,
-    [step, selectedCategoryIds, selectedServiceIds, bookingType, laundryBagQty, totalItems, pickupAddr, pickupSlot, deliveryAddr, deliverySlot, vendorMode, selectedVendor]
+    [step, selectedCategoryIds, selectedServiceIds, bookingType, bagQty, totalItems, pickupAddr, pickupSlot, deliveryAddr, deliverySlot, vendorMode, selectedVendor]
   );
 
   // ─── Effects ─────────────────────────────────────────────
@@ -168,57 +222,209 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     if (features.enableCoupons === false) setCouponCode("");
     if (features.enableWallet === false) setUseWallet(false);
     if (features.enableLoyalty === false) setRedeemPoints(0);
-  }, [features]);
+    const enabled: BookingType[] = [];
+    if (features.enableCountItems !== false) enabled.push("count_items");
+    if (features.enableLaundryBag !== false) enabled.push("laundry_bag");
+    if (features.enableMixedBooking !== false) enabled.push("mixed");
+    if (enabled.length > 0 && !enabled.includes(bookingType)) setBookingType(enabled[0]);
+  }, [features, bookingType]);
+
+  // ─── Booking mode → selection enforcement ─────────────────
+  // laundry_bag allows only bag services; mixed allows items + bags;
+  // count_items allows only item services.
+  // Non-bag selections are stashed on entering laundry_bag and restored on
+  // leaving, so switching modes never loses the customer's service choices.
+  const applyStashRestore = useCallback(() => {
+    const stash = stashRef.current;
+    if (!stash) return;
+    stashRef.current = null;
+    const valid = stash.services.filter((id) =>
+      servicesData.some(
+        (s) => s.id === id && s.pricingType !== "BAG" && selectedCategoryIds.includes(s.categoryId || "")
+      )
+    );
+    if (valid.length === 0) return;
+    setSelectedServiceIds((prev) => [...new Set([...prev, ...valid])]);
+    setItemQtys((prev) => {
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(stash.qtys)) {
+        if (valid.includes(v.serviceId)) next[k] = v;
+      }
+      return next;
+    });
+  }, [servicesData, selectedCategoryIds]);
+
+  const pruneBagOnlyCategories = useCallback(
+    (ids: string[]) =>
+      ids.filter((cid) => {
+        const catServices = servicesData.filter((s) => s.categoryId === cid);
+        return catServices.length === 0 || catServices.some((s) => s.pricingType !== "BAG");
+      }),
+    [servicesData]
+  );
+  // When switching to Mixed / Count Items with no item category selected,
+  // auto-select all item categories so service selection is always visible.
+  const ensureItemCategories = useCallback(
+    (ids: string[]) => {
+      const hasItemCat = ids.some((id) => itemMainCategoryIds.includes(id));
+      return hasItemCat ? ids : [...new Set([...ids, ...itemMainCategoryIds])];
+    },
+    [itemMainCategoryIds]
+  );
+
+  // Auto-adapt booking type to the selected services: bags selected while in
+  // count_items mode would otherwise be invisible in the inventory step.
+  useEffect(() => {
+    const hasBag = bagServices.length > 0;
+    const hasNonBag = selectedServiceObjs.some((s) => s.pricingType !== "BAG");
+    if (!features) return;
+    if (hasBag && bookingType === "count_items") {
+      if (!hasNonBag && features.enableLaundryBag !== false) {
+        setBookingType("laundry_bag");
+      } else if (features.enableMixedBooking !== false) {
+        setBookingType("mixed");
+      } else if (features.enableLaundryBag !== false) {
+        setBookingType("laundry_bag");
+      }
+    } else if (hasBag && hasNonBag && bookingType === "laundry_bag" && features.enableMixedBooking !== false) {
+      setBookingType("mixed");
+    } else if (!hasBag && bookingType === "laundry_bag") {
+      const nextMode =
+        features.enableCountItems !== false ? "count_items" : features.enableMixedBooking !== false ? "mixed" : null;
+      if (nextMode) {
+        setBookingType(nextMode);
+        applyStashRestore();
+        setSelectedCategoryIds((prev) =>
+          ensureItemCategories(nextMode === "count_items" ? pruneBagOnlyCategories(prev) : prev)
+        );
+      }
+    }
+  }, [bagServices, selectedServiceObjs, bookingType, features]);
+
+  const handleBookingTypeChange = useCallback(
+    (type: BookingType) => {
+      setBookingType(type);
+      const activeBagIds = new Set(
+        servicesData.filter((s) => s.pricingType === "BAG" && s.isActive !== false).map((s) => s.id)
+      );
+      const bagCatIds = new Set(
+        servicesData.filter((s) => activeBagIds.has(s.id)).map((s) => s.categoryId).filter(Boolean) as string[]
+      );
+      const isLaundryBag = type === "laundry_bag";
+      let stash: { services: string[]; qtys: Record<string, ItemQty> } | null = null;
+      if (isLaundryBag) {
+        if (stashRef.current) {
+          stash = stashRef.current;
+        } else {
+          const nonBagIds = selectedServiceIds.filter((id) => {
+            const svc = servicesData.find((s) => s.id === id);
+            return svc && svc.pricingType !== "BAG";
+          });
+          const qtys: Record<string, ItemQty> = {};
+          for (const [k, v] of Object.entries(itemQtys)) {
+            if (nonBagIds.includes(v.serviceId)) qtys[k] = v;
+          }
+          stash = { services: nonBagIds, qtys };
+          stashRef.current = stash;
+        }
+      } else {
+        stash = stashRef.current;
+        stashRef.current = null;
+      }
+      const validStashServices = (stash?.services || []).filter((id) => {
+        const svc = servicesData.find((s) => s.id === id);
+        return svc && selectedCategoryIds.includes(svc.categoryId || "");
+      });
+      const stashedIds = isLaundryBag ? new Set<string>() : new Set(validStashServices);
+      setSelectedServiceIds((prev) => {
+        const next = new Set(prev);
+        if (type === "laundry_bag") {
+          for (const id of activeBagIds) next.add(id);
+          for (const s of servicesData) if (s.pricingType !== "BAG") next.delete(s.id);
+        } else if (type === "mixed") {
+          for (const id of activeBagIds) next.add(id);
+          for (const id of validStashServices) next.add(id);
+        } else {
+          for (const id of activeBagIds) next.delete(id);
+          for (const id of validStashServices) next.add(id);
+        }
+        return [...next];
+      });
+      setSelectedCategoryIds((prev) => {
+        if (type === "count_items") {
+          // Prune categories that only contain bag services (e.g. "Laundry Bags"),
+          // then auto-add item categories if none are selected.
+          return ensureItemCategories(pruneBagOnlyCategories(prev));
+        }
+        // laundry_bag / mixed: keep categories that have bag services or (mixed)
+        // still-selected item services, then ensure bag categories are included.
+        // Mixed with no item category chosen auto-adds item categories so both
+        // bag and service selection are visible.
+        const kept = prev.filter((cid) => {
+          const catServices = servicesData.filter((s) => s.categoryId === cid);
+          return catServices.some(
+            (s) => activeBagIds.has(s.id) || (type === "mixed" && (selectedServiceIds.includes(s.id) || stashedIds.has(s.id)))
+          );
+        });
+        for (const cid of bagCatIds) if (!kept.includes(cid)) kept.push(cid);
+        return type === "mixed" ? ensureItemCategories(kept) : kept;
+      });
+      setItemQtys((prev) => {
+        const next = { ...prev };
+        for (const key of Object.keys(next)) {
+          const serviceId = key.split(":")[0];
+          const isBag = activeBagIds.has(serviceId);
+          if (type === "laundry_bag" && !isBag) delete next[key];
+          if (type === "count_items" && isBag) delete next[key];
+        }
+        if (stash) {
+          for (const [k, v] of Object.entries(stash.qtys)) {
+            if (!next[k] && stashedIds.has(v.serviceId)) next[k] = v;
+          }
+        }
+        return next;
+      });
+    },
+    [servicesData, selectedServiceIds, itemQtys, selectedCategoryIds]
+  );
 
   // ─── Pricing ─────────────────────────────────────────────
   function buildOrderItemsPayload() {
     const items: any[] = [];
-    if (bookingType === "count_items" || bookingType === "mixed") {
-      for (const iq of Object.values(itemQtys)) {
-        if (iq.qty <= 0) continue;
-        const svc = selectedServiceObjs.find((s) =>
-          s.items?.some((si) => si.itemMasterId === iq.itemId)
-        );
-        items.push({
-          itemId: iq.itemId, // itemMasterId → valid FK to item_master
-          serviceId: svc?.id || selectedServiceIds[0],
-          qty: iq.qty,
-          specialInstructions: iq.instructions,
-        });
-      }
+    for (const iq of Object.values(itemQtys)) {
+      if (iq.qty <= 0) continue;
+      const isBag = bagServiceIds.has(iq.serviceId);
+      if (isBag && bookingType === "count_items") continue;
+      if (!isBag && bookingType === "laundry_bag") continue;
+      items.push({
+        serviceId: iq.serviceId,
+        itemId: iq.itemId,
+        qty: iq.qty,
+        specialInstructions: iq.instructions,
+      });
     }
-    // Include add-on items
-    for (const [svcId, qty] of Object.entries(addonQtys)) {
-      if (qty <= 0) continue;
+    // Include enabled add-on services (one line, qty 1)
+    for (const [svcId, on] of Object.entries(addonEnabled)) {
+      if (!on) continue;
       const svc = servicesData.find((s) => s.id === svcId);
       if (!svc) continue;
-      for (const addonItem of svc.items || []) {
-        items.push({
-          itemId: addonItem.itemMasterId || addonItem.id || svcId,
-          serviceId: svcId,
-          qty,
-          specialInstructions: [],
-        });
-      }
-      // If service has no items, push a placeholder
-      if (!svc.items?.length) {
-        items.push({
-          itemId: svcId,
-          serviceId: svcId,
-          qty,
-          specialInstructions: [],
-        });
-      }
+      const addonItem = (svc.items || [])[0];
+      items.push({
+        serviceId: svcId,
+        itemId: addonItem?.itemMasterId || addonItem?.id || svcId,
+        qty: 1,
+        specialInstructions: [],
+      });
     }
     return items;
   }
 
   useEffect(() => {
     if (step !== "review") return;
-    if (!selectedServiceIds.length && !Object.values(addonQtys).some((q) => q > 0)) return;
+    if (!selectedServiceIds.length && !Object.values(addonEnabled).some((on) => on)) return;
 
     const orderItems = buildOrderItemsPayload();
-    if (!orderItems.length && !laundryBagQty) return;
+    if (!orderItems.length) return;
 
     setPricingLoading(true);
     const vendorId = vendorMode === "manual" && selectedVendor
@@ -233,7 +439,19 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     }).then(setPricingResult).catch(() => {
       toast.error("Failed to calculate pricing");
     }).finally(() => setPricingLoading(false));
-  }, [step, selectedServiceIds, itemQtys, laundryBagQty, addonQtys, couponCode, redeemPoints, useWallet, vendorMode, selectedVendor, vendorsList, walletBalance]);
+  }, [step, selectedServiceIds, itemQtys, bagServiceIds, addonEnabled, couponCode, redeemPoints, useWallet, vendorMode, selectedVendor, vendorsList, walletBalance]);
+
+  // ─── Schedule reconciliation ─────────────────────────────
+  // Time-based add-ons constrain the schedule, and Standard delivery enforces
+  // a 48-hour turnaround: picks stay inside the SLA window, but delivery is
+  // never invented before the pickup is chosen.
+  useEffect(() => {
+    const adjusted = reconcileSchedule({ pickupDate, pickupSlot, deliveryDate, deliverySlot }, timeAddonKinds);
+    if (adjusted.pickupDate !== pickupDate) setPickupDate(adjusted.pickupDate);
+    if (adjusted.pickupSlot !== pickupSlot) setPickupSlot(adjusted.pickupSlot);
+    if (adjusted.deliveryDate !== deliveryDate) setDeliveryDate(adjusted.deliveryDate);
+    if (adjusted.deliverySlot !== deliverySlot) setDeliverySlot(adjusted.deliverySlot);
+  }, [timeAddonKinds, pickupDate, pickupSlot, deliveryDate, deliverySlot]);
 
   // ─── Actions ─────────────────────────────────────────────
   const resetState = useCallback(() => {
@@ -241,8 +459,7 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     setSelectedServiceIds([]);
     setBookingType("count_items");
     setItemQtys({});
-    setAddonQtys({});
-    setLaundryBagQty(0);
+    setAddonEnabled({});
     setCouponCode("");
     setRedeemPoints(0);
     setPickupSlot("");
@@ -272,10 +489,11 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       const orderItems = buildOrderItemsPayload();
 
       const body: any = {
+        items: orderItems,
         orderItems,
         bookingType,
-        laundryBagQty: (bookingType === "laundry_bag" || bookingType === "mixed") ? laundryBagQty : 0,
-        estimatedWeightKg: Object.values(itemQtys).reduce((sum, i) => {
+        laundryBagQty: bookingType === "count_items" ? 0 : bagQty,
+        estimatedWeightKg: itemLines.reduce((sum, i) => {
           return sum + (weightMap[i.itemId] || 0) * i.qty;
         }, 0),
         vendor_id: vendorId,
@@ -285,6 +503,8 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
         pickup_slot: pickupSlot,
         delivery_date: resolveDate(deliveryDate),
         delivery_slot: deliverySlot,
+        pickup_mode: pickupMode,
+        delivery_speed: deliverySpeed,
         delivery_address: selectedDelAddr ? formatAddress(selectedDelAddr) : "",
         delivery_area: selectedDelAddr?.area || "",
         payment_method: "cod",
@@ -314,7 +534,7 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
     } finally {
       setPlacing(false);
     }
-  }, [placing, addrList, pickupAddr, deliveryAddr, vendorMode, selectedVendor, vendorsList, bookingType, laundryBagQty, itemQtys, weightMap, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, couponCode, redeemPoints, useWallet, walletBalance, totalItems, fetchWallet, refetchOrders]);
+  }, [placing, addrList, pickupAddr, deliveryAddr, vendorMode, selectedVendor, vendorsList, bookingType, bagQty, itemQtys, itemLines, weightMap, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, couponCode, redeemPoints, useWallet, walletBalance, totalItems, fetchWallet, refetchOrders]);
 
   // ─── Context values ──────────────────────────────────────
   const navigation = useMemo<BookingNavigationValue>(
@@ -351,15 +571,16 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       totalWeight,
       vendorsList,
       bookingType,
-      setBookingType,
-      laundryBagQty,
-      setLaundryBagQty,
+      setBookingType: handleBookingTypeChange,
+      bagQty,
+      bagServices,
       itemQtys,
       setItemQtys,
-      addonQtys,
-      setAddonQtys,
+      addonEnabled,
+      setAddonEnabled,
       selectedAddonCat,
       setSelectedAddonCat,
+      timeAddonKinds,
       addrList,
       pickupAddr,
       setPickupAddr,
@@ -382,7 +603,7 @@ export function BookingProvider({ location, onClose, children }: BookingProvider
       refetchAddresses,
       features,
     }),
-    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, totalWeight, vendorsList, bookingType, laundryBagQty, itemQtys, addonQtys, selectedAddonCat, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, refetchAddresses, features]
+    [catalogData, mainCategories, addonCategories, addonServices, servicesData, selectedCategoryIds, selectedServiceIds, selectedCategoryObjs, selectedServiceObjs, catalogItems, weightMap, defaultPrices, totalItems, totalAddonItems, totalWeight, vendorsList, bookingType, handleBookingTypeChange, bagQty, bagServices, itemQtys, addonEnabled, selectedAddonCat, timeAddonKinds, addrList, pickupAddr, deliveryAddr, pickupDate, pickupSlot, deliveryDate, deliverySlot, notes, vendorMode, selectedVendor, refetchAddresses, features]
   );
 
   const pricing = useMemo<BookingPricingValue>(

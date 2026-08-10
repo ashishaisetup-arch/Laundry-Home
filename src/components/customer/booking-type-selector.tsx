@@ -6,15 +6,21 @@ type BookingType = "count_items" | "laundry_bag" | "mixed";
 interface BookingTypeSelectorProps {
   value: BookingType;
   onChange: (type: BookingType) => void;
+  flags?: {
+    enableCountItems?: boolean;
+    enableLaundryBag?: boolean;
+    enableMixedBooking?: boolean;
+  };
 }
 
-const OPTIONS: { type: BookingType; label: string; description: string; icon: typeof Shirt; ideal: string; recommended?: boolean }[] = [
+const OPTIONS: { type: BookingType; label: string; description: string; icon: typeof Shirt; ideal: string; recommended?: boolean; flagKey: keyof NonNullable<BookingTypeSelectorProps["flags"]> }[] = [
   {
     type: "count_items",
     label: "Count Individual Items",
     description: "Select each item type and quantity",
     icon: Shirt,
     ideal: "Dry Cleaning, Shoes, Premium Wear",
+    flagKey: "enableCountItems",
   },
   {
     type: "laundry_bag",
@@ -22,6 +28,7 @@ const OPTIONS: { type: BookingType; label: string; description: string; icon: ty
     description: "Fill a bag and we'll charge per bag",
     icon: ShoppingBag,
     ideal: "Daily Clothes",
+    flagKey: "enableLaundryBag",
   },
   {
     type: "mixed",
@@ -30,13 +37,15 @@ const OPTIONS: { type: BookingType; label: string; description: string; icon: ty
     icon: Layers,
     ideal: "Most customers",
     recommended: true,
+    flagKey: "enableMixedBooking",
   },
 ];
 
-export function BookingTypeSelector({ value, onChange }: BookingTypeSelectorProps) {
+export function BookingTypeSelector({ value, onChange, flags }: BookingTypeSelectorProps) {
+  const visibleOptions = OPTIONS.filter((opt) => flags?.[opt.flagKey] !== false);
   return (
     <div className="grid gap-1.5">
-      {OPTIONS.map((opt) => {
+      {visibleOptions.map((opt) => {
         const Icon = opt.icon;
         const selected = value === opt.type;
         return (

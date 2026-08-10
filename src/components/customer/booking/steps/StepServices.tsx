@@ -16,6 +16,7 @@ export function StepServices() {
     setItemQtys,
     bookingType,
     setBookingType,
+    features,
   } = useBookingSelection();
 
   const servicesForCategories = servicesData.filter(
@@ -40,24 +41,35 @@ export function StepServices() {
             <div className="grid grid-cols-2 gap-2">
               {catServices.map((svc) => {
                 const selected = selectedServiceIds.includes(svc.id);
+                const bagOnlyDisabled = bookingType === "laundry_bag" && svc.pricingType !== "BAG";
                 return (
                   <button
                     key={svc.id}
                     type="button"
+                    disabled={bagOnlyDisabled}
                     onClick={() => {
                       setSelectedServiceIds((prev) =>
                         selected ? prev.filter((id) => id !== svc.id) : [...prev, svc.id]
                       );
-                      setItemQtys({});
+                      setItemQtys((prev) => {
+                        const next = { ...prev };
+                        for (const key of Object.keys(next)) {
+                          if (key.startsWith(`${svc.id}:`)) delete next[key];
+                        }
+                        return next;
+                      });
                     }}
                     className={cn(
                       "rounded-xl border p-3 text-left transition-all flex items-center gap-3 active:scale-[0.98]",
+                      bagOnlyDisabled && "opacity-40 cursor-not-allowed active:scale-100",
                       selected ? "border-primary bg-gradient-to-br from-primary/[0.07] to-transparent shadow-sm ring-1 ring-primary/20" : "border-border/60 hover:border-muted-foreground/30 hover:shadow-sm"
                     )}
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold truncate">{svc.name}</p>
-                      <p className="text-[10px] text-muted-foreground truncate">{svc.description || svc.unit}</p>
+                      <p className="text-[10px] text-muted-foreground truncate">
+                        {bagOnlyDisabled ? "Only available in Mixed or Count Items mode" : svc.description || svc.unit}
+                      </p>
                     </div>
                     <div className={cn(
                       "w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors",
@@ -79,7 +91,7 @@ export function StepServices() {
       )}
 
       <Separator className="my-3" />
-      <BookingTypeSelector value={bookingType} onChange={setBookingType} />
+      <BookingTypeSelector value={bookingType} onChange={setBookingType} flags={features || undefined} />
     </div>
   );
 }

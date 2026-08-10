@@ -138,7 +138,10 @@ export function ServiceCatalogManager() {
                               <p className="text-sm font-medium">{svc.name}</p>
                               <p className="text-[11px] text-muted-foreground">{svc.description || ""}</p>
                             </div>
-                            <Badge variant="outline" className="text-[10px]">{svc.unit}</Badge>
+                            <Badge variant="outline" className="text-[10px]">{svc.pricingType || svc.unit}</Badge>
+                            {svc.pricingType === "BAG" && svc.bagPrice != null && svc.bagPrice > 0 && (
+                              <Badge variant="secondary" className="text-[10px]">₹{svc.bagPrice}</Badge>
+                            )}
                             <Badge variant="secondary" className="text-[10px]">{svc.items?.length || 0} items</Badge>
                             <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                               <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setSvcDialog({ open: true, categoryId: svc.categoryId, edit: svc })}>
@@ -340,6 +343,8 @@ function ServiceEntryDialog({ open, categoryId, edit, categories, onClose, onSav
   const [name, setName] = useState(edit?.name || "");
   const [description, setDescription] = useState(edit?.description || "");
   const [unit, setUnit] = useState(edit?.unit || "item");
+  const [pricingType, setPricingType] = useState(edit?.pricingType || "ITEM");
+  const [bagPrice, setBagPrice] = useState(edit?.bagPrice ? String(edit.bagPrice) : "");
   const [imageUrl, setImageUrl] = useState(edit?.imageUrl || "");
   const [taxable, setTaxable] = useState(edit?.taxable !== false);
   const [displayOrder, setDisplayOrder] = useState(String(edit?.displayOrder ?? 0));
@@ -350,9 +355,21 @@ function ServiceEntryDialog({ open, categoryId, edit, categories, onClose, onSav
   const handleSave = async () => {
     if (!name.trim()) { toast.error("Name is required"); return; }
     if (!selectedCat) { toast.error("Category is required"); return; }
+    if (pricingType === "BAG" && !(parseInt(bagPrice) > 0)) { toast.error("Bag price is required for BAG pricing"); return; }
     setSaving(true);
     try {
-      const body = { categoryId: selectedCat, name: name.trim(), description: description.trim(), unit, imageUrl, taxable, displayOrder: parseInt(displayOrder) || 0, isActive };
+      const body = {
+        categoryId: selectedCat,
+        name: name.trim(),
+        description: description.trim(),
+        unit,
+        pricingType,
+        bagPrice: bagPrice ? parseInt(bagPrice) : null,
+        imageUrl,
+        taxable,
+        displayOrder: parseInt(displayOrder) || 0,
+        isActive,
+      };
       if (edit) {
         await api.put(`/api/services/${edit.id}`, body);
         toast.success("Service updated");
@@ -408,9 +425,28 @@ function ServiceEntryDialog({ open, categoryId, edit, categories, onClose, onSav
               </select>
             </div>
             <div>
-              <Label className="text-xs">Display Order</Label>
-              <Input type="number" value={displayOrder} onChange={(e) => setDisplayOrder(e.target.value)} className="mt-1" />
+              <Label className="text-xs">Pricing Type</Label>
+              <select
+                value={pricingType}
+                onChange={(e) => setPricingType(e.target.value)}
+                className="mt-1 flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="ITEM">Per item</option>
+                <option value="BAG">Per bag</option>
+                <option value="FIXED">Flat fee</option>
+                <option value="WEIGHT">Per kg</option>
+              </select>
             </div>
+          </div>
+          {(pricingType === "BAG" || pricingType === "FIXED") && (
+            <div>
+              <Label className="text-xs">{pricingType === "BAG" ? "Bag Price (₹)" : "Flat Price (₹)"}</Label>
+              <Input type="number" value={bagPrice} onChange={(e) => setBagPrice(e.target.value)} className="mt-1" placeholder="e.g. 99" />
+            </div>
+          )}
+          <div>
+            <Label className="text-xs">Display Order</Label>
+            <Input type="number" value={displayOrder} onChange={(e) => setDisplayOrder(e.target.value)} className="mt-1" />
           </div>
           <div>
             <Label className="text-xs">Image URL</Label>
