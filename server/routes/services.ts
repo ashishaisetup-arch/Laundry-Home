@@ -8,11 +8,21 @@ router.get("/", async (_req: Request, res: Response) => {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("services").select("*");
     if (error) { res.status(500).json({ error: error.message }); return; }
-    res.json(data);
+    res.json((data || []).map(serializeService));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
+
+function serializeService(s: any) {
+  const { pricing_type, bag_price, is_active, ...rest } = s;
+  return {
+    ...rest,
+    pricingType: pricing_type || "ITEM",
+    bagPrice: bag_price ?? undefined,
+    isActive: is_active,
+  };
+}
 
 router.get("/catalog", async (req: Request, res: Response) => {
   try {
@@ -36,9 +46,12 @@ router.get("/catalog", async (req: Request, res: Response) => {
       const services = (cat.services || [])
         .filter((s: any) => includeInactive || s.is_active !== false)
         .map((s: any) => {
-          const { service_items: _, ...serviceRest } = s;
+          const { service_items: _, pricing_type, bag_price, is_active, ...serviceRest } = s;
           return {
             ...serviceRest,
+            pricingType: pricing_type || "ITEM",
+            bagPrice: bag_price ?? undefined,
+            isActive: is_active,
             items: (s.service_items || [])
               .filter((i: any) => includeInactive || i.is_active !== false)
               .map((i: any) => ({
@@ -69,7 +82,7 @@ router.get("/catalog", async (req: Request, res: Response) => {
 router.post("/", async (req: Request, res: Response) => {
   try {
     const supabase = createAdminClient();
-    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive, pricingType, bagPrice } = req.body;
     const { data, error } = await supabase
       .from("services")
       .insert({
@@ -81,6 +94,8 @@ router.post("/", async (req: Request, res: Response) => {
         taxable: taxable ?? true,
         display_order: displayOrder ?? 0,
         is_active: isActive ?? true,
+        pricing_type: pricingType || "ITEM",
+        bag_price: bagPrice ?? null,
       })
       .select()
       .single();
@@ -95,7 +110,7 @@ router.post("/", async (req: Request, res: Response) => {
 router.put("/:id", async (req: Request, res: Response) => {
   try {
     const supabase = createAdminClient();
-    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive } = req.body;
+    const { categoryId, name, description, unit, imageUrl, taxable, displayOrder, isActive, pricingType, bagPrice } = req.body;
     const { data, error } = await supabase
       .from("services")
       .update({
@@ -107,6 +122,8 @@ router.put("/:id", async (req: Request, res: Response) => {
         taxable,
         display_order: displayOrder ?? 0,
         is_active: isActive,
+        pricing_type: pricingType || "ITEM",
+        bag_price: bagPrice ?? null,
       })
       .eq("id", req.params.id)
       .select()

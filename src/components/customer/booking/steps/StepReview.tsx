@@ -13,12 +13,11 @@ export function StepReview() {
     selectedCategoryObjs,
     selectedServiceObjs,
     itemQtys,
-    laundryBagQty,
-    addonQtys,
+    bagQty,
+    addonEnabled,
     addonServices,
     totalItems,
     totalAddonItems,
-    bookingType,
     addrList,
     pickupAddr,
     deliveryAddr,
@@ -46,10 +45,14 @@ export function StepReview() {
   const { goToStep } = useBookingNavigation();
 
   const pBreakdown = pricingResult || { subtotal: 0, taxes: 0, platformFee: 0, deliveryFee: 0, total: 0, breakdown: [] };
-  const selectedAddonSvcs = addonServices.filter((s) => (addonQtys[s.id] || 0) > 0);
+  const selectedAddonSvcs = addonServices.filter((s) => addonEnabled[s.id]);
   const couponsOn = features?.enableCoupons !== false;
   const walletOn = features?.enableWallet !== false;
   const loyaltyOn = features?.enableLoyalty !== false;
+
+  const linePrices = new Map(
+    (pricingResult?.lines || []).map((l) => [`${l.serviceId}|${l.itemId || ""}`, l.unitPrice])
+  );
 
   return (
     <div className="space-y-4">
@@ -75,19 +78,24 @@ export function StepReview() {
             )}
 
             {selectedServiceObjs.map((svc) => {
-              const svcItems = Object.values(itemQtys).filter((iq) => {
-                return svc.items?.some((si) => si.itemMasterId === iq.itemId);
-              });
-              if (!svcItems.length) return null;
+              const svcLines = Object.values(itemQtys).filter((iq) => iq.qty > 0 && iq.serviceId === svc.id);
+              if (!svcLines.length) return null;
+              const isBag = svc.pricingType === "BAG";
               return (
                 <div key={svc.id}>
-                  <p className="text-sm font-semibold mt-2 mb-1">{svc.name}</p>
-                  {svcItems.map((iq) => {
+                  <p className="text-sm font-semibold mt-2 mb-1 flex items-center gap-1.5">
+                    {isBag && <ShoppingBag className="h-3.5 w-3.5 text-primary" />}
+                    {svc.name}
+                  </p>
+                  {svcLines.map((iq) => {
                     const si = svc.items?.find((s) => s.itemMasterId === iq.itemId);
+                    const unitPrice = isBag ? svc.bagPrice || 0 : linePrices.get(`${svc.id}|${iq.itemId}`) || (si?.defaultPrice || 0);
                     return (
                       <div key={iq.itemId} className="flex items-center justify-between text-sm py-0.5">
                         <span>{si?.itemName || iq.itemId}</span>
-                        <span className="text-muted-foreground">× {iq.qty}</span>
+                        <span className="text-muted-foreground">
+                          × {iq.qty} · {formatINRDecimal(unitPrice * iq.qty)}
+                        </span>
                       </div>
                     );
                   })}
@@ -95,32 +103,29 @@ export function StepReview() {
               );
             })}
 
-            {laundryBagQty > 0 && (
-              <div className="flex items-center justify-between text-sm py-0.5">
-                <span><ShoppingBag className="h-3.5 w-3.5 inline mr-1" />Laundry Bags</span>
-                <span className="text-muted-foreground">× {laundryBagQty}</span>
-              </div>
-            )}
-
             {selectedAddonSvcs.length > 0 && (
               <>
                 <Separator />
                 <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1">
                   <Zap className="h-3 w-3" /> Add-ons
                 </p>
-                {selectedAddonSvcs.map((svc) => (
-                  <div key={svc.id} className="flex items-center justify-between text-sm py-0.5">
-                    <span>{svc.name}</span>
-                    <span className="text-muted-foreground">× {addonQtys[svc.id]}</span>
-                  </div>
-                ))}
+                {selectedAddonSvcs.map((svc) => {
+                  const addonItem = svc.items?.[0];
+                  const unitPrice = linePrices.get(`${svc.id}|${addonItem?.itemMasterId || addonItem?.id || svc.id}`) || 0;
+                  return (
+                    <div key={svc.id} className="flex items-center justify-between text-sm py-0.5">
+                      <span>{svc.name}</span>
+                      <span className="text-muted-foreground">× 1 · {formatINRDecimal(unitPrice)}</span>
+                    </div>
+                  );
+                })}
               </>
             )}
 
             <Separator />
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Total Items</span>
-              <span className="font-semibold">{totalItems + (bookingType !== "count_items" ? laundryBagQty : 0) + totalAddonItems}</span>
+              <span className="font-semibold">{totalItems + bagQty + totalAddonItems}</span>
             </div>
           </Card>
 

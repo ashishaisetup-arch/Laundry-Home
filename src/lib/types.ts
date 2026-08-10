@@ -286,6 +286,8 @@ export interface CatalogService {
   taxable: boolean;
   displayOrder: number;
   isActive: boolean;
+  pricingType?: string;
+  bagPrice?: number;
   items: ServiceItem[];
 }
 

@@ -5,46 +5,28 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { AddAddressDialog } from "@/components/shared/add-address-dialog";
-import type { Slot } from "@/lib/hooks/useSlots";
 import { cn } from "@/lib/utils";
 import { useBookingSelection } from "../use-booking";
 import { formatAddress } from "@/lib/address";
-
-const PICKUP_SLOTS: Slot[] = [
-  { id: "p1", slot: "7:00 AM - 9:00 AM", available: true, premium: false },
-  { id: "p2", slot: "9:00 AM - 11:00 AM", available: true, premium: false },
-  { id: "p3", slot: "11:00 AM - 1:00 PM", available: true, premium: false },
-  { id: "p4", slot: "1:00 PM - 3:00 PM", available: true, premium: true },
-  { id: "p5", slot: "3:00 PM - 5:00 PM", available: true, premium: false },
-  { id: "p6", slot: "5:00 PM - 7:00 PM", available: true, premium: false },
-];
-
-const DELIVERY_SLOTS: Slot[] = [
-  { id: "d1", slot: "7:00 AM - 9:00 AM", available: true },
-  { id: "d2", slot: "9:00 AM - 11:00 AM", available: true },
-  { id: "d3", slot: "11:00 AM - 1:00 PM", available: true },
-  { id: "d4", slot: "1:00 PM - 3:00 PM", available: true },
-  { id: "d5", slot: "3:00 PM - 5:00 PM", available: true },
-  { id: "d6", slot: "5:00 PM - 7:00 PM", available: true },
-];
-
-function parseSlotEndTime(slot: string): { hours: number; minutes: number } {
-  const parts = slot.split(" - ");
-  const end = parts[1]?.trim() || "";
-  const match = end.match(/(\d+):(\d+)\s*(AM|PM)/i);
-  if (!match) return { hours: 0, minutes: 0 };
-  let h = parseInt(match[1]);
-  const m = parseInt(match[2]);
-  if (match[3]?.toUpperCase() === "PM" && h !== 12) h += 12;
-  if (match[3]?.toUpperCase() === "AM" && h === 12) h = 0;
-  return { hours: h, minutes: m };
-}
+import {
+  PICKUP_SLOTS,
+  DELIVERY_SLOTS,
+  EXPRESS_PICKUP_SLOT,
+  expressAvailable,
+  getPickupDateOptions,
+  getPickupSlotOptions,
+  getDeliveryDateOptions,
+  getDeliverySlotOptions,
+  hasAnyKind,
+  parseSlotTimes,
+} from "../schedule-windows";
 
 function isSlotExpired(dateLabel: string, slot: string): boolean {
   if (dateLabel !== "Today") return false;
-  const { hours, minutes } = parseSlotEndTime(slot);
+  const times = parseSlotTimes(slot);
+  if (!times) return false;
   const now = new Date();
-  const slotEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
+  const slotEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), times.end.hours, times.end.minutes);
   return now >= slotEnd;
 }
 
@@ -66,13 +48,27 @@ export function StepSchedule() {
     notes,
     setNotes,
     refetchAddresses,
+    timeAddonKinds,
   } = useBookingSelection();
 
   const [showAddAddr, setShowAddAddr] = useState(false);
   const [addrTarget, setAddrTarget] = useState<"pickup" | "delivery">("pickup");
 
-  const pSlots = PICKUP_SLOTS;
-  const dSlots = DELIVERY_SLOTS;
+  const kinds = timeAddonKinds;
+  const hasConstraints = hasAnyKind(kinds);
+  const pDates = getPickupDateOptions(kinds);
+  const pSlots = getPickupSlotOptions(kinds, PICKUP_SLOTS);
+  const dDates = getDeliveryDateOptions(pickupDate, kinds);
+  const dSlots = getDeliverySlotOptions(kinds, pickupDate, pickupSlot, deliveryDate, DELIVERY_SLOTS);
+  const expressOff = kinds.express && !expressAvailable(new Date());
+  const awaitingPickup = (kinds.sameDay || kinds.twentyFourHour) && !pickupSlot;
+  const banner = kinds.sameDay
+    ? "Same Day Delivery selected - guaranteed delivery on the same day as pickup."
+    : kinds.twentyFourHour
+      ? "24 Hour Delivery selected - guaranteed delivery within 24 hours of pickup."
+      : kinds.express
+        ? "Express Pickup selected - pickup within 30 minutes."
+        : "";
 
   return (
     <div className="space-y-4">
@@ -80,6 +76,20 @@ export function StepSchedule() {
         <h2 className="text-lg font-semibold" style={{ fontFamily: "var(--font-display)" }}>Pickup & Delivery</h2>
         <p className="text-xs text-muted-foreground mt-0.5">When should we pick up and deliver?</p>
       </div>
+
+      {hasConstraints && (
+        <div className="rounded-lg border border-primary/30 bg-primary/[0.06] px-3 py-2 text-xs font-medium text-primary">
+          {banner}
+          {awaitingPickup && (
+            <p className="mt-0.5 text-primary/80">Choose a pickup slot to see available delivery times.</p>
+          )}
+        </div>
+      )}
+      {expressOff && (
+        <div className="rounded-lg border border-amber-300/50 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+          Express Pickup is unavailable after 6:30 PM.
+        </div>
+      )}
 
       {/* Address */}
       <div>
@@ -113,7 +123,7 @@ export function StepSchedule() {
       <div>
         <Label className="text-xs">Pickup Date</Label>
         <div className="flex gap-2 mt-1">
-          {["Today", "Tomorrow", "Day after"].map((d) => (
+          {pDates.map((d) => (
             <button key={d} type="button" onClick={() => { setPickupDate(d); setPickupSlot(""); }}
               className={cn("flex-1 rounded-lg border py-2 text-sm font-medium transition-all active:scale-[0.97]",
                 pickupDate === d ? "border-primary bg-gradient-to-br from-primary/[0.07] to-transparent text-primary shadow-sm" : "border-border/60 hover:bg-muted/30"
@@ -126,16 +136,17 @@ export function StepSchedule() {
           <Label className="text-xs">Pickup Time</Label>
           <div className="grid grid-cols-2 gap-2 mt-1">
             {pSlots.map((s) => {
-              const expired = isSlotExpired(pickupDate, s.slot);
+              const isExpress = s.slot === EXPRESS_PICKUP_SLOT;
+              const unavailable = isExpress ? expressOff : isSlotExpired(pickupDate, s.slot);
               return (
-              <button key={s.id} type="button" disabled={expired} onClick={() => setPickupSlot(s.slot)}
+              <button key={s.id} type="button" disabled={unavailable} onClick={() => setPickupSlot(s.slot)}
                 className={cn("rounded-lg border py-2 px-3 text-xs font-medium transition-all text-left active:scale-[0.97]",
-                  expired && "opacity-40 cursor-not-allowed line-through",
+                  unavailable && "opacity-40 cursor-not-allowed line-through",
                   pickupSlot === s.slot ? "border-primary bg-gradient-to-br from-primary/[0.07] to-transparent text-primary shadow-sm" : "border-border/60 hover:bg-muted/30",
-                  s.premium && !expired && "border-amber-200 bg-amber-50/30"
+                  s.premium && !isExpress && !unavailable && "border-amber-200 bg-amber-50/30"
                 )}>
                 {s.slot}
-                {s.premium && <span className="ml-1 text-[10px] text-amber-600 font-semibold">Premium</span>}
+                {s.premium && !isExpress && <span className="ml-1 text-[10px] text-amber-600 font-semibold">Premium</span>}
               </button>
               );
             })}
@@ -147,14 +158,18 @@ export function StepSchedule() {
       <div className="divider-ornament"><span className="divider-dot" /></div>
       <div>
         <Label className="text-xs">Delivery Date</Label>
-        <div className="flex gap-2 mt-1">
-          {["Tomorrow", "Day after", "3 days"].map((d) => (
-            <button key={d} type="button" onClick={() => { setDeliveryDate(d); setDeliverySlot(""); }}
-              className={cn("flex-1 rounded-lg border py-2 text-sm font-medium transition-all active:scale-[0.97]",
-                deliveryDate === d ? "border-primary bg-gradient-to-br from-primary/[0.07] to-transparent text-primary shadow-sm" : "border-border/60 hover:bg-muted/30"
-              )}>{d}</button>
-          ))}
-        </div>
+        {dDates.length > 0 ? (
+          <div className="flex gap-2 mt-1">
+            {dDates.map((d) => (
+              <button key={d} type="button" onClick={() => { setDeliveryDate(d); setDeliverySlot(""); }}
+                className={cn("flex-1 rounded-lg border py-2 text-sm font-medium transition-all active:scale-[0.97]",
+                  deliveryDate === d ? "border-primary bg-gradient-to-br from-primary/[0.07] to-transparent text-primary shadow-sm" : "border-border/60 hover:bg-muted/30"
+                )}>{d}</button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground mt-1">Select a pickup date first.</p>
+        )}
       </div>
       {deliveryDate && (
         <div>

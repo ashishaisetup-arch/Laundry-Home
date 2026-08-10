@@ -242,6 +242,13 @@ export function SystemConfig() {
               <SwitchItem label="Find Vendors" desc="Discover and browse vendors by area" checked={customer.enableDiscover} onChecked={(v) => setCustomer((p) => ({ ...p, enableDiscover: v }))} />
               <SwitchItem label="My Orders" desc="View order history and tracking" checked={customer.enableOrders} onChecked={(v) => setCustomer((p) => ({ ...p, enableOrders: v }))} />
             </div>
+            <Separator className="my-4" />
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Booking Modes</p>
+            <div className="space-y-3">
+              <SwitchItem label="Count Individual Items" desc="Per-item quantity selection (Dry Cleaning, Shoes, Premium Wear)" checked={customer.enableCountItems} onChecked={(v) => setCustomer((p) => ({ ...p, enableCountItems: v }))} />
+              <SwitchItem label="Laundry Bag" desc="Per-bag booking (requires an active BAG-type service in the catalog)" checked={customer.enableLaundryBag} onChecked={(v) => setCustomer((p) => ({ ...p, enableLaundryBag: v }))} />
+              <SwitchItem label="Mixed Order" desc="Bags + individual items in one order" checked={customer.enableMixedBooking} onChecked={(v) => setCustomer((p) => ({ ...p, enableMixedBooking: v }))} />
+            </div>
           </Card>
         </TabsContent>
 

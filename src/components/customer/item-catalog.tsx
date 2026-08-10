@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import type { ServiceItem } from "@/lib/types";
 
 interface ItemQuantity {
+  serviceId: string;
   itemId: string;
   qty: number;
   instructions: string[];
@@ -32,27 +33,27 @@ export function ItemCatalog({ items, quantities, onChange, defaultPrices }: Item
   const [customOpen, setCustomOpen] = useState(false);
   const [customName, setCustomName] = useState("");
 
-  const updateQty = (itemId: string, delta: number) => {
-    const current = quantities[itemId]?.qty || 0;
+  const updateQty = (itemId: string, serviceId: string, delta: number) => {
+    const current = quantities[`${serviceId}:${itemId}`]?.qty || 0;
     const newQty = Math.max(0, current + delta);
     if (newQty === 0) {
-      const { [itemId]: _, ...rest } = quantities;
+      const { [`${serviceId}:${itemId}`]: _, ...rest } = quantities;
       onChange(rest);
     } else {
       onChange({
         ...quantities,
-        [itemId]: { itemId, qty: newQty, instructions: quantities[itemId]?.instructions || [] },
+        [`${serviceId}:${itemId}`]: { serviceId, itemId, qty: newQty, instructions: quantities[`${serviceId}:${itemId}`]?.instructions || [] },
       });
     }
   };
 
-  const toggleInstruction = (itemId: string, instruction: string) => {
-    const current = quantities[itemId];
+  const toggleInstruction = (itemId: string, serviceId: string, instruction: string) => {
+    const current = quantities[`${serviceId}:${itemId}`];
     if (!current) return;
     const has = current.instructions.includes(instruction);
     onChange({
       ...quantities,
-      [itemId]: {
+      [`${serviceId}:${itemId}`]: {
         ...current,
         instructions: has
           ? current.instructions.filter((i) => i !== instruction)
@@ -64,9 +65,10 @@ export function ItemCatalog({ items, quantities, onChange, defaultPrices }: Item
   const addCustomItem = () => {
     if (!customName.trim()) { toast.error("Please enter an item name"); return; }
     const customId = `custom_${Date.now()}`;
+    const serviceId = items[0]?.serviceId || "custom";
     onChange({
       ...quantities,
-      [customId]: { itemId: customId, qty: 1, instructions: [customName.trim()] },
+      [`${serviceId}:${customId}`]: { serviceId, itemId: customId, qty: 1, instructions: [customName.trim()] },
     });
     setCustomName("");
     setCustomOpen(false);
@@ -115,7 +117,8 @@ export function ItemCatalog({ items, quantities, onChange, defaultPrices }: Item
 
   function renderItemRow(item: ServiceItem) {
     const key = item.itemMasterId || item.id;
-    const qty = quantities[key]?.qty || 0;
+    const composite = `${item.serviceId}:${key}`;
+    const qty = quantities[composite]?.qty || 0;
     return (
       <div key={item.id} className="flex items-center gap-2 px-3 py-2 hover:bg-muted/20 transition-colors relative">
         <div className="flex-1 min-w-0">
@@ -127,14 +130,14 @@ export function ItemCatalog({ items, quantities, onChange, defaultPrices }: Item
         <div className="flex items-center gap-1 w-28 justify-end shrink-0">
           <button
             type="button"
-            onClick={() => setInstructionOpen(instructionOpen === key ? null : key)}
+            onClick={() => setInstructionOpen(instructionOpen === composite ? null : composite)}
             className="p-1 hover:bg-muted rounded-full"
           >
-            <Info className={cn("h-3.5 w-3.5", instructionOpen === key ? "text-primary" : "text-muted-foreground")} />
+            <Info className={cn("h-3.5 w-3.5", instructionOpen === composite ? "text-primary" : "text-muted-foreground")} />
           </button>
           <button
             type="button"
-            onClick={() => updateQty(key, -1)}
+            onClick={() => updateQty(key, item.serviceId, -1)}
             className={cn(
               "w-7 h-7 rounded-full flex items-center justify-center transition-colors",
               qty > 0 ? "bg-primary text-primary-foreground hover:bg-primary/90" : "bg-muted text-muted-foreground"
@@ -145,23 +148,23 @@ export function ItemCatalog({ items, quantities, onChange, defaultPrices }: Item
           <span className="w-6 text-center text-sm font-semibold tabular-nums">{qty}</span>
           <button
             type="button"
-            onClick={() => updateQty(key, 1)}
+            onClick={() => updateQty(key, item.serviceId, 1)}
             className="w-7 h-7 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 flex items-center justify-center transition-colors"
           >
             <Plus className="h-3 w-3" />
           </button>
         </div>
-        {instructionOpen === key && (
+        {instructionOpen === composite && (
           <div className="absolute left-0 right-0 top-full mt-0.5 z-10 bg-popover border border-border rounded-lg p-2 shadow-lg">
             <p className="text-[10px] font-medium text-muted-foreground mb-1">Instructions</p>
             <div className="flex flex-wrap gap-1">
               {INSTRUCTIONS.map((inst) => {
-                const selected = (quantities[key]?.instructions || []).includes(inst);
+                const selected = (quantities[composite]?.instructions || []).includes(inst);
                 return (
                   <button
                     key={inst}
                     type="button"
-                    onClick={() => toggleInstruction(key, inst)}
+                    onClick={() => toggleInstruction(key, item.serviceId, inst)}
                     className={cn(
                       "text-[10px] px-2 py-0.5 rounded-full border transition-colors",
                       selected

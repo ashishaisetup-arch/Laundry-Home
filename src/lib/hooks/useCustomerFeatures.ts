@@ -9,6 +9,9 @@ export interface CustomerFeatures {
   enableReviews: boolean;
   enableDiscover: boolean;
   enableOrders: boolean;
+  enableCountItems: boolean;
+  enableLaundryBag: boolean;
+  enableMixedBooking: boolean;
 }
 
 export function useCustomerFeatures() {
