@@ -17,7 +17,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import type { Order } from "@/lib/types";
-import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
+import { CUSTOMER_MILESTONES, customerMilestone, customerMilestoneIndex } from "@/lib/data/customer-milestones";
 import { ServiceIcon } from "./service-icon";
 import { cn, formatINRDecimal, formatTime, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
@@ -33,9 +33,9 @@ interface OrderCardProps {
 
 export function OrderCard({ order, onClick, className, showVendor = true, onCancel, onReorder }: OrderCardProps) {
   const [cancelOpen, setCancelOpen] = useState(false);
-  const currentStage = ORDER_STAGE_FLOW[order.currentStageIndex];
-  const totalStages = ORDER_STAGE_FLOW.length;
-  const progress = ((order.currentStageIndex + 1) / totalStages) * 100;
+  const milestone = customerMilestone(order);
+  const milestoneIndex = customerMilestoneIndex(order);
+  const progress = ((milestoneIndex + 1) / CUSTOMER_MILESTONES.length) * 100;
 
   const isCancellable = !["completed", "cancelled", "delivered", "out_for_delivery"].includes(order.status);
 
@@ -138,7 +138,7 @@ export function OrderCard({ order, onClick, className, showVendor = true, onCanc
           {order.status !== "cancelled" && (
             <div className="mt-3">
               <div className="flex items-center justify-between text-[11px] mb-1.5">
-                <span className="font-medium text-primary">{currentStage?.label}</span>
+                <span className="font-medium text-primary">{milestone.label}</span>
                 <span className="text-muted-foreground">
                   ETA {formatDate(order.estimatedDeliveryAt)} · {formatTime(order.estimatedDeliveryAt)}
                 </span>

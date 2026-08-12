@@ -3,9 +3,11 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bike,
+  CalendarClock,
   MapPin,
   MessageSquare,
   Navigation,
+  PackageCheck,
   Phone,
   Star,
   Truck,
@@ -37,13 +39,19 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { OrderTimeline } from "@/components/shared/order-timeline";
+import { CustomerOrderTimeline } from "@/components/shared/customer-order-timeline";
 import { ServiceIcon } from "@/components/shared/service-icon";
 import { LeafletMap } from "@/components/shared/leaflet-map";
 import { useOrder } from "@/lib/hooks";
 import { useLiveLocation } from "@/lib/hooks/useLiveLocation";
 import { api } from "@/lib/api/client";
-import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
+import {
+  CUSTOMER_MILESTONES,
+  customerMilestone,
+  customerMilestoneIndex,
+  getMilestoneEta,
+  isOrderCancelled,
+} from "@/lib/data/customer-milestones";
 import { cn, formatINRDecimal, formatDateTime } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAppStore } from "@/lib/store";
@@ -90,13 +98,18 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
 
   if (!orderId || loading || !order) return null;
 
-  const currentStage = ORDER_STAGE_FLOW[order.currentStageIndex];
-  const hasPickup = order.pickupLat != null && order.pickupLng != null;
-  const hasDelivery = order.deliveryLat != null && order.deliveryLng != null;
-  const hasExec = liveLoc?.lat != null && liveLoc?.lng != null;
+  const milestone = customerMilestone(order);
+  const milestoneIndex = customerMilestoneIndex(order);
+  const orderCancelled = isOrderCancelled(order);
+  const liveEta = route && liveLoc?.lat != null ? `Arriving in ~${Math.max(1, Math.round(route.duration / 60))} min` : undefined;
+  const isLiveTracking = milestone.id === "out_for_delivery";
+  const isPickupPhase = milestone.id === "pickup_scheduled" || milestone.id === "picked_up";
+  const showMapBanner = isLiveTracking || isPickupPhase;
+  const pickupWindow = order.pickupDate && order.pickupSlot
+    ? `${order.pickupDate} · ${order.pickupSlot.replace(" - ", "–")}`
+    : null;
   const isCancellable = !["completed", "cancelled", "delivered", "out_for_delivery"].includes(order.status) && !cancelled;
   const isCompleted = ["completed", "delivered"].includes(order.status) && !cancelled;
-  const milestoneIndices = [0, Math.floor(ORDER_STAGE_FLOW.length / 3), Math.floor(ORDER_STAGE_FLOW.length * 2 / 3), ORDER_STAGE_FLOW.length - 1];
 
   const handleCancel = async () => {
     try {
@@ -115,11 +128,17 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
 
   return (
     <Dialog open={!!orderId} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto p-0">
+      <DialogContent
+        onInteractOutside={(e) => e.preventDefault()}
+        className="max-w-4xl max-h-[92vh] overflow-y-auto p-0"
+      >
         <DialogTitle className="sr-only">Track order {order.code || order.id?.slice(0, 8)}</DialogTitle>
 
         {/* Header with live status */}
-        <div className="relative overflow-hidden bg-primary-surface p-5 text-primary-foreground">
+        <div className={cn(
+          "relative overflow-hidden p-5 text-primary-foreground",
+          orderCancelled ? "bg-gradient-to-br from-rose-600 to-rose-800" : "bg-primary-surface"
+        )}>
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative">
             <div className="flex items-start justify-between gap-3">
@@ -135,27 +154,31 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
               </div>
               <div className="text-right">
                 <p className="text-xs text-white/80">Current stage</p>
-                <p className="text-lg font-semibold">{currentStage?.label || order.status}</p>
+                <p className="text-lg font-semibold">
+                  {orderCancelled ? "Order Cancelled" : milestone.label}
+                </p>
                 <p className="text-xs text-white/80 mt-0.5">
                   <Clock className="inline h-3 w-3 mr-0.5" />
-                  ETA {order.estimatedDeliveryAt ? formatDateTime(order.estimatedDeliveryAt) : "Calculating..."}
+                  {orderCancelled
+                    ? "Refund will be processed"
+                    : getMilestoneEta(order, liveEta) || "Calculating..."}
                 </p>
               </div>
             </div>
 
-            {/* Progress bar */}
+            {/* Progress bar (7 milestones) */}
             <div className="mt-4">
               <div className="h-2 rounded-full bg-white/20 overflow-hidden">
                 <motion.div
                   className="h-full rounded-full bg-white"
                   initial={{ width: 0 }}
-                  animate={{ width: `${((order.currentStageIndex + 1) / ORDER_STAGE_FLOW.length) * 100}%` }}
+                  animate={{ width: `${((milestoneIndex + 1) / CUSTOMER_MILESTONES.length) * 100}%` }}
                   transition={{ duration: 0.8 }}
                 />
               </div>
               <div className="flex justify-between text-[10px] text-white/80 mt-1">
-                {milestoneIndices.map((i) => (
-                  <span key={i}>{ORDER_STAGE_FLOW[i]?.label}</span>
+                {CUSTOMER_MILESTONES.map((m) => (
+                  <span key={m.id}>{m.shortLabel}</span>
                 ))}
               </div>
             </div>
@@ -165,57 +188,46 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
         <div className="grid md:grid-cols-3 gap-4 p-5">
           {/* Timeline (left, 2 cols) */}
           <div className="md:col-span-2 space-y-4">
+            {showMapBanner && (
+              <Card className="p-0 overflow-hidden shadow-soft">
+                {isLiveTracking ? (
+                  <div className="bg-gradient-to-r from-emerald-600 to-cyan-600 px-4 py-3 text-white flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Bike className="h-4 w-4" />
+                      <p className="text-sm font-semibold">Out for Delivery — live tracking</p>
+                    </div>
+                    {liveEta && <p className="text-xs font-medium">{liveEta}</p>}
+                  </div>
+                ) : milestone.id === "pickup_scheduled" ? (
+                  <div className="bg-gradient-to-r from-teal-600 to-emerald-600 px-4 py-3 text-white">
+                    <div className="flex items-center gap-2">
+                      <CalendarClock className="h-4 w-4" />
+                      <p className="text-sm font-semibold">Pickup Scheduled</p>
+                    </div>
+                    {pickupWindow ? (
+                      <p className="text-xs text-white/90 mt-1">{pickupWindow}</p>
+                    ) : (
+                      <p className="text-xs text-white/90 mt-1">Pickup window to be confirmed</p>
+                    )}
+                    <p className="text-[10px] text-white/70 mt-0.5">Pickup location</p>
+                  </div>
+                ) : (
+                  <div className="bg-gradient-to-r from-teal-600 to-emerald-600 px-4 py-3 text-white">
+                    <div className="flex items-center gap-2">
+                      <PackageCheck className="h-4 w-4" />
+                      <p className="text-sm font-semibold">Picked Up</p>
+                    </div>
+                    <p className="text-xs text-white/90 mt-1">Your laundry is on its way to be cleaned</p>
+                  </div>
+                )}
+                <LiveMapCard order={order} liveLoc={liveLoc} route={route} />
+              </Card>
+            )}
+
             <Card className="p-5 shadow-soft">
               <h3 className="font-semibold mb-1">Order Progress</h3>
               <p className="text-xs text-muted-foreground mb-4">Real-time updates from {order.vendorName}</p>
-              <OrderTimeline order={order} />
-            </Card>
-
-            {/* Map */}
-            <Card className="p-0 overflow-hidden shadow-soft">
-              {(hasPickup || hasDelivery) ? (
-                <LeafletMap
-                  markers={[
-                    ...(hasPickup ? [{ lat: order.pickupLat!, lng: order.pickupLng!, label: "Pickup", color: "#14b8a6", type: "pickup" as const }] : []),
-                    ...(hasDelivery ? [{ lat: order.deliveryLat!, lng: order.deliveryLng!, label: order.vendorName || "Vendor", color: order.vendorLogoColor || "#8b5cf6", type: "vendor" as const }] : []),
-                    ...(hasExec ? [{ lat: liveLoc!.lat, lng: liveLoc!.lng, label: order.deliveryExecutiveName || "Exec", color: "#10b981", type: "exec" as const }] : []),
-                  ]}
-                  center={hasPickup ? [order.pickupLat!, order.pickupLng!] : hasDelivery ? [order.deliveryLat!, order.deliveryLng!] : [12.9719, 77.6413]}
-                  zoom={13}
-                  height="h-48"
-                  route={route ? { coordinates: route.coordinates, color: "#10b981", dashArray: "6 4" } : undefined}
-                />
-              ) : (
-                <div className="h-48 bg-muted/20 flex items-center justify-center">
-                  <MapPin className="h-8 w-8 text-muted-foreground/40" />
-                </div>
-              )}
-              <div className="p-3 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs">
-                  <Navigation className="h-3.5 w-3.5 text-primary" />
-                  {hasExec && route ? (
-                    <span className="font-medium">
-                      {order.deliveryExecutiveName} · {(route.distance / 1000).toFixed(1)} km · {Math.round(route.duration / 60)} mins
-                    </span>
-                  ) : (
-                    <span className="font-medium">
-                      {order.deliveryExecutiveName ? `${order.deliveryExecutiveName} is on the way` : "Waiting for delivery partner"}
-                    </span>
-                  )}
-                </div>
-                {(hasPickup || hasDelivery) && (
-                  <Button
-                    variant="outline" size="sm" className="h-7 text-xs"
-                    onClick={() => {
-                      const lat = order.pickupLat || order.deliveryLat!;
-                      const lng = order.pickupLng || order.deliveryLng!;
-                      window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, "_blank");
-                    }}
-                  >
-                    Open in Maps
-                  </Button>
-                )}
-              </div>
+              <CustomerOrderTimeline order={order} liveEta={liveEta} />
             </Card>
 
               {/* Items */}
@@ -432,5 +444,67 @@ export function OrderTracking({ orderId, onClose, onCancel }: OrderTrackingProps
         />
       </DialogContent>
     </Dialog>
+  );
+}
+
+function LiveMapCard({
+  order,
+  liveLoc,
+  route,
+}: {
+  order: NonNullable<ReturnType<typeof useOrder>["data"]>;
+  liveLoc: { lat: number; lng: number } | null;
+  route: { coordinates: [number, number][]; distance: number; duration: number } | null;
+}) {
+  const hasPickup = order.pickupLat != null && order.pickupLng != null;
+  const hasDelivery = order.deliveryLat != null && order.deliveryLng != null;
+  const hasExec = liveLoc?.lat != null && liveLoc?.lng != null;
+
+  return (
+    <>
+      {hasPickup || hasDelivery ? (
+        <LeafletMap
+          markers={[
+            ...(hasPickup ? [{ lat: order.pickupLat!, lng: order.pickupLng!, label: "Pickup", color: "#14b8a6", type: "pickup" as const }] : []),
+            ...(hasDelivery ? [{ lat: order.deliveryLat!, lng: order.deliveryLng!, label: order.vendorName || "Vendor", color: order.vendorLogoColor || "#8b5cf6", type: "vendor" as const }] : []),
+            ...(hasExec ? [{ lat: liveLoc!.lat, lng: liveLoc!.lng, label: order.deliveryExecutiveName || "Exec", color: "#10b981", type: "exec" as const }] : []),
+          ]}
+          center={hasPickup ? [order.pickupLat!, order.pickupLng!] : hasDelivery ? [order.deliveryLat!, order.deliveryLng!] : [12.9719, 77.6413]}
+          zoom={13}
+          height="h-48"
+          route={route ? { coordinates: route.coordinates, color: "#10b981", dashArray: "6 4" } : undefined}
+        />
+      ) : (
+        <div className="h-48 bg-muted/20 flex items-center justify-center">
+          <MapPin className="h-8 w-8 text-muted-foreground/40" />
+        </div>
+      )}
+      <div className="p-3 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs">
+          <Navigation className="h-3.5 w-3.5 text-primary" />
+          {hasExec && route ? (
+            <span className="font-medium">
+              {order.deliveryExecutiveName} · {(route.distance / 1000).toFixed(1)} km · {Math.round(route.duration / 60)} mins
+            </span>
+          ) : (
+            <span className="font-medium">
+              {order.deliveryExecutiveName ? `${order.deliveryExecutiveName} is on the way` : "Waiting for delivery partner"}
+            </span>
+          )}
+        </div>
+        {(hasPickup || hasDelivery) && (
+          <Button
+            variant="outline" size="sm" className="h-7 text-xs"
+            onClick={() => {
+              const lat = order.pickupLat || order.deliveryLat!;
+              const lng = order.pickupLng || order.deliveryLng!;
+              window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`, "_blank");
+            }}
+          >
+            Open in Maps
+          </Button>
+        )}
+      </div>
+    </>
   );
 }
