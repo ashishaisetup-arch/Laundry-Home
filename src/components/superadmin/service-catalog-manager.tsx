@@ -202,6 +202,7 @@ export function ServiceCatalogManager() {
 
       {/* Category dialog */}
       <CatalogEntryDialog
+        key={`cat-${catDialog.edit?.id ?? "new"}`}
         open={catDialog.open}
         edit={catDialog.edit}
         onClose={() => setCatDialog({ open: false })}
@@ -210,6 +211,7 @@ export function ServiceCatalogManager() {
 
       {/* Service dialog */}
       <ServiceEntryDialog
+        key={`svc-${svcDialog.edit?.id ?? "new"}`}
         open={svcDialog.open}
         categoryId={svcDialog.categoryId}
         edit={svcDialog.edit}
@@ -220,6 +222,7 @@ export function ServiceCatalogManager() {
 
       {/* Item dialog */}
       <ServiceItemDialog
+        key={`item-${itemDialog.edit?.id ?? "new"}`}
         open={itemDialog.open}
         serviceId={itemDialog.serviceId}
         edit={itemDialog.edit}

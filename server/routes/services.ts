@@ -49,6 +49,9 @@ router.get("/catalog", async (req: Request, res: Response) => {
           const { service_items: _, pricing_type, bag_price, is_active, ...serviceRest } = s;
           return {
             ...serviceRest,
+            categoryId: s.category_id,
+            imageUrl: s.image_url,
+            displayOrder: s.display_order,
             pricingType: pricing_type || "ITEM",
             bagPrice: bag_price ?? undefined,
             isActive: is_active,
@@ -69,7 +72,7 @@ router.get("/catalog", async (req: Request, res: Response) => {
           };
         });
       const { services: _, service_items: __, ...rest } = cat;
-      return { ...rest, services };
+      return { ...rest, displayOrder: cat.display_order, isActive: cat.is_active, services };
     });
 
     res.json(result);
