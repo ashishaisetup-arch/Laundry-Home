@@ -153,7 +153,7 @@ __export(api_entry_exports, {
 module.exports = __toCommonJS(api_entry_exports);
 
 // server/app.ts
-var import_express43 = __toESM(require("express"));
+var import_express44 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
 
@@ -987,6 +987,47 @@ function fail(message) {
   return { ok: false, error: "SCHEDULE_SLOT_UNAVAILABLE", message };
 }
 
+// server/lib/photo-upload.ts
+var MAX_PHOTO_BYTES = 2.5 * 1024 * 1024;
+var MAX_ORDER_PHOTOS = 5;
+var MAX_TICKET_PHOTOS = 3;
+function matchesMagic(mimeType, buf) {
+  if (mimeType === "image/jpeg") {
+    return buf.length >= 3 && buf[0] === 255 && buf[1] === 216 && buf[2] === 255;
+  }
+  if (mimeType === "image/png") {
+    return buf.length >= 8 && buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
+  }
+  return buf.length >= 12 && buf[0] === 82 && buf[1] === 73 && buf[2] === 70 && buf[3] === 70 && buf[8] === 87 && buf[9] === 69 && buf[10] === 66 && buf[11] === 80;
+}
+function validatePhotoDataUrl(dataUrl, maxBytes = MAX_PHOTO_BYTES) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) {
+    return { ok: false, error: "photo_data must be an image data URL" };
+  }
+  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+  if (!match) {
+    return { ok: false, error: "Unsupported image type \u2014 use JPEG, PNG or WebP" };
+  }
+  const mimeType = match[1];
+  const base64 = match[2];
+  let buf;
+  try {
+    buf = Buffer.from(base64, "base64");
+  } catch {
+    return { ok: false, error: "Invalid image data" };
+  }
+  if (buf.length === 0) {
+    return { ok: false, error: "Invalid image data" };
+  }
+  if (buf.length > maxBytes) {
+    return { ok: false, error: `Photo exceeds ${Math.round(maxBytes / (1024 * 1024))} MB limit` };
+  }
+  if (!matchesMagic(mimeType, buf)) {
+    return { ok: false, error: "File content does not match its image type" };
+  }
+  return { ok: true, mimeType, bytes: buf.length };
+}
+
 // server/routes/orders.ts
 function deriveScheduleModes(serviceSlugs, orderItems) {
   const enabled = /* @__PURE__ */ new Set();
@@ -1393,6 +1434,41 @@ router4.patch("/:id", async (req, res) => {
       return;
     }
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/:id/photo", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { photo_data } = req.body;
+    if (!photo_data) {
+      res.status(400).json({ error: "photo_data is required" });
+      return;
+    }
+    const check = validatePhotoDataUrl(photo_data);
+    if (!check.ok) {
+      res.status(400).json({ error: check.error });
+      return;
+    }
+    const supabase = createAdminClient();
+    const { data: order, error: fetchErr } = await supabase.from("orders").select("photos").eq("id", id).single();
+    if (fetchErr) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    const existing = order.photos || [];
+    if (existing.length >= MAX_ORDER_PHOTOS) {
+      res.status(400).json({ error: `Photo limit reached \u2014 max ${MAX_ORDER_PHOTOS} photos per order` });
+      return;
+    }
+    const photos = [...existing, photo_data];
+    const { data, error } = await supabase.from("orders").update({ photos }).eq("id", id).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2491,7 +2567,7 @@ var router14 = (0, import_express14.Router)();
 router14.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
-    const { data, error } = await supabase.from("services").select("*");
+    const { data, error } = await supabase.from("services").select("*, service_items(item_name, default_price, unit)");
     if (error) {
       res.status(500).json({ error: error.message });
       return;
@@ -2502,10 +2578,17 @@ router14.get("/", async (_req, res) => {
   }
 });
 function serializeService(s) {
-  const { pricing_type, bag_price, is_active, ...rest } = s;
+  const { service_items: items, pricing_type, bag_price, is_active, ...rest } = s;
+  const unit = s.unit || "item";
+  const pricingType = unit === "kg" ? "per_kg" : unit === "flat" ? "flat" : "per_piece";
+  const prices = (items || []).map((i) => i.default_price).filter((p) => typeof p === "number" && p > 0);
+  const basePrice = prices.length > 0 ? Math.min(...prices) : 0;
   return {
     ...rest,
-    pricingType: pricing_type || "ITEM",
+    key: s.slug ?? s.id,
+    unit,
+    pricingType,
+    basePrice,
     bagPrice: bag_price ?? void 0,
     isActive: is_active
   };
@@ -2528,6 +2611,9 @@ router14.get("/catalog", async (req, res) => {
         const { service_items: _2, pricing_type, bag_price, is_active, ...serviceRest } = s;
         return {
           ...serviceRest,
+          categoryId: s.category_id,
+          imageUrl: s.image_url,
+          displayOrder: s.display_order,
           pricingType: pricing_type || "ITEM",
           bagPrice: bag_price ?? void 0,
           isActive: is_active,
@@ -2546,7 +2632,7 @@ router14.get("/catalog", async (req, res) => {
         };
       });
       const { services: _, service_items: __, ...rest } = cat;
-      return { ...rest, services };
+      return { ...rest, displayOrder: cat.display_order, isActive: cat.is_active, services };
     });
     res.json(result);
   } catch (err) {
@@ -3392,9 +3478,19 @@ router23.post("/", async (req, res) => {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
     const admin = createAdminClient();
+    const body = { ...req.body };
+    const photos = Array.isArray(body.photos) ? body.photos.slice(0, MAX_TICKET_PHOTOS) : [];
+    for (const photo of photos) {
+      const check = validatePhotoDataUrl(photo);
+      if (!check.ok) {
+        res.status(400).json({ error: check.error });
+        return;
+      }
+    }
+    if (photos.length > 0) body.photos = photos;
     const { data, error } = await admin.from("support_tickets").insert({
-      ...req.body,
-      user_id: req.body.user_id || user?.id,
+      ...body,
+      user_id: body.user_id || user?.id,
       status: "open"
     }).select().single();
     if (error) {
@@ -4660,11 +4756,93 @@ router39.get("/pending", async (_req, res) => {
 });
 var vendor_onboarding_default = router39;
 
-// server/routes/payments.ts
+// server/routes/vendor-service-prices.ts
 var import_express40 = require("express");
 init_supabase();
 var router40 = (0, import_express40.Router)();
-router40.post("/create-order", async (req, res) => {
+async function canManageVendor(req, vendorId) {
+  const admin = createAdminClient();
+  const user = req.user;
+  if (!user?.id) return false;
+  const { data: profile } = await admin.from("user_profiles").select("role").eq("id", user.id).maybeSingle();
+  const role = profile?.role || "customer";
+  if (role === "admin" || role === "superadmin") return true;
+  const { data: vendor } = await admin.from("vendors").select("id").eq("id", vendorId).eq("owner_id", user.id).maybeSingle();
+  return !!vendor;
+}
+router40.get("/:vendorId", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("vendor_service_prices").select("*, services(name, unit), service_items(item_name, unit)").eq("vendor_id", req.params.vendorId).eq("is_active", true);
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    const result = (data || []).map((p) => ({
+      id: p.id,
+      vendorId: p.vendor_id,
+      serviceId: p.service_id,
+      itemId: p.item_id,
+      price: p.price,
+      isActive: p.is_active,
+      service: p.services ? { name: p.services.name, unit: p.services.unit } : void 0,
+      item: p.service_items ? { itemName: p.service_items.item_name, unit: p.service_items.unit } : void 0
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router40.post("/", async (req, res) => {
+  try {
+    const { vendor_id, service_id, item_id, price } = req.body;
+    if (!vendor_id || !service_id || !item_id || typeof price !== "number" || price <= 0) {
+      res.status(400).json({ error: "vendor_id, service_id, item_id and a positive price are required" });
+      return;
+    }
+    if (!await canManageVendor(req, vendor_id)) {
+      res.status(403).json({ error: "Forbidden: not your vendor" });
+      return;
+    }
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("vendor_service_prices").upsert(
+      { vendor_id, service_id, item_id, price, is_active: true },
+      { onConflict: "vendor_id,service_id,item_id", ignoreDuplicates: false }
+    ).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router40.delete("/:vendorId/:serviceId/:itemId", async (req, res) => {
+  try {
+    const { vendorId, serviceId, itemId } = req.params;
+    if (!await canManageVendor(req, vendorId)) {
+      res.status(403).json({ error: "Forbidden: not your vendor" });
+      return;
+    }
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("vendor_service_prices").delete().eq("vendor_id", vendorId).eq("service_id", serviceId).eq("item_id", itemId);
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var vendor_service_prices_default = router40;
+
+// server/routes/payments.ts
+var import_express41 = require("express");
+init_supabase();
+var router41 = (0, import_express41.Router)();
+router41.post("/create-order", async (req, res) => {
   try {
     const { amount, currency, order_id } = req.body;
     if (!amount || !order_id) {
@@ -4701,7 +4879,7 @@ router40.post("/create-order", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router40.post("/verify", async (req, res) => {
+router41.post("/verify", async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -4727,7 +4905,7 @@ router40.post("/verify", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router40.post("/wallet/add", async (req, res) => {
+router41.post("/wallet/add", async (req, res) => {
   try {
     const { amount } = req.body;
     if (!amount || amount <= 0) {
@@ -4762,12 +4940,12 @@ router40.post("/wallet/add", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var payments_default = router40;
+var payments_default = router41;
 
 // server/routes/customer-config.ts
-var import_express41 = require("express");
+var import_express42 = require("express");
 init_supabase();
-var router41 = (0, import_express41.Router)();
+var router42 = (0, import_express42.Router)();
 var CUSTOMER_FEATURE_DEFAULTS = {
   enableSubscriptions: true,
   enableCoupons: true,
@@ -4781,7 +4959,7 @@ var CUSTOMER_FEATURE_DEFAULTS = {
   enableLaundryBag: true,
   enableMixedBooking: true
 };
-router41.get("/", async (_req, res) => {
+router42.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
@@ -4799,14 +4977,14 @@ router41.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var customer_config_default = router41;
+var customer_config_default = router42;
 
 // server/routes/settings.ts
-var import_express42 = require("express");
+var import_express43 = require("express");
 init_supabase();
-var router42 = (0, import_express42.Router)();
+var router43 = (0, import_express43.Router)();
 var DEFAULTS = { pushEnabled: true, orderUpdates: true, promotions: false };
-router42.get("/", async (req, res) => {
+router43.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4831,7 +5009,7 @@ router42.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router42.patch("/notifications", async (req, res) => {
+router43.patch("/notifications", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4862,7 +5040,7 @@ router42.patch("/notifications", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router42.patch("/password", async (req, res) => {
+router43.patch("/password", async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
@@ -4901,12 +5079,12 @@ router42.patch("/password", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var settings_default = router42;
+var settings_default = router43;
 
 // server/app.ts
-var app = (0, import_express43.default)();
+var app = (0, import_express44.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
-app.use(import_express43.default.json());
+app.use(import_express44.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -4949,6 +5127,7 @@ app.use("/api/geocode", geocode_default);
 app.use("/api/routing", routing_default);
 app.use("/api/delivery/location", delivery_location_default);
 app.use("/api/vendor/onboarding", vendor_onboarding_default);
+app.use("/api/vendor-service-prices", vendor_service_prices_default);
 app.use("/api/payments", payments_default);
 app.use("/api/config/customer", customer_config_default);
 app.use("/api/settings", settings_default);
