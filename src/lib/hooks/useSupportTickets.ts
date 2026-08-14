@@ -7,6 +7,7 @@ export interface SupportTicket {
   status: string;
   priority: string;
   assignedTo: string;
+  photos?: string[];
   createdAt: string;
 }
 

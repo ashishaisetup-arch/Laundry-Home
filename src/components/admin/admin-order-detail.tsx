@@ -194,6 +194,25 @@ export function AdminOrderDetail({ orderId, onClose, onUpdated }: AdminOrderDeta
               )}
             </Card>
 
+            {/* Photos */}
+            {(order.photos || []).length > 0 && (
+              <Card className="p-4 shadow-soft">
+                <h3 className="font-semibold mb-3">Order Photos</h3>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {(order.photos || []).map((photo, i) => (
+                    <button
+                      key={i}
+                      onClick={() => window.open(photo, "_blank")}
+                      className="aspect-square overflow-hidden rounded-lg border hover:ring-2 ring-primary transition-all"
+                      title="Open photo"
+                    >
+                      <img src={photo} alt={`Order photo ${i + 1}`} className="h-full w-full object-cover" />
+                    </button>
+                  ))}
+                </div>
+              </Card>
+            )}
+
             {/* Pickup / delivery info */}
             <Card className="p-4 shadow-soft">
               <h3 className="font-semibold mb-3">Schedule</h3>

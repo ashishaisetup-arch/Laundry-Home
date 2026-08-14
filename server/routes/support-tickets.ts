@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { createAdminClient, createServerClientWithCookies } from "../supabase";
+import { validatePhotoDataUrl, MAX_TICKET_PHOTOS } from "../lib/photo-upload";
 
 const router = Router();
 
@@ -22,9 +23,20 @@ router.post("/", async (req: Request, res: Response) => {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
     const admin = createAdminClient();
+
+    const body: Record<string, any> = { ...req.body };
+
+    // Validate optional photo attachments (base64 data URLs) — max 3 per ticket
+    const photos = Array.isArray(body.photos) ? body.photos.slice(0, MAX_TICKET_PHOTOS) : [];
+    for (const photo of photos) {
+      const check = validatePhotoDataUrl(photo);
+      if (!check.ok) { res.status(400).json({ error: check.error }); return; }
+    }
+    if (photos.length > 0) body.photos = photos;
+
     const { data, error } = await admin.from("support_tickets").insert({
-      ...req.body,
-      user_id: req.body.user_id || user?.id,
+      ...body,
+      user_id: body.user_id || user?.id,
       status: "open",
     }).select().single();
     if (error) { res.status(400).json({ error: error.message }); return; }

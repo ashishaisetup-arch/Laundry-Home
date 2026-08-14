@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { createAdminClient, createServerClientWithCookies } from "../supabase";
 import { calculatePricing, applyPricingToOrder } from "../pricing";
 import { validateSchedule, SCHEDULE_ADD_ON_SLUGS } from "../lib/schedule";
+import { validatePhotoDataUrl, MAX_ORDER_PHOTOS } from "../lib/photo-upload";
 
 // Derives the fulfillment mode / delivery SLA from the time-based add-ons
 // present in the order lines (identified by service slug).
@@ -477,6 +478,45 @@ router.patch("/:id", async (req: Request, res: Response) => {
     const { data, error } = await supabase.from("orders").update(updatePayload).eq("id", id).select().single();
     if (error) { res.status(400).json({ error: error.message }); return; }
     res.json(data);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Attach a photo (base64 data URL) to an order. Enforces allowed MIME types,
+// a decoded size limit, and a per-order photo cap.
+router.post("/:id/photo", async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { photo_data } = req.body;
+    if (!photo_data) { res.status(400).json({ error: "photo_data is required" }); return; }
+
+    const check = validatePhotoDataUrl(photo_data);
+    if (!check.ok) { res.status(400).json({ error: check.error }); return; }
+
+    const supabase = createAdminClient();
+    const { data: order, error: fetchErr } = await supabase
+      .from("orders")
+      .select("photos")
+      .eq("id", id)
+      .single();
+    if (fetchErr) { res.status(404).json({ error: "Order not found" }); return; }
+
+    const existing = (order.photos || []) as string[];
+    if (existing.length >= MAX_ORDER_PHOTOS) {
+      res.status(400).json({ error: `Photo limit reached — max ${MAX_ORDER_PHOTOS} photos per order` });
+      return;
+    }
+
+    const photos = [...existing, photo_data];
+    const { data, error } = await supabase
+      .from("orders")
+      .update({ photos })
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) { res.status(400).json({ error: error.message }); return; }
+    res.status(201).json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

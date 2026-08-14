@@ -28,7 +28,8 @@ export interface ServiceType {
   name: string;
   description: string;
   icon: string; // lucide icon name
-  pricingType: "per_kg" | "per_piece" | "both";
+  unit?: string; // modern catalog unit: 'kg' | 'item' | 'flat'
+  pricingType: "per_kg" | "per_piece" | "flat" | "both";
   basePrice: number;
   expressMultiplier: number;
   gradient: string;
@@ -47,6 +48,7 @@ export interface Vendor {
   isOpen: boolean;
   tags: string[];
   servicesOffered: ServiceKey[];
+  serviceIds?: string[];
   priceLevel: 1 | 2 | 3;
   logoColor: string;
   logoInitials: string;
@@ -138,6 +140,7 @@ export interface Order {
   paymentStatus: "paid" | "pending" | "refunded";
   express: boolean;
   notes?: string;
+  photos?: string[];
   garmentCount: number;
   weightKg?: number;
   createdAt: string;
@@ -286,6 +289,7 @@ export interface CatalogService {
   taxable: boolean;
   displayOrder: number;
   isActive: boolean;
+  slug?: string;
   pricingType?: string;
   bagPrice?: number;
   items: ServiceItem[];

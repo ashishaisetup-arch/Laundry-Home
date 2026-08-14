@@ -68,6 +68,23 @@ export function AdminSupport() {
           </div>
           <p className="text-sm font-medium mt-0.5">{t.subject}</p>
           <p className="text-xs text-muted-foreground">{t.assignedTo || "Unassigned"} · {new Date(t.createdAt).toLocaleDateString()}</p>
+          {t.description && (
+            <p className="text-xs text-muted-foreground mt-1 whitespace-pre-line line-clamp-2">{t.description}</p>
+          )}
+          {(t.photos || []).length > 0 && (
+            <div className="flex gap-1.5 mt-2">
+              {(t.photos || []).map((photo, i) => (
+                <button
+                  key={i}
+                  onClick={() => window.open(photo, "_blank")}
+                  className="h-10 w-10 overflow-hidden rounded-md border hover:ring-2 ring-primary transition-all"
+                  title="Open photo"
+                >
+                  <img src={photo} alt={`Ticket photo ${i + 1}`} className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {t.assignedTo ? (
