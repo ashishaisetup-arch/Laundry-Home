@@ -119,19 +119,21 @@ function VendorOrderCard({ order, onView }: { order: Order; onView?: (id: string
         </Button>
         {["placed", "vendor_assigned"].includes(order.status) && (
           <>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 w-8 p-0 text-rose-600"
-              onClick={async () => {
-                try {
-                  await api.post(`/api/orders/${order.id}/reject`);
-                  toast.success(`Order ${order.code} rejected`);
-                } catch (e: any) { toast.error("Failed to reject order", { description: e.message }); }
-              }}
-            >
-              <XCircle className="h-3.5 w-3.5" />
-            </Button>
+            {order.status === "vendor_assigned" && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-8 p-0 text-rose-600"
+                onClick={async () => {
+                  try {
+                    await api.post(`/api/orders/${order.id}/reject`);
+                    toast.success(`Order ${order.code} rejected`);
+                  } catch (e: any) { toast.error("Failed to reject order", { description: e.message }); }
+                }}
+              >
+                <XCircle className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               size="sm"
               className="flex-1 h-8 bg-primary hover:bg-primary/90"

@@ -6,7 +6,9 @@ const router = Router();
 router.get("/", async (_req: Request, res: Response) => {
   try {
     const supabase = createAdminClient();
-    const { data, error } = await supabase.from("services").select("*");
+    const { data, error } = await supabase
+      .from("services")
+      .select("*, service_items(item_name, default_price, unit)");
     if (error) { res.status(500).json({ error: error.message }); return; }
     res.json((data || []).map(serializeService));
   } catch (err: any) {
@@ -14,11 +16,26 @@ router.get("/", async (_req: Request, res: Response) => {
   }
 });
 
+// Compatibility adapter for legacy consumers of GET /api/services. The catalog
+// migration (00022) moved prices into service_items and dropped key/base_price/
+// pricing_type; this derives a legacy-shaped response from the modern schema:
+//  - key          -> stable slug (backfilled in migration 00048) else id
+//  - pricingType  -> derived strictly from unit (kg/per_kg, item/per_piece, flat)
+//  - basePrice    -> min item default_price, ignoring null/zero placeholders
 function serializeService(s: any) {
-  const { pricing_type, bag_price, is_active, ...rest } = s;
+  const { service_items: items, pricing_type, bag_price, is_active, ...rest } = s;
+  const unit = s.unit || "item";
+  const pricingType = unit === "kg" ? "per_kg" : unit === "flat" ? "flat" : "per_piece";
+  const prices = (items || [])
+    .map((i: any) => i.default_price)
+    .filter((p: any) => typeof p === "number" && p > 0);
+  const basePrice = prices.length > 0 ? Math.min(...prices) : 0;
   return {
     ...rest,
-    pricingType: pricing_type || "ITEM",
+    key: s.slug ?? s.id,
+    unit,
+    pricingType,
+    basePrice,
     bagPrice: bag_price ?? undefined,
     isActive: is_active,
   };

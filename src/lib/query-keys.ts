@@ -10,6 +10,8 @@ export const queryKeys = {
     detail: (id: string) => ["vendors", "detail", id] as const,
   },
   services: { all: ["services"] as const },
+  serviceItems: { byService: (id: string) => ["service-items", id] as const },
+  vendorServicePrices: { byVendor: (id: string) => ["vendor-service-prices", id] as const },
   addresses: { all: ["addresses"] as const },
   reviews: { all: ["reviews"] as const, list: (url: string) => ["reviews", "list", url] as const },
   coupons: { all: ["coupons"] as const },

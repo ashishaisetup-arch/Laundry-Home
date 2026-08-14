@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { motion } from "framer-motion";
-import { Package, IndianRupee, Clock, Star, TrendingUp, Repeat, CheckCircle2, XCircle } from "lucide-react";
+import { Package, IndianRupee, Clock, Star, TrendingUp, Repeat, CheckCircle2, XCircle, ArrowRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -26,6 +26,7 @@ import {
   Tooltip,
 } from "recharts";
 import { useMyVendorId } from "./vendor-helpers";
+import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 
 export function VendorDashboard() {
   const vid = useMyVendorId();
@@ -182,41 +183,64 @@ export function VendorDashboard() {
                     <p className="text-sm font-semibold">{o.code}</p>
                     {o.express && <Badge variant="outline" className="text-[9px] py-0 h-4 border-amber-400 text-amber-600">Express</Badge>}
                   </div>
-                  <p className="text-xs text-muted-foreground">{o.customerName} · {o.garmentCount} items</p>
+                  <p className="text-xs text-muted-foreground">{o.customerName} · {o.garmentCount || (o.items || []).reduce((s, i: any) => s + (i.qty || 0), 0)} items</p>
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-semibold">{formatINRDecimal(o.total)}</p>
                   <p className="text-[10px] text-muted-foreground">{o.pickupSlot}</p>
                 </div>
                 <div className="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 w-7 p-0 text-rose-600 hover:text-rose-700"
-                    onClick={async () => {
-                      try {
-                        await api.post(`/api/orders/${o.id}/reject`);
-                        toast.success(`Order ${o.code} rejected`, { description: "Reassigned to next available vendor." });
-                        refetchOrders();
-                      } catch (e: any) { toast.error("Failed to reject order", { description: e.message }); }
-                    }}
-                  >
-                    <XCircle className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="h-7 bg-primary hover:bg-primary/90"
-                    onClick={async () => {
-                      try {
-                        await api.patch(`/api/orders/${o.id}`, { status: "vendor_accepted", currentStageIndex: 2 });
-                        toast.success(`Order ${o.code} accepted`, { description: "Customer has been notified." });
-                        refetchOrders();
-                      } catch (e: any) { toast.error("Failed to accept order", { description: e.message }); }
-                    }}
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                    Accept
-                  </Button>
+                  {o.status === "vendor_assigned" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 w-7 p-0 text-rose-600 hover:text-rose-700"
+                      onClick={async () => {
+                        try {
+                          await api.post(`/api/orders/${o.id}/reject`);
+                          toast.success(`Order ${o.code} rejected`, { description: "Reassigned to next available vendor." });
+                          refetchOrders();
+                        } catch (e: any) { toast.error("Failed to reject order", { description: e.message }); }
+                      }}
+                    >
+                      <XCircle className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {["placed", "vendor_assigned"].includes(o.status) ? (
+                    <Button
+                      size="sm"
+                      className="h-7 bg-primary hover:bg-primary/90"
+                      onClick={async () => {
+                        try {
+                          await api.patch(`/api/orders/${o.id}`, { status: "vendor_accepted", currentStageIndex: 2 });
+                          toast.success(`Order ${o.code} accepted`, { description: "Customer has been notified." });
+                          refetchOrders();
+                        } catch (e: any) { toast.error("Failed to accept order", { description: e.message }); }
+                      }}
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                      Accept
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7"
+                      onClick={async () => {
+                        const idx = ORDER_STAGE_FLOW.findIndex((s) => s.stage === o.status);
+                        const nextStage = ORDER_STAGE_FLOW[idx + 1];
+                        if (!nextStage) return;
+                        try {
+                          await api.patch(`/api/orders/${o.id}`, { status: nextStage.stage, currentStageIndex: idx + 1 });
+                          toast.success(`Status updated to ${nextStage.label}`);
+                          refetchOrders();
+                        } catch (e: any) { toast.error("Update failed", { description: e.message }); }
+                      }}
+                    >
+                      Update Status
+                      <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}
