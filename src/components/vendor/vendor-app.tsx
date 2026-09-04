@@ -16,10 +16,11 @@ import { VendorProcessing } from "./vendor-processing";
 import { VendorInventory } from "./vendor-inventory";
 import { VendorServices } from "./vendor-services";
 import { VendorAnalytics } from "./vendor-analytics";
+import { VendorReports } from "./vendor-reports";
 import { VendorStaff } from "./vendor-staff";
 
 export function VendorApp() {
-  const [view, setView, handleNavigate] = useRouterView("dashboard");
+  const [view, setView, handleNavigate, query] = useRouterView("dashboard");
   const [manualOrderOpen, setManualOrderOpen] = useState(false);
   const vid = useMyVendorId();
   const { data: orders } = useOrders({ vendorId: vid });
@@ -35,7 +36,7 @@ export function VendorApp() {
         { id: "inventory", label: "Garment Inventory", icon: "Boxes" },
         { id: "staff", label: "Staff Management", icon: "Users" },
         { id: "services", label: "Service Management", icon: "Settings2" },
-        { id: "analytics", label: "Analytics", icon: "BarChart3" },
+        { id: "reports", label: "Reports", icon: "FileBarChart" },
       ],
     },
   ], [pendingCount]);
@@ -58,13 +59,14 @@ export function VendorApp() {
         }
       >
         <AnimatePresence mode="wait">
-          {view === "dashboard" && <VendorDashboard key="dashboard" />}
-          {view === "orders" && <VendorOrders key="orders" />}
-          {view === "processing" && <VendorProcessing key="processing" />}
+          {view === "dashboard" && <VendorDashboard key="dashboard" onNavigate={handleNavigate} />}
+          {view === "orders" && <VendorOrders key="orders" filter={query.filter} onFilterChange={(f) => handleNavigate("orders", { filter: f })} />}
+          {view === "processing" && <VendorProcessing key="processing" stage={query.stage} />}
           {view === "inventory" && <VendorInventory key="inventory" />}
           {view === "staff" && <VendorStaff key="staff" />}
           {view === "services" && <VendorServices key="services" />}
           {view === "analytics" && <VendorAnalytics key="analytics" />}
+          {view === "reports" && <VendorReports key="reports" onNavigate={handleNavigate} />}
           {view === "profile" && <ProfilePage key="profile" />}
           {view === "settings" && <SettingsPage key="settings" />}
         </AnimatePresence>

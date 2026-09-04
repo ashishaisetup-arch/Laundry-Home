@@ -20,6 +20,7 @@ export function pageTitle(view: string) {
     staff: "Staff Management",
     services: "Service Management",
     analytics: "Analytics & Reports",
+    reports: "Reports",
     profile: "My Profile",
     settings: "Settings",
   }[view] || "Dashboard";
@@ -36,5 +37,6 @@ export function pageSubtitle(view: string) {
     staff: "Manage your laundry staff and assignments",
     services: "Configure your offerings, pricing and availability",
     analytics: "Revenue, ratings and operational insights",
+    reports: "Business insights and financial reporting",
   }[view];
 }

@@ -34,9 +34,30 @@ router.post("/", async (req: Request, res: Response) => {
     }
     if (photos.length > 0) body.photos = photos;
 
+    // Validate order_id: ensure the order exists and the user owns it
+    let validatedOrderId: string | null = null;
+    if (body.order_id) {
+      const { data: order, error: orderErr } = await admin
+        .from("orders")
+        .select("id, customer_id")
+        .eq("id", body.order_id)
+        .single();
+      if (orderErr || !order) {
+        res.status(400).json({ error: "Referenced order does not exist" });
+        return;
+      }
+      const userId = body.user_id || user?.id;
+      if (userId && order.customer_id !== userId) {
+        res.status(403).json({ error: "Not authorized to attach ticket to this order" });
+        return;
+      }
+      validatedOrderId = order.id;
+    }
+
     const { data, error } = await admin.from("support_tickets").insert({
       ...body,
       user_id: body.user_id || user?.id,
+      order_id: validatedOrderId,
       status: "open",
     }).select().single();
     if (error) { res.status(400).json({ error: error.message }); return; }

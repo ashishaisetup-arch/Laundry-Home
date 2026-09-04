@@ -39,6 +39,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
         .eq("id", user.id)
         .single();
       const userRole = (profile as any)?.role || "customer";
+      (req as any).userRole = userRole;
       if (!matchedRoleRoute[1].includes(userRole)) {
         res.status(403).json({ error: "Forbidden: insufficient role" });
         return;

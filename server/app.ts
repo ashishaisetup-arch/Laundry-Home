@@ -45,6 +45,7 @@ import vendorServicePricesRouter from "./routes/vendor-service-prices";
 import paymentsRouter from "./routes/payments";
 import customerConfigRouter from "./routes/customer-config";
 import settingsRouter from "./routes/settings";
+import vendorReportsRouter from "./routes/vendor-reports";
 
 const app = express();
 
@@ -98,5 +99,6 @@ app.use("/api/vendor-service-prices", vendorServicePricesRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/config/customer", customerConfigRouter);
 app.use("/api/settings", settingsRouter);
+app.use("/api/vendor/reports", vendorReportsRouter);
 
 export default app;
