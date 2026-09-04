@@ -3,6 +3,8 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/shared/stat-card";
+import { StatCardSkeleton } from "@/components/shared/skeleton-card";
+import { ErrorState } from "@/components/shared/error-state";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useReportOrdersOperations, type ReportParams } from "@/lib/hooks/useVendorReports";
@@ -17,11 +19,20 @@ interface Props {
 }
 
 export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExportPDF }: Props) {
-  const { data, loading, error } = useReportOrdersOperations(params);
+  const { data, loading, error, refetch } = useReportOrdersOperations(params);
 
-  if (loading) return <div className="grid md:grid-cols-2 gap-4">{Array.from({ length: 4 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}</div>;
-  if (error) return <p className="text-sm text-rose-500">{error}</p>;
-  if (!data) return null;
+  if (loading) return (
+    <div className="space-y-6">
+      <div className="grid md:grid-cols-3 lg:grid-cols-6 gap-4">
+        {Array.from({ length: 6 }).map((_, i) => <StatCardSkeleton key={i} />)}
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        {Array.from({ length: 2 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}
+      </div>
+    </div>
+  );
+  if (error) return <ErrorState title="Failed to load orders" message={error} onRetry={refetch} />;
+  if (!data) return <EmptyState icon={Inbox} title="No order data" description="No orders found for the selected period and filters." />;
 
   const statusColumns = [
     { header: "Status", dataKey: "status" },

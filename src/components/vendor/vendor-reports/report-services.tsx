@@ -1,6 +1,8 @@
-import { Star, Download, FileDown } from "lucide-react";
+import { Star, Download, FileDown, Inbox } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/shared/error-state";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useReportServices, type ReportParams } from "@/lib/hooks/useVendorReports";
 import { formatINR } from "@/lib/utils";
@@ -13,11 +15,11 @@ interface Props {
 }
 
 export function ReportServices({ params, onExportCSV, onExportPDF }: Props) {
-  const { data, loading, error } = useReportServices(params);
+  const { data, loading, error, refetch } = useReportServices(params);
 
   if (loading) return <Card className="h-64 animate-pulse" />;
-  if (error) return <p className="text-sm text-rose-500">{error}</p>;
-  if (!data || data.services.length === 0) return <p className="text-sm text-muted-foreground">No service data for this period.</p>;
+  if (error) return <ErrorState title="Failed to load services" message={error} onRetry={refetch} />;
+  if (!data || data.services.length === 0) return <EmptyState icon={Inbox} title="No service data" description="No services found for the selected period and filters." />;
 
   const chartData = data.services.slice(0, 8);
 
@@ -54,7 +56,7 @@ export function ReportServices({ params, onExportCSV, onExportPDF }: Props) {
               <XAxis dataKey="name" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" height={80} />
               <YAxis tick={{ fontSize: 10 }} />
               <Tooltip formatter={(v: number) => formatINR(v)} />
-              <Bar dataKey="revenue" fill="#0d9488" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="revenue" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>

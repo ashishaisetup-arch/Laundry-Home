@@ -1,7 +1,10 @@
-import { Star, MessageSquare, Download, FileDown } from "lucide-react";
+import { Star, MessageSquare, Download, FileDown, Inbox } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/shared/stat-card";
+import { StatCardSkeleton } from "@/components/shared/skeleton-card";
+import { ErrorState } from "@/components/shared/error-state";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useReportRatingsIssues, type ReportParams } from "@/lib/hooks/useVendorReports";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts";
@@ -13,11 +16,20 @@ interface Props {
 }
 
 export function ReportRatingsIssues({ params, onExportCSV, onExportPDF }: Props) {
-  const { data, loading, error } = useReportRatingsIssues(params);
+  const { data, loading, error, refetch } = useReportRatingsIssues(params);
 
-  if (loading) return <div className="grid md:grid-cols-2 gap-4">{Array.from({ length: 2 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}</div>;
-  if (error) return <p className="text-sm text-rose-500">{error}</p>;
-  if (!data) return null;
+  if (loading) return (
+    <div className="space-y-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
+        {Array.from({ length: 5 }).map((_, i) => <StatCardSkeleton key={i} />)}
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        {Array.from({ length: 2 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}
+      </div>
+    </div>
+  );
+  if (error) return <ErrorState title="Failed to load ratings" message={error} onRetry={refetch} />;
+  if (!data) return <EmptyState icon={Inbox} title="No rating data" description="No reviews found for the selected period and filters." />;
 
   const distributionData = [1, 2, 3, 4, 5].map((star) => ({
     stars: `${star}★`,
@@ -57,7 +69,7 @@ export function ReportRatingsIssues({ params, onExportCSV, onExportPDF }: Props)
               <XAxis type="number" tick={{ fontSize: 10 }} />
               <YAxis type="category" dataKey="stars" tick={{ fontSize: 12 }} width={30} />
               <Tooltip />
-              <Bar dataKey="count" fill="#f59e0b" radius={[0, 4, 4, 0]} />
+              <Bar dataKey="count" fill="var(--chart-4)" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>
@@ -70,7 +82,7 @@ export function ReportRatingsIssues({ params, onExportCSV, onExportPDF }: Props)
               <XAxis dataKey="week" tick={{ fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} />
               <YAxis domain={[0, 5]} tick={{ fontSize: 10 }} />
               <Tooltip />
-              <Line type="monotone" dataKey="avg" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="avg" stroke="var(--chart-4)" strokeWidth={2} dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </Card>

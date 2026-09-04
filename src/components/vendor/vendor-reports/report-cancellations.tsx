@@ -1,7 +1,10 @@
-import { XCircle, IndianRupee, AlertTriangle, Download, FileDown } from "lucide-react";
+import { XCircle, IndianRupee, AlertTriangle, Download, FileDown, Inbox } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/shared/stat-card";
+import { StatCardSkeleton } from "@/components/shared/skeleton-card";
+import { ErrorState } from "@/components/shared/error-state";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useReportCancellations, type ReportParams } from "@/lib/hooks/useVendorReports";
 import { formatINR } from "@/lib/utils";
@@ -15,11 +18,20 @@ interface Props {
 }
 
 export function ReportCancellations({ params, onDrillDown, onExportCSV, onExportPDF }: Props) {
-  const { data, loading, error } = useReportCancellations(params);
+  const { data, loading, error, refetch } = useReportCancellations(params);
 
-  if (loading) return <div className="grid md:grid-cols-2 gap-4">{Array.from({ length: 2 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}</div>;
-  if (error) return <p className="text-sm text-rose-500">{error}</p>;
-  if (!data) return null;
+  if (loading) return (
+    <div className="space-y-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {Array.from({ length: 3 }).map((_, i) => <StatCardSkeleton key={i} />)}
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        {Array.from({ length: 2 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}
+      </div>
+    </div>
+  );
+  if (error) return <ErrorState title="Failed to load cancellations" message={error} onRetry={refetch} />;
+  if (!data) return <EmptyState icon={Inbox} title="No cancellation data" description="No cancellations found for the selected period and filters." />;
 
   const cancelledColumns = [
     { header: "Order", dataKey: "code" },
@@ -72,7 +84,7 @@ export function ReportCancellations({ params, onDrillDown, onExportCSV, onExport
                 <XAxis dataKey="reason" tick={{ fontSize: 9 }} angle={-30} textAnchor="end" height={80} />
                 <YAxis tick={{ fontSize: 10 }} />
                 <Tooltip />
-                <Bar dataKey="count" fill="#f43f5e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="count" fill="var(--chart-5)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -86,7 +98,7 @@ export function ReportCancellations({ params, onDrillDown, onExportCSV, onExport
               <XAxis dataKey="week" tick={{ fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} />
               <YAxis tick={{ fontSize: 10 }} />
               <Tooltip />
-              <Line type="monotone" dataKey="count" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="count" stroke="var(--chart-5)" strokeWidth={2} dot={{ r: 3 }} />
             </LineChart>
           </ResponsiveContainer>
         </Card>

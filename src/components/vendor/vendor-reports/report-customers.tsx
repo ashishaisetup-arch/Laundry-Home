@@ -1,7 +1,10 @@
-import { Users, Repeat, UserPlus, Download, FileDown } from "lucide-react";
+import { Users, Repeat, UserPlus, Download, FileDown, Inbox } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/shared/stat-card";
+import { StatCardSkeleton } from "@/components/shared/skeleton-card";
+import { ErrorState } from "@/components/shared/error-state";
+import { EmptyState } from "@/components/shared/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useReportCustomers, type ReportParams } from "@/lib/hooks/useVendorReports";
 import { formatINR } from "@/lib/utils";
@@ -14,15 +17,24 @@ interface Props {
 }
 
 export function ReportCustomers({ params, onExportCSV, onExportPDF }: Props) {
-  const { data, loading, error } = useReportCustomers(params);
+  const { data, loading, error, refetch } = useReportCustomers(params);
 
-  if (loading) return <div className="grid md:grid-cols-2 gap-4">{Array.from({ length: 2 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}</div>;
-  if (error) return <p className="text-sm text-rose-500">{error}</p>;
-  if (!data) return null;
+  if (loading) return (
+    <div className="space-y-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {Array.from({ length: 3 }).map((_, i) => <StatCardSkeleton key={i} />)}
+      </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        {Array.from({ length: 2 }).map((_, i) => <Card key={i} className="h-64 animate-pulse" />)}
+      </div>
+    </div>
+  );
+  if (error) return <ErrorState title="Failed to load customers" message={error} onRetry={refetch} />;
+  if (!data) return <EmptyState icon={Inbox} title="No customer data" description="No customers found for the selected period and filters." />;
 
   const pieData = [
-    { name: "Repeat", value: data.repeatVsNew.repeat, color: "#0d9488" },
-    { name: "New", value: data.repeatVsNew.new, color: "#8b5cf6" },
+    { name: "Repeat", value: data.repeatVsNew.repeat, color: "var(--chart-1)" },
+    { name: "New", value: data.repeatVsNew.new, color: "var(--chart-2)" },
   ].filter((d) => d.value > 0);
 
   const columns = [
