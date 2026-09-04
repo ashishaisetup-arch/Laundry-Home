@@ -143,12 +143,19 @@ router.get("/sales-revenue", async (req: Request, res: Response) => {
     const platformFees = allOrders.reduce((s: number, o: any) => s + (o.platform_fee || 0), 0);
     const deliveryFees = allOrders.reduce((s: number, o: any) => s + (o.delivery_fee || 0), 0);
     const expressSurcharges = allOrders.reduce((s: number, o: any) => s + (o.express_surcharge || 0), 0);
+    const surgeCharges = allOrders.reduce((s: number, o: any) => s + (o.surge_charge || 0), 0);
     const taxes = allOrders.reduce((s: number, o: any) => s + (o.taxes || 0), 0);
 
     const netOrderValue = subtotal - couponDiscount - subscriptionDiscount;
     const grossRevenue = allOrders.reduce((s: number, o: any) => s + (o.total || 0), 0);
     const estimatedCommission = Math.round(grossRevenue * 0.10);
-    const estimatedVendorEarnings = grossRevenue - estimatedCommission;
+    const estimatedVendorEarnings = grossRevenue - refunds - estimatedCommission;
+
+    // Self-check: netOrderValue + fees + taxes should equal grossRevenue
+    const expectedCustomerAmount = netOrderValue + platformFees + deliveryFees + expressSurcharges + surgeCharges + taxes;
+    if (expectedCustomerAmount !== grossRevenue && allOrders.length > 0) {
+      console.warn(`[reports] Reconciliation mismatch: expected ${expectedCustomerAmount}, got ${grossRevenue}`);
+    }
 
     const dailyMap: Record<string, { revenue: number; orders: number }> = {};
     allOrders.forEach((o: any) => {
@@ -228,6 +235,7 @@ router.get("/sales-revenue", async (req: Request, res: Response) => {
       platformFees,
       deliveryFees,
       expressSurcharges,
+      surgeCharges,
       taxes,
       grossRevenue,
       estimatedCommission,

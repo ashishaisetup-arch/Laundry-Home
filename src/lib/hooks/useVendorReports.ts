@@ -45,6 +45,7 @@ export interface ReportSalesRevenue {
   platformFees: number;
   deliveryFees: number;
   expressSurcharges: number;
+  surgeCharges: number;
   taxes: number;
   grossRevenue: number;
   estimatedCommission: number;
