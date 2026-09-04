@@ -21,6 +21,7 @@ export function exportToPDF(
   subtitle: string,
   data: Record<string, unknown>[],
   columns: { header: string; dataKey: string }[],
+  filename?: string,
 ) {
   const doc = new jsPDF({ orientation: columns.length > 5 ? "landscape" : "portrait" });
 
@@ -47,7 +48,7 @@ export function exportToPDF(
     alternateRowStyles: { fillColor: [248, 250, 252] },
   });
 
-  doc.save(filename);
+  doc.save(filename || `${title.toLowerCase().replace(/\s+/g, "-")}.pdf`);
 }
 
 export function buildExportFilename(reportType: string, service: string | undefined, startDate: string, endDate: string): string {

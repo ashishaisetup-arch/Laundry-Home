@@ -174,7 +174,7 @@ export function ReportSalesRevenue({
   ];
 
   // ── Reconciliation rows ──
-  const reconciliationRows = [
+  const reconciliationRows: { label: string; value: number; type: "neutral" | "negative" | "positive" | "total" | "final" }[] = [
     {
       label: "Subtotal (pre-discount)",
       value: data.subtotal,
