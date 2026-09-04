@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { exportToCSV, exportToPDF, buildExportFilename } from "@/lib/export";
 import type { ReportParams } from "@/lib/hooks/useVendorReports";
+import type { ViewQuery } from "@/lib/hooks/use-router-view";
 import { useServices } from "@/lib/hooks/useServices";
 import { ReportOverview } from "./vendor-reports/report-overview";
 import { ReportSalesRevenue } from "./vendor-reports/report-sales-revenue";
@@ -87,7 +88,7 @@ const STATUS_OPTIONS = [
 ];
 
 interface Props {
-  onNavigate: (view: string, opts?: { filter?: string }) => void;
+  onNavigate: (view: string, opts?: ViewQuery) => void;
 }
 
 export function VendorReports({ onNavigate }: Props) {
@@ -108,8 +109,15 @@ export function VendorReports({ onNavigate }: Props) {
     status: statusFilter === "_all" ? undefined : statusFilter,
   };
 
-  const handleDrillDown = (filters: { status?: string; delayed?: boolean }) => {
-    onNavigate("orders", { filter: filters.status || "processing" });
+  const handleDrillDown = (filters: { status?: string; delayed?: boolean; startDate?: string; endDate?: string; service?: string; orderStatus?: string }) => {
+    onNavigate("orders", {
+      filter: filters.status || "processing",
+      delayed: filters.delayed,
+      startDate: filters.startDate || startStr,
+      endDate: filters.endDate || endStr,
+      service: filters.service || (serviceFilter !== "_all" ? serviceFilter : undefined),
+      status: filters.orderStatus || (statusFilter !== "_all" ? statusFilter : undefined),
+    });
   };
 
   const handleExportCSV = (data: Record<string, unknown>[], reportType: string) => {

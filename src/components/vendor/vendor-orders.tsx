@@ -11,12 +11,33 @@ import { formatINRDecimal } from "@/lib/utils";
 import { toast } from "sonner";
 import { ORDER_STAGE_FLOW } from "@/lib/data/stages";
 import type { Order } from "@/lib/types";
+import type { ViewQuery } from "@/lib/hooks/use-router-view";
 import { VendorOrderDetail } from "./vendor-order-detail";
 import { useMyVendorId } from "./vendor-helpers";
 
-export function VendorOrders() {
+const TAB_FILTERS: Record<string, string[]> = {
+  pending: ["placed", "vendor_assigned"],
+  accepted: ["vendor_accepted", "pickup_scheduled"],
+  processing: [
+    "pickup_completed", "laundry_received", "sorting", "tagging",
+    "washing", "drying", "ironing", "dry_cleaning",
+    "quality_inspection", "packing", "ready_for_dispatch",
+  ],
+  completed: ["delivered", "completed"],
+};
+
+const TAB_IDS = Object.keys(TAB_FILTERS);
+
+export function VendorOrders({ filter, onFilterChange, query }: { filter?: string; onFilterChange?: (filter: string) => void; query?: ViewQuery }) {
   const vid = useMyVendorId();
-  const { data: orders, refetch: refetchOrders } = useOrders({ vendorId: vid });
+  const { data: orders, refetch: refetchOrders } = useOrders({
+    vendorId: vid,
+    status: query?.status,
+    startDate: query?.startDate,
+    endDate: query?.endDate,
+    service: query?.service,
+    delayed: query?.delayed,
+  });
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
   useEffect(() => {
     if (!vid) return;
@@ -25,16 +46,16 @@ export function VendorOrders() {
   }, [vid, refetchOrders]);
   const allVendorOrders = orders || [];
 
-  const tabFilters: Record<string, string[]> = {
-    pending: ["placed", "vendor_assigned"],
-    accepted: ["vendor_accepted", "pickup_scheduled"],
-    processing: [
-      "pickup_completed", "laundry_received", "sorting", "tagging",
-      "washing", "drying", "ironing", "dry_cleaning",
-      "quality_inspection", "packing", "ready_for_dispatch",
-    ],
-    completed: ["delivered", "completed"],
-  };
+  // The URL is the source of truth for the active tab. Unknown filters fall
+  // back to "pending" and normalize the URL so the state is always valid.
+  const activeTab = filter && TAB_IDS.includes(filter) ? filter : "pending";
+  useEffect(() => {
+    if (filter && !TAB_IDS.includes(filter)) {
+      onFilterChange?.("pending");
+    }
+  }, [filter, onFilterChange]);
+
+  const tabFilters = TAB_FILTERS;
 
   const counts = Object.fromEntries(
     Object.entries(tabFilters).map(([tab, statuses]) => [
@@ -44,7 +65,7 @@ export function VendorOrders() {
 
   return (
     <>
-      <Tabs defaultValue="pending">
+      <Tabs value={activeTab} onValueChange={(v) => onFilterChange?.(v)}>
         <TabsList>
           <TabsTrigger value="pending">Pending <Badge variant="secondary" className="ml-1.5 text-[10px]">{counts.pending}</Badge></TabsTrigger>
           <TabsTrigger value="accepted">Accepted <Badge variant="secondary" className="ml-1.5 text-[10px]">{counts.accepted}</Badge></TabsTrigger>
@@ -58,7 +79,7 @@ export function VendorOrders() {
             <TabsContent key={tab} value={tab} className="mt-4">
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filtered.map((o) => (
-                  <VendorOrderCard key={o.id} order={o} onView={setDetailOrderId} />
+                  <VendorOrderCard key={o.id} order={o} onView={setDetailOrderId} onRefetch={refetchOrders} />
                 ))}
               </div>
             </TabsContent>
@@ -70,7 +91,7 @@ export function VendorOrders() {
   );
 }
 
-function VendorOrderCard({ order, onView }: { order: Order; onView?: (id: string) => void }) {
+function VendorOrderCard({ order, onView, onRefetch }: { order: Order; onView?: (id: string) => void; onRefetch?: () => void }) {
   const stage = ORDER_STAGE_FLOW[order.currentStageIndex];
   const itemCount = order.garmentCount || (order.items || []).reduce((sum, i: any) => sum + (i.qty || 0), 0);
   return (
@@ -128,6 +149,7 @@ function VendorOrderCard({ order, onView }: { order: Order; onView?: (id: string
                   try {
                     await api.post(`/api/orders/${order.id}/reject`);
                     toast.success(`Order ${order.code} rejected`);
+                    onRefetch?.();
                   } catch (e: any) { toast.error("Failed to reject order", { description: e.message }); }
                 }}
               >
@@ -141,6 +163,7 @@ function VendorOrderCard({ order, onView }: { order: Order; onView?: (id: string
                 try {
                   await api.patch(`/api/orders/${order.id}`, { status: "vendor_accepted", currentStageIndex: 2 });
                   toast.success(`Order ${order.code} accepted`);
+                  onRefetch?.();
                 } catch (e: any) { toast.error("Failed to accept order", { description: e.message }); }
               }}
             >
@@ -157,6 +180,7 @@ function VendorOrderCard({ order, onView }: { order: Order; onView?: (id: string
             try {
               await api.patch(`/api/orders/${order.id}`, { status: nextStage.stage, currentStageIndex: idx + 1 });
               toast.success(`Status updated to ${nextStage.label}`);
+              onRefetch?.();
             } catch (e: any) { toast.error("Update failed", { description: e.message }); }
           }}>
             Update Status

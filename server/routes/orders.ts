@@ -3,6 +3,7 @@ import { createAdminClient, createServerClientWithCookies } from "../supabase";
 import { calculatePricing, applyPricingToOrder } from "../pricing";
 import { validateSchedule, SCHEDULE_ADD_ON_SLUGS } from "../lib/schedule";
 import { validatePhotoDataUrl, MAX_ORDER_PHOTOS } from "../lib/photo-upload";
+import { resolveDateBoundaries, resolveBusinessTimezone } from "./vendor-reports-utils";
 
 // Derives the fulfillment mode / delivery SLA from the time-based add-ons
 // present in the order lines (identified by service slug).
@@ -88,6 +89,32 @@ router.get("/", async (req: Request, res: Response) => {
     if (deliveryExecutiveId) query = query.eq("delivery_executive_id", deliveryExecutiveId);
     if (status) query = query.eq("status", status);
     if (search) query = query.or(`code.ilike.%${search}%,customer_name.ilike.%${search}%,vendor_name.ilike.%${search}%,status.ilike.%${search}%`);
+
+    // Drill-down filters from reports
+    const startDateStr = req.query.startDate as string | undefined;
+    const endDateStr = req.query.endDate as string | undefined;
+    const service = req.query.service as string | undefined;
+    const delayed = req.query.delayed === "true";
+
+    if (startDateStr && endDateStr && vendorId) {
+      const tz = await resolveBusinessTimezone(admin, vendorId);
+      const { startDate, endDate } = resolveDateBoundaries(startDateStr, endDateStr, tz);
+      query = query.gte("created_at", startDate).lte("created_at", endDate);
+    }
+
+    if (service) {
+      query = query.contains("items_v2", [{ serviceName: service }]);
+    }
+
+    if (delayed) {
+      const now = new Date().toISOString();
+      query = query
+        .not("status", "eq", "completed")
+        .not("status", "eq", "cancelled")
+        .not("status", "eq", "delivered")
+        .not("estimated_delivery_at", "is", null)
+        .lt("estimated_delivery_at", now);
+    }
 
     const { data, error } = await query;
     if (error) { console.error("[orders] DB error:", error.message); res.status(500).json({ error: error.message }); return; }

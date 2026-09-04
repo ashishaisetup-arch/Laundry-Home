@@ -60,7 +60,7 @@ export function VendorApp() {
       >
         <AnimatePresence mode="wait">
           {view === "dashboard" && <VendorDashboard key="dashboard" onNavigate={handleNavigate} />}
-          {view === "orders" && <VendorOrders key="orders" filter={query.filter} onFilterChange={(f) => handleNavigate("orders", { filter: f })} />}
+          {view === "orders" && <VendorOrders key="orders" filter={query.filter} query={query} onFilterChange={(f) => handleNavigate("orders", { filter: f })} />}
           {view === "processing" && <VendorProcessing key="processing" stage={query.stage} />}
           {view === "inventory" && <VendorInventory key="inventory" />}
           {view === "staff" && <VendorStaff key="staff" />}

@@ -85,7 +85,7 @@ export interface ReportOrdersOperations {
     qualityIssues: number;
     failedCancelled: number;
   };
-  delayedDrillDown: { status: string; delayed: boolean; startDate: string; endDate: string };
+  delayedDrillDown: { status: string; delayed: boolean; startDate: string; endDate: string; service?: string; orderStatus?: string };
   topDelayedOrders: { id: string; code: string; customerName: string; total: number; createdAt: string }[];
 }
 

@@ -143,42 +143,77 @@ export function buildOrderQuery(
   return q;
 }
 
+// ── Stage event helpers ──
+
+export async function loadStageEvents(
+  supabase: any,
+  orderIds: string[],
+): Promise<Record<string, Record<string, string>>> {
+  if (orderIds.length === 0) return {};
+
+  const { data: events } = await supabase
+    .from("order_stage_events")
+    .select("order_id, stage, timestamp")
+    .in("order_id", orderIds)
+    .order("timestamp", { ascending: true });
+
+  if (!events || events.length === 0) return {};
+
+  const byOrder: Record<string, Record<string, string>> = {};
+  for (const e of events) {
+    if (!byOrder[e.order_id]) byOrder[e.order_id] = {};
+    if (!byOrder[e.order_id][e.stage]) {
+      byOrder[e.order_id][e.stage] = e.timestamp;
+    }
+  }
+  return byOrder;
+}
+
 // ── KPI computation helpers ──
 
-export function computeTurnaroundHours(orders: any[]): number | null {
-  const completed = orders.filter(
-    (o) => ["completed", "delivered"].includes(o.status) && o.created_at,
-  );
-  if (completed.length === 0) return null;
+export function computeTurnaroundFromEvents(
+  stageEvents: Record<string, Record<string, string>>,
+): number | null {
+  const diffs: number[] = [];
 
-  const diffs = completed
-    .map((o) => {
-      if (!o.estimated_delivery_at || !o.created_at) return null;
-      const diff =
-        new Date(o.updated_at || o.estimated_delivery_at).getTime() -
-        new Date(o.created_at).getTime();
-      return diff / (1000 * 60 * 60);
-    })
-    .filter((d): d is number => d !== null && d >= 0);
+  for (const stages of Object.values(stageEvents)) {
+    const pickup = stages["pickup_completed"];
+    const completion = stages["delivered"] ?? stages["completed"];
+    if (pickup && completion) {
+      const diff = (new Date(completion).getTime() - new Date(pickup).getTime()) / (1000 * 60 * 60);
+      if (diff >= 0) diffs.push(diff);
+    }
+  }
 
   if (diffs.length === 0) return null;
   return Math.round(diffs.reduce((s, d) => s + d, 0) / diffs.length);
 }
 
-export function computeOnTimeRate(orders: any[]): number | null {
+export function computeOnTimeRateFromEvents(
+  stageEvents: Record<string, Record<string, string>>,
+  orders: any[],
+): number | null {
   const eligible = orders.filter(
-    (o) =>
-      ["completed", "delivered"].includes(o.status) && o.estimated_delivery_at,
+    (o) => ["completed", "delivered"].includes(o.status) && o.estimated_delivery_at,
   );
   if (eligible.length === 0) return null;
 
-  const onTime = eligible.filter((o) => {
-    const completion = new Date(o.updated_at || o.created_at).getTime();
-    const estimated = new Date(o.estimated_delivery_at).getTime();
-    return completion <= estimated;
-  });
+  let onTime = 0;
+  let counted = 0;
+  for (const o of eligible) {
+    const stages = stageEvents[o.id];
+    if (!stages) continue;
+    const completion = stages["delivered"] ?? stages["completed"];
+    if (completion) {
+      counted++;
+      if (new Date(completion).getTime() <= new Date(o.estimated_delivery_at).getTime()) {
+        onTime++;
+      }
+    }
+  }
 
-  return Math.round((onTime.length / eligible.length) * 100);
+  if (counted === 0) return null;
+  return Math.round((onTime / counted) * 100);
 }
 
 export function computeRepeatRate(orders: any[]): {

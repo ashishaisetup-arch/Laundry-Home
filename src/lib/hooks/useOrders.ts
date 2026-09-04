@@ -13,7 +13,7 @@ function buildOrdersUrl(params?: Record<string, string | null | undefined>): str
     : "/api/orders";
 }
 
-export function useOrders(params?: { vendorId?: string | null; customerId?: string; status?: string; limit?: number; admin?: string; deliveryExecutiveId?: string }) {
+export function useOrders(params?: { vendorId?: string | null; customerId?: string; status?: string; limit?: number; admin?: string; deliveryExecutiveId?: string; startDate?: string; endDate?: string; service?: string; delayed?: boolean }) {
   const queryClient = useQueryClient();
   const url = buildOrdersUrl(params as Record<string, string | null | undefined>);
   const queryKey = queryKeys.orders.list(url);

@@ -6,8 +6,9 @@ import {
   resolveDateBoundaries,
   resolveBusinessTimezone,
   buildOrderQuery,
-  computeTurnaroundHours,
-  computeOnTimeRate,
+  loadStageEvents,
+  computeTurnaroundFromEvents,
+  computeOnTimeRateFromEvents,
   computeRepeatRate,
   COLORS,
   CUSTOMER_SEGMENTS,
@@ -34,9 +35,12 @@ router.get("/overview", async (req: Request, res: Response) => {
     const totalRevenue = completedOrders.reduce((s: number, o: any) => s + (o.total || 0), 0);
     const aov = completedOrders.length > 0 ? Math.round(totalRevenue / completedOrders.length) : 0;
 
+    const orderIds = allOrders.map((o: any) => o.id);
+    const stageEvents = await loadStageEvents(supabase, orderIds);
+
     const { repeatRate, repeatCount, uniqueCustomers } = computeRepeatRate(allOrders);
-    const avgTurnaroundHrs = computeTurnaroundHours(allOrders);
-    const onTimeRate = computeOnTimeRate(allOrders);
+    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
+    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
 
     const cancellationRate = allOrders.length > 0 ? Math.round((cancelledOrders.length / allOrders.length) * 100) : 0;
 
@@ -267,9 +271,12 @@ router.get("/orders-operations", async (req: Request, res: Response) => {
     const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
     const allOrders = orders || [];
 
+    const orderIds = allOrders.map((o: any) => o.id);
+    const stageEvents = await loadStageEvents(supabase, orderIds);
+
     const completedOrders = allOrders.filter((o: any) => ["completed", "delivered"].includes(o.status));
-    const avgTurnaroundHrs = computeTurnaroundHours(allOrders);
-    const onTimeRate = computeOnTimeRate(allOrders);
+    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
+    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
 
     const delayed = allOrders.filter((o: any) =>
       !["completed", "cancelled", "delivered"].includes(o.status) &&
@@ -283,18 +290,54 @@ router.get("/orders-operations", async (req: Request, res: Response) => {
       statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
     });
 
-    const stageOrder = ["placed", "vendor_assigned", "processing", "ready", "out_for_delivery", "delivered", "completed"];
-    const funnelStages = stageOrder.map((stage, i) => {
-      const count = statusCounts[stage] || 0;
-      const prevCount = i > 0 ? (statusCounts[stageOrder[i - 1]] || 0) : allOrders.length;
+    // ── Funnel: cumulative progression derived from ORDER_STAGE_FLOW ──
+    const ORDER_STAGE_FLOW = [
+      "placed", "vendor_assigned", "vendor_accepted", "pickup_scheduled",
+      "pickup_completed", "laundry_received", "sorting", "tagging",
+      "washing", "drying", "ironing", "dry_cleaning",
+      "quality_inspection", "packing", "ready_for_dispatch",
+      "out_for_delivery", "delivered", "completed",
+    ];
+    const stageIndexMap: Record<string, number> = {};
+    ORDER_STAGE_FLOW.forEach((s, i) => { stageIndexMap[s] = i; });
+
+    const funnelMilestones = [
+      { key: "received", label: "Received", stage: "vendor_assigned" },
+      { key: "accepted", label: "Accepted", stage: "vendor_accepted" },
+      { key: "picked_up", label: "Picked Up", stage: "pickup_completed" },
+      { key: "processing", label: "Processing", stage: "laundry_received" },
+      { key: "ready", label: "Ready", stage: "ready_for_dispatch" },
+      { key: "delivered", label: "Delivered", stage: "delivered" },
+    ].map((m) => {
+      const minIndex = stageIndexMap[m.stage];
+      if (minIndex === undefined) {
+        throw new Error(`[reports] Unknown funnel milestone stage: "${m.stage}". Check ORDER_STAGE_FLOW.`);
+      }
+      return { ...m, minIndex };
+    });
+
+    const funnelStages = funnelMilestones.map((m, i) => {
+      const count = allOrders.filter((o: any) => {
+        const idx = stageIndexMap[o.status];
+        return idx !== undefined && idx >= m.minIndex;
+      }).length;
+
+      const prevCount = i > 0
+        ? allOrders.filter((o: any) => {
+            const idx = stageIndexMap[o.status];
+            return idx !== undefined && idx >= funnelMilestones[i - 1].minIndex;
+          }).length
+        : allOrders.length;
+
       return {
-        stage,
+        stage: m.label,
         count,
         conversionRate: prevCount > 0 ? Math.round((count / prevCount) * 100) : null,
         avgTimeHours: null as number | null,
       };
     });
 
+    // ── Orders by day ──
     const dayMap: Record<string, number> = {};
     allOrders.forEach((o: any) => {
       const day = o.created_at?.slice(0, 10) || "unknown";
@@ -302,19 +345,33 @@ router.get("/orders-operations", async (req: Request, res: Response) => {
     });
     const ordersByDay = Object.entries(dayMap).map(([day, count]) => ({ day, count })).sort((a, b) => a.day.localeCompare(b.day));
 
-    const buckets = ["< 24h", "24-48h", "48-72h", "72-96h", "96h+"];
-    const turnaroundMap: Record<string, number> = {};
-    buckets.forEach((b) => turnaroundMap[b] = 0);
-    completedOrders.forEach((o: any) => {
-      if (!o.estimated_delivery_at || !o.created_at) return;
-      const hours = (new Date(o.updated_at || o.estimated_delivery_at).getTime() - new Date(o.created_at).getTime()) / (1000 * 60 * 60);
-      if (hours < 24) turnaroundMap["< 24h"]++;
-      else if (hours < 48) turnaroundMap["24-48h"]++;
-      else if (hours < 72) turnaroundMap["48-72h"]++;
-      else if (hours < 96) turnaroundMap["72-96h"]++;
-      else turnaroundMap["96h+"]++;
-    });
-    const turnaroundHistogram = buckets.map((bucket) => ({ bucket, count: turnaroundMap[bucket] }));
+    // ── Turnaround histogram: empty array when no valid event pairs ──
+    const turnaroundDiffs: number[] = [];
+    for (const o of completedOrders) {
+      const stages = stageEvents[o.id];
+      if (!stages) continue;
+      const pickup = stages["pickup_completed"];
+      const completion = stages["delivered"] ?? stages["completed"];
+      if (pickup && completion) {
+        const hours = (new Date(completion).getTime() - new Date(pickup).getTime()) / (1000 * 60 * 60);
+        if (hours >= 0) turnaroundDiffs.push(hours);
+      }
+    }
+
+    let turnaroundHistogram: { bucket: string; count: number }[] = [];
+    if (turnaroundDiffs.length > 0) {
+      const buckets = ["< 24h", "24-48h", "48-72h", "72-96h", "96h+"];
+      const map: Record<string, number> = {};
+      buckets.forEach((b) => map[b] = 0);
+      for (const h of turnaroundDiffs) {
+        if (h < 24) map["< 24h"]++;
+        else if (h < 48) map["24-48h"]++;
+        else if (h < 72) map["48-72h"]++;
+        else if (h < 96) map["72-96h"]++;
+        else map["96h+"]++;
+      }
+      turnaroundHistogram = buckets.map((bucket) => ({ bucket, count: map[bucket] }));
+    }
 
     const attentionCategories = {
       pendingPickup: statusCounts["placed"] || 0,
@@ -343,7 +400,7 @@ router.get("/orders-operations", async (req: Request, res: Response) => {
         regular: { count: allOrders.length - express.length, revenue: allOrders.filter((o: any) => !o.express).reduce((s: number, o: any) => s + (o.total || 0), 0) },
       },
       attentionCategories,
-      delayedDrillDown: { status: "processing", delayed: true, startDate, endDate },
+      delayedDrillDown: { status: "processing", delayed: true, startDate: startStr, endDate: endStr, service, orderStatus: status },
       topDelayedOrders,
     });
   } catch (err: any) {
