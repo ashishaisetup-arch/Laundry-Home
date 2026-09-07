@@ -28,7 +28,7 @@ export function pageTitle(view: string) {
 
 export function pageSubtitle(view: string) {
   return {
-    dashboard: "FreshFold Laundry Co. · Indiranagar, Bengaluru",
+    dashboard: "Vendor Dashboard",
     profile: "Manage your account details",
     settings: "Account and app preferences",
     orders: "Accept, schedule and manage incoming orders",

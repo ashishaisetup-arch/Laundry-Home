@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogTitle, DialogHeader } from "@/components/u
 import { AppShell, type NavGroup } from "@/components/shared/app-shell";
 import { useOrders } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
+import { useFetch } from "@/lib/hooks/use-fetch";
 import { ProfilePage } from "@/components/shared/profile-page";
 import { SettingsPage } from "@/components/shared/settings-page";
 import { useMyVendorId, pageTitle, pageSubtitle } from "./vendor-helpers";
@@ -24,7 +25,14 @@ export function VendorApp() {
   const [manualOrderOpen, setManualOrderOpen] = useState(false);
   const vid = useMyVendorId();
   const { data: orders } = useOrders({ vendorId: vid });
+  const { data: vendors } = useFetch<{ name: string; area: string; city: string }[]>(
+    vid ? `/api/vendors?id=${vid}` : null
+  );
+  const vendor = vendors?.[0];
   const pendingCount = (orders || []).filter((o) => ["placed", "vendor_assigned"].includes(o.status)).length;
+  const subtitle = view === "dashboard" && vendor
+    ? `${vendor.name} · ${vendor.area}, ${vendor.city}`
+    : pageSubtitle(view);
 
   const navGroups: NavGroup[] = useMemo(() => [
     {
@@ -48,7 +56,7 @@ export function VendorApp() {
         activeView={view}
         onNavigate={handleNavigate}
         pageTitle={pageTitle(view)}
-        pageSubtitle={pageSubtitle(view)}
+        pageSubtitle={subtitle}
         actions={
           view === "orders" ? (
             <Button className="bg-primary hover:bg-primary/90" onClick={() => setManualOrderOpen(true)}>
