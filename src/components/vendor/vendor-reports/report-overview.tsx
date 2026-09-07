@@ -197,8 +197,8 @@ export function ReportOverview({ params, onTabChange, onExportCSV, onExportPDF }
   ];
 
   // ── Charts data (sorted by date value) ──
-  const revenueTrend = [...data.revenueTrend].sort((a, b) => a.day.localeCompare(b.day));
-  const ordersTrend = [...data.ordersTrend].sort((a, b) => a.day.localeCompare(b.day));
+  const revenueTrend = [...(data.revenueTrend ?? [])].sort((a, b) => a.day.localeCompare(b.day));
+  const ordersTrend = [...(data.ordersTrend ?? [])].sort((a, b) => a.day.localeCompare(b.day));
 
   return (
     <div className="space-y-6">
