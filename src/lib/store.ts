@@ -98,96 +98,53 @@ export const useAppStore = create<AppState>((set, get) => ({
   authError: null,
 
   initializeAuth: async () => {
-    if (sessionStorage.getItem("lh_logged_out")) {
-      sessionStorage.removeItem("lh_logged_out");
-      set({ authLoading: false });
-      return;
-    }
-    if (window.location.pathname.startsWith("/auth/")) {
-      set({ authLoading: false });
-      return;
-    }
     try {
       const supabase = createClient();
-      const url = new URL(window.location.href);
-      const hasCode = url.searchParams.has("code");
-
-      if (hasCode) {
-        const code = url.searchParams.get("code")!;
-        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-        if (error) {
-          console.warn("[auth] exchangeCodeForSession failed:", error.message);
-        } else if (data?.session) {
-          const session = data.session;
-          const meta = session.user.user_metadata;
-          const role: Role = (meta?.role as Role) || "customer";
-          const name = meta?.name || session.user.email?.split("@")[0] || "User";
-          const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
-
-          fetch("/api/auth/session").catch(() => {});
-
-          set({
-            isAuthenticated: true,
-            role,
-            userId: session.user.id,
-            userName: name,
-            userEmail: session.user.email || "",
-            userAvatar: avatar,
-            authLoading: false,
-          });
-          get().fetchNotifications().catch(() => {});
-          get().fetchSettings().catch(() => {});
-          get().fetchWallet().catch(() => {});
-          get().setupRealtimeNotifications();
-          return;
-        }
-      }
-
       const user = await getCurrentUser(supabase);
 
-        if (user) {
-          get().fetchNotifications().catch(() => {});
-          get().fetchSettings().catch(() => {});
-          get().fetchWallet().catch(() => {});
-          get().setupRealtimeNotifications();
-          const meta = user.user_metadata;
-          const role: Role = (meta?.role as Role) || "customer";
-          const name = meta?.name || user.email?.split("@")[0] || "User";
-          const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
+      if (user) {
+        get().fetchNotifications().catch(() => {});
+        get().fetchSettings().catch(() => {});
+        get().fetchWallet().catch(() => {});
+        get().setupRealtimeNotifications();
+        const meta = user.user_metadata;
+        const role: Role = (meta?.role as Role) || "customer";
+        const name = meta?.name || user.email?.split("@")[0] || "User";
+        const avatar = name.split(" ").map((n: string) => n[0]).join("").slice(0, 2).toUpperCase();
 
-          try {
-            const res = await fetch("/api/auth/session");
-            const data = await res.json();
-            if (data.profile) {
-              set({
-                isAuthenticated: true,
-                role: data.profile.role || role,
-                userId: user.id,
-                userName: data.profile.name || name,
-                userEmail: data.profile.email || user.email || "",
-                userPhone: data.profile.phone || "",
-                userAvatar: data.profile.avatar || avatar,
-                authLoading: false,
-              });
-              return;
-            }
-          } catch {}
+        try {
+          const res = await fetch("/api/auth/session");
+          const data = await res.json();
+          if (data.profile) {
+            set({
+              isAuthenticated: true,
+              role: data.profile.role || role,
+              userId: user.id,
+              userName: data.profile.name || name,
+              userEmail: data.profile.email || user.email || "",
+              userPhone: data.profile.phone || "",
+              userAvatar: data.profile.avatar || avatar,
+              authLoading: false,
+            });
+            return;
+          }
+        } catch {}
 
-          set({
-            isAuthenticated: true,
-            role,
-            userId: user.id,
-            userName: name,
-            userEmail: user.email || "",
-            userAvatar: avatar,
-            authLoading: false,
-          });
-          get().fetchNotifications().catch(() => {});
-          get().fetchSettings().catch(() => {});
-          get().fetchWallet().catch(() => {});
-          get().setupRealtimeNotifications();
-          return;
-        }
+        set({
+          isAuthenticated: true,
+          role,
+          userId: user.id,
+          userName: name,
+          userEmail: user.email || "",
+          userAvatar: avatar,
+          authLoading: false,
+        });
+        get().fetchNotifications().catch(() => {});
+        get().fetchSettings().catch(() => {});
+        get().fetchWallet().catch(() => {});
+        get().setupRealtimeNotifications();
+        return;
+      }
     } catch (e) {
       console.warn("[auth] initializeAuth error:", e);
     }
@@ -296,14 +253,18 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   signInWithOAuth: async (provider) => {
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: provider as any,
       options: {
-        redirectTo: window.location.origin,
+        redirectTo: `${window.location.origin}/auth/callback`,
         queryParams: { prompt: "select_account" },
+        skipBrowserRedirect: true,
       },
     });
     if (error) throw error;
+    if (data.url) {
+      window.location.replace(data.url);
+    }
   },
 
   signUp: async (email, password, name?) => {
@@ -376,7 +337,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         document.cookie = `${name}=; path=${p}; domain=${window.location.hostname}; max-age=0;`;
       }
     });
-    window.location.href = "/?clear=1";
+    window.location.replace("/?clear=1");
   },
 
   setProfile: async (name, phone, email?) => {

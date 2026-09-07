@@ -15,6 +15,7 @@ const VendorApp = lazy(() => import("@/components/vendor/vendor-app").then(m => 
 const DeliveryApp = lazy(() => import("@/components/delivery/delivery-app").then(m => ({ default: m.DeliveryApp })));
 const AdminApp = lazy(() => import("@/components/admin/admin-app").then(m => ({ default: m.AdminApp })));
 const SuperAdminApp = lazy(() => import("@/components/superadmin/super-admin-app").then(m => ({ default: m.SuperAdminApp })));
+const OAuthCallback = lazy(() => import("@/components/auth/oauth-callback").then(m => ({ default: m.OAuthCallback })));
 
 // ── Error boundary ──
 class AppErrorBoundary extends Component<{ children: React.ReactNode }, { error: string | null }> {
@@ -106,9 +107,8 @@ function AuthGate() {
       });
     }
     initializeAuth();
-    const dirty = ["clear", "landing", "code", "state"].filter((p) => url.searchParams.has(p));
-    if (dirty.length > 0) {
-      dirty.forEach((p) => url.searchParams.delete(p));
+    if (url.searchParams.has("clear")) {
+      url.searchParams.delete("clear");
       navigate(`${url.pathname}${url.search}`, { replace: true });
     }
   }, []);
@@ -131,11 +131,24 @@ function AuthGate() {
   return (
     <AppErrorBoundary>
       {isAuthRoute ? (
-        <>
-          <ResetPasswordPage />
-          <Toaster />
-          <SonnerToaster position="top-right" richColors closeButton />
-        </>
+        location.pathname === "/auth/callback" ? (
+          <Suspense fallback={
+            <div className="flex h-screen items-center justify-center bg-background">
+              <div className="flex flex-col items-center gap-3">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <p className="text-sm text-muted-foreground">Signing you in…</p>
+              </div>
+            </div>
+          }>
+            <OAuthCallback />
+          </Suspense>
+        ) : (
+          <>
+            <ResetPasswordPage />
+            <Toaster />
+            <SonnerToaster position="top-right" richColors closeButton />
+          </>
+        )
       ) : (
         <>
           <AnimatePresence mode="wait">
