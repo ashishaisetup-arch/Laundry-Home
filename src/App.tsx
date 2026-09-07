@@ -1,5 +1,5 @@
 
-import { useEffect, Component, lazy, Suspense } from "react";
+import { useEffect, useRef, useLayoutEffect, useCallback, useState, Component, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { BrowserRouter, Routes, Route, Navigate, useParams, useLocation, useNavigate } from "react-router-dom";
 import { useAppStore } from "@/lib/store";
@@ -8,6 +8,7 @@ import { ResetPasswordPage } from "@/components/auth/reset-password";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 // ── Lazy-loaded role apps ──
 const CustomerApp = lazy(() => import("@/components/customer/customer-app").then(m => ({ default: m.CustomerApp })));
@@ -88,11 +89,95 @@ function AuthenticatedApp() {
 }
 
 function AuthGate() {
-  const { role, isAuthenticated, authLoading, initializeAuth } = useAppStore();
+  const { role, isAuthenticated, authLoading, initializeAuth, logout } = useAppStore();
   const location = useLocation();
   const navigate = useNavigate();
   const forceLanding = new URLSearchParams(location.search).has("landing") || new URLSearchParams(location.search).has("clear");
   const isAuthRoute = location.pathname.startsWith("/auth/");
+
+  // ── Dashboard exit sentinel refs ──
+  const installationDoneRef = useRef(false);
+  const suppressNextPopRef = useRef(false);
+  const loggingOutRef = useRef(false);
+  const [showSignOutDialog, setShowSignOutDialog] = useState(false);
+
+  // ── Dashboard exit sentinel installation ──
+  // On first arrival at a dashboard, replace the current history entry with
+  // an EXIT_SENTINEL, then push an ACTIVE entry on top. Pressing Back from
+  // the ACTIVE entry lands on the sentinel, triggering the sign-out dialog.
+  // React Router v7 stores user-provided route state in history.state.usr.
+  useLayoutEffect(() => {
+    const isDashboard = /^\/[^/]+\/dashboard\/?$/.test(location.pathname);
+
+    if (!isDashboard) {
+      installationDoneRef.current = false;
+      return;
+    }
+
+    if (installationDoneRef.current) return;
+    installationDoneRef.current = true;
+
+    // Already on active entry (sentinel below) — e.g. refresh or BFCache
+    if (window.history.state?.usr?.lhDashboardActive === true) return;
+
+    const sentinelState = { ...(location.state ?? {}), lhDashboardExit: true };
+    const activeState = { ...(location.state ?? {}), lhDashboardActive: true };
+    const target = `${location.pathname}${location.search}${location.hash}`;
+
+    // Mark the current same-URL history entry synchronously as the dashboard
+    // exit sentinel. Two consecutive React Router navigations here can cause
+    // the first navigation to be superseded, leaving no sentinel entry.
+    // Preserve all router-owned history metadata and modify only user state.
+    const currentHistoryState = window.history.state ?? {};
+
+    window.history.replaceState(
+      {
+        ...currentHistoryState,
+        usr: sentinelState,
+      },
+      "",
+      target,
+    );
+
+    // Let React Router own creation of the active dashboard entry.
+    navigate(target, { state: activeState });
+  }, [location.pathname, location.search, location.hash, location.state, navigate]);
+
+  // ── Popstate listener for dashboard exit sentinel ──
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      if (suppressNextPopRef.current) {
+        suppressNextPopRef.current = false;
+        return;
+      }
+      if (loggingOutRef.current) return;
+      // React Router v7 stores route state in history.state.usr
+      if (event.state?.usr?.lhDashboardExit === true) {
+        setShowSignOutDialog(true);
+      }
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  // ── Dashboard exit dialog handlers ──
+  const handleStay = useCallback(() => {
+    if (!showSignOutDialog) return;
+    setShowSignOutDialog(false);
+    suppressNextPopRef.current = true;
+    window.history.forward();
+  }, [showSignOutDialog]);
+
+  const handleDashboardSignOut = useCallback(async () => {
+    loggingOutRef.current = true;
+    setShowSignOutDialog(false);
+    try {
+      await logout();
+    } catch {
+      loggingOutRef.current = false;
+    }
+  }, [logout]);
 
   useEffect(() => {
     if (isAuthRoute) return;
@@ -189,6 +274,28 @@ function AuthGate() {
           <SonnerToaster position="top-right" richColors closeButton />
         </>
       )}
+
+      <AlertDialog
+        open={showSignOutDialog}
+        onOpenChange={(open) => {
+          if (!open && showSignOutDialog && !loggingOutRef.current) {
+            handleStay();
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sign out?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You're about to leave the dashboard.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Stay</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDashboardSignOut}>Sign out</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppErrorBoundary>
   );
 }
