@@ -96,12 +96,12 @@ export function ReportOverview({ params, onTabChange, onExportCSV, onExportPDF }
     { Metric: "Avg Order Value", Value: formatINR(data.aov) },
     {
       Metric: "Avg Turnaround",
-      Value: data.avgTurnaroundHrs === null ? "—" : `${data.avgTurnaroundHrs.toFixed(1)}h`,
+      Value: data.avgTurnaroundHrs == null ? "—" : `${data.avgTurnaroundHrs.toFixed(1)}h`,
     },
     { Metric: "Repeat Rate", Value: `${data.repeatRate}%` },
     {
       Metric: "On-Time Rate",
-      Value: data.onTimeRate === null ? "—" : `${data.onTimeRate.toFixed(1)}%`,
+      Value: data.onTimeRate == null ? "—" : `${data.onTimeRate.toFixed(1)}%`,
     },
     {
       Metric: "Revenue Change",
@@ -145,7 +145,7 @@ export function ReportOverview({ params, onTabChange, onExportCSV, onExportPDF }
     },
     {
       label: "Avg Turnaround",
-      value: data.avgTurnaroundHrs === null ? "—" : `${data.avgTurnaroundHrs.toFixed(1)}h`,
+      value: data.avgTurnaroundHrs == null ? "—" : `${data.avgTurnaroundHrs.toFixed(1)}h`,
       icon: Clock,
       accent: "from-sky-500 to-blue-600",
       invertTrend: true,
@@ -158,7 +158,7 @@ export function ReportOverview({ params, onTabChange, onExportCSV, onExportPDF }
     },
     {
       label: "On-Time Rate",
-      value: data.onTimeRate === null ? "—" : `${data.onTimeRate.toFixed(1)}%`,
+      value: data.onTimeRate == null ? "—" : `${data.onTimeRate.toFixed(1)}%`,
       icon: CheckCircle,
       accent: "from-emerald-500 to-green-600",
       invertTrend: true,
@@ -338,9 +338,9 @@ export function ReportOverview({ params, onTabChange, onExportCSV, onExportPDF }
             Top Service
           </p>
           <p className="text-lg font-semibold">
-            {data.topService === null ? "—" : data.topService.name}
+            {data.topService == null ? "—" : data.topService.name}
           </p>
-          {data.topService !== null && (
+          {data.topService != null && (
             <p className="text-xs text-muted-foreground mt-1">
               {formatINR(data.topService.revenue)} revenue
             </p>
@@ -352,9 +352,9 @@ export function ReportOverview({ params, onTabChange, onExportCSV, onExportPDF }
             Best Revenue Day
           </p>
           <p className="text-lg font-semibold">
-            {data.bestDay === null ? "—" : data.bestDay.day}
+            {data.bestDay == null ? "—" : data.bestDay.day}
           </p>
-          {data.bestDay !== null && (
+          {data.bestDay != null && (
             <p className="text-xs text-muted-foreground mt-1">
               {formatINR(data.bestDay.revenue)} revenue
             </p>
@@ -366,9 +366,9 @@ export function ReportOverview({ params, onTabChange, onExportCSV, onExportPDF }
             Most Active Customer
           </p>
           <p className="text-lg font-semibold">
-            {data.mostActiveCustomer === null ? "—" : data.mostActiveCustomer.name}
+            {data.mostActiveCustomer == null ? "—" : data.mostActiveCustomer.name}
           </p>
-          {data.mostActiveCustomer !== null && (
+          {data.mostActiveCustomer != null && (
             <p className="text-xs text-muted-foreground mt-1">
               {data.mostActiveCustomer.orderCount} order{data.mostActiveCustomer.orderCount !== 1 ? "s" : ""}
             </p>

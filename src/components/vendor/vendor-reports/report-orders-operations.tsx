@@ -64,14 +64,14 @@ export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExp
         <StatCard label="Completed" value={String(data.completedOrders)} icon={Package} accent="from-emerald-500 to-teal-600" />
         <StatCard
           label="Avg Turnaround"
-          value={data.avgTurnaroundHrs === null ? "\u2014" : `${data.avgTurnaroundHrs}h`}
+          value={data.avgTurnaroundHrs == null ? "\u2014" : `${data.avgTurnaroundHrs}h`}
           icon={Clock}
           accent="from-sky-500 to-blue-600"
           invertTrend
         />
         <StatCard
           label="On-Time Rate"
-          value={data.onTimeRate === null ? "\u2014" : `${data.onTimeRate}%`}
+          value={data.onTimeRate == null ? "\u2014" : `${data.onTimeRate}%`}
           icon={Package}
           accent="from-emerald-500 to-teal-600"
           invertTrend
@@ -106,7 +106,7 @@ export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExp
                   </span>
                 </div>
                 <span className="text-[11px] text-muted-foreground w-16 text-right">
-                  {s.conversionRate !== null ? `${s.conversionRate}%` : "\u2014"}
+                  {s.conversionRate != null ? `${s.conversionRate}%` : "\u2014"}
                 </span>
               </div>
             );
