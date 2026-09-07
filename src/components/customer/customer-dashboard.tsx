@@ -21,7 +21,7 @@ export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel, featu
   const firstName = userName.split(" ")[0];
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const upcomingDeliveries = activeOrders
     .filter((o) => o.deliveryDate && o.deliverySlot)
     .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate));
