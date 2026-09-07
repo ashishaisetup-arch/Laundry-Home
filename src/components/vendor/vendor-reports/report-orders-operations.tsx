@@ -50,10 +50,10 @@ export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExp
     <div className="space-y-6">
       {/* Export buttons */}
       <div className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" className="text-xs h-8" onClick={() => onExportCSV(data.statusDistribution.map(s => ({ Status: s.status, Count: s.count })), "orders-by-status")}>
+        <Button variant="outline" size="sm" className="text-xs h-8" onClick={() => onExportCSV((data.statusDistribution ?? []).map(s => ({ Status: s.status, Count: s.count })), "orders-by-status")}>
           <Download className="h-3.5 w-3.5 mr-1" /> CSV (Status)
         </Button>
-        <Button variant="outline" size="sm" className="text-xs h-8" onClick={() => onExportPDF("Orders by Status", data.statusDistribution.map(s => ({ Status: s.status, Count: String(s.count) })), statusColumns)}>
+        <Button variant="outline" size="sm" className="text-xs h-8" onClick={() => onExportPDF("Orders by Status", (data.statusDistribution ?? []).map(s => ({ Status: s.status, Count: String(s.count) })), statusColumns)}>
           <FileDown className="h-3.5 w-3.5 mr-1" /> PDF
         </Button>
       </div>
@@ -90,8 +90,8 @@ export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExp
       <Card className="p-6 shadow-soft">
         <h3 className="text-sm font-semibold mb-4">Operational Funnel</h3>
         <div className="space-y-3">
-          {data.funnelStages.map((s, i) => {
-            const maxCount = data.funnelStages[0]?.count || 1;
+          {(data.funnelStages ?? []).map((s, i) => {
+            const maxCount = (data.funnelStages ?? [])[0]?.count || 1;
             const widthPct = Math.round((s.count / maxCount) * 100);
             return (
               <div key={s.stage} className="flex items-center gap-3">
@@ -118,7 +118,7 @@ export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExp
         {/* Orders by Day */}
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">Orders by Day</h3>
-          {data.ordersByDay.length > 0 ? (
+          {(data.ordersByDay ?? []).length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={data.ordersByDay}>
                 <XAxis dataKey="day" tick={{ fontSize: 9 }} angle={-45} textAnchor="end" height={80} />
@@ -135,7 +135,7 @@ export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExp
         {/* Turnaround Histogram */}
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">Turnaround Distribution</h3>
-          {data.turnaroundHistogram.length > 0 ? (
+          {(data.turnaroundHistogram ?? []).length > 0 ? (
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={data.turnaroundHistogram}>
                 <XAxis dataKey="bucket" tick={{ fontSize: 10 }} />
@@ -229,7 +229,7 @@ export function ReportOrdersOperations({ params, onDrillDown, onExportCSV, onExp
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.topDelayedOrders.map((o) => (
+              {(data.topDelayedOrders ?? []).map((o) => (
                 <TableRow key={o.id}>
                   <TableCell className="font-medium">{o.code}</TableCell>
                   <TableCell>{o.customerName}</TableCell>

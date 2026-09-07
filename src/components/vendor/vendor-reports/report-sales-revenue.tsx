@@ -111,12 +111,12 @@ export function ReportSalesRevenue({
   }
 
   // ── Export ──
-  const serviceExportData = data.revenueByService.map((s) => ({
+  const serviceExportData = (data.revenueByService ?? []).map((s) => ({
     Service: s.name,
     Revenue: formatINR(s.revenue),
     Share: `${s.percentage}%`,
   }));
-  const dailyExportData = data.dailyRevenue.map((d) => ({
+  const dailyExportData = (data.dailyRevenue ?? []).map((d) => ({
     Date: d.day,
     Revenue: formatINR(d.revenue),
     Orders: String(d.orders),
@@ -428,7 +428,7 @@ export function ReportSalesRevenue({
           <h3 className="font-semibold text-sm mb-3">
             Revenue by Service
           </h3>
-          {data.revenueByService.length === 0 ? (
+          {(data.revenueByService ?? []).length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-8">
               No service data
             </p>
@@ -446,7 +446,7 @@ export function ReportSalesRevenue({
                     `${name} ${percentage}%`
                   }
                 >
-                  {data.revenueByService.map((_, i) => (
+                  {(data.revenueByService ?? []).map((_, i) => (
                     <Cell
                       key={i}
                       fill={PIE_COLORS[i % PIE_COLORS.length]}
@@ -475,7 +475,7 @@ export function ReportSalesRevenue({
           <h3 className="font-semibold text-sm mb-3">
             Revenue by Payment
           </h3>
-          {data.revenueByPaymentMethod.length === 0 ? (
+          {(data.revenueByPaymentMethod ?? []).length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-8">
               No payment data
             </p>
@@ -495,7 +495,7 @@ export function ReportSalesRevenue({
                     `${method} ${percentage}%`
                   }
                 >
-                  {data.revenueByPaymentMethod.map((_, i) => (
+                  {(data.revenueByPaymentMethod ?? []).map((_, i) => (
                     <Cell
                       key={i}
                       fill={PIE_COLORS[i % PIE_COLORS.length]}
@@ -525,7 +525,7 @@ export function ReportSalesRevenue({
             Revenue by Day
           </h3>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={data.revenueByDayOfWeek}>
+            <BarChart data={data.revenueByDayOfWeek ?? []}>
               <CartesianGrid
                 strokeDasharray="3 3"
                 stroke="hsl(var(--border))"
@@ -563,7 +563,7 @@ export function ReportSalesRevenue({
       </div>
 
       {/* Service Revenue Table */}
-      {data.revenueByService.length > 0 && (
+      {(data.revenueByService ?? []).length > 0 && (
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">
             Revenue by Service
@@ -577,7 +577,7 @@ export function ReportSalesRevenue({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.revenueByService.map((s) => (
+              {(data.revenueByService ?? []).map((s) => (
                 <TableRow key={s.name}>
                   <TableCell className="font-medium">
                     {s.name}
@@ -596,7 +596,7 @@ export function ReportSalesRevenue({
       )}
 
       {/* Daily Breakdown Table */}
-      {data.dailyRevenue.length > 0 && (
+      {(data.dailyRevenue ?? []).length > 0 && (
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">
             Daily Breakdown
@@ -613,7 +613,7 @@ export function ReportSalesRevenue({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.dailyRevenue.map((d) => (
+              {(data.dailyRevenue ?? []).map((d) => (
                 <TableRow key={d.day}>
                   <TableCell className="font-medium">
                     {d.day}

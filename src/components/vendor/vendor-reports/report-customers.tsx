@@ -43,7 +43,7 @@ export function ReportCustomers({ params, onExportCSV, onExportPDF }: Props) {
     { header: "Total Spend", dataKey: "totalSpend" },
   ];
 
-  const exportData = data.topCustomers.map((c) => ({
+  const exportData = (data.topCustomers ?? []).map((c) => ({
     name: c.name,
     orderCount: c.orderCount,
     totalSpend: c.totalSpend,
@@ -92,7 +92,7 @@ export function ReportCustomers({ params, onExportCSV, onExportPDF }: Props) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.topCustomers.map((c, i) => (
+              {(data.topCustomers ?? []).map((c, i) => (
                 <TableRow key={c.id}>
                   <TableCell>
                     <div className="flex items-center gap-2">
@@ -104,7 +104,7 @@ export function ReportCustomers({ params, onExportCSV, onExportPDF }: Props) {
                   <TableCell className="text-right font-semibold">{formatINR(c.totalSpend)}</TableCell>
                 </TableRow>
               ))}
-              {data.topCustomers.length === 0 && (
+              {(data.topCustomers ?? []).length === 0 && (
                 <TableRow>
                   <TableCell colSpan={3} className="text-center text-muted-foreground text-sm py-8">No customer data</TableCell>
                 </TableRow>

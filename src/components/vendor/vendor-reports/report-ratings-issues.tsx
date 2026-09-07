@@ -33,7 +33,7 @@ export function ReportRatingsIssues({ params, onExportCSV, onExportPDF }: Props)
 
   const distributionData = [1, 2, 3, 4, 5].map((star) => ({
     stars: `${star}★`,
-    count: data.distribution[star] || 0,
+    count: data.distribution?.[star] || 0,
   }));
 
   const columns = [
@@ -78,7 +78,7 @@ export function ReportRatingsIssues({ params, onExportCSV, onExportPDF }: Props)
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">Rating Trend</h3>
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={data.ratingTrend}>
+            <LineChart data={data.ratingTrend ?? []}>
               <XAxis dataKey="week" tick={{ fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} />
               <YAxis domain={[0, 5]} tick={{ fontSize: 10 }} />
               <Tooltip />
@@ -89,11 +89,11 @@ export function ReportRatingsIssues({ params, onExportCSV, onExportPDF }: Props)
       </div>
 
       {/* Negative Reviews */}
-      {data.recentNegative.length > 0 && (
+      {(data.recentNegative ?? []).length > 0 && (
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
             <MessageSquare className="h-4 w-4 text-rose-500" />
-            Recent Negative Reviews ({data.recentNegative.length})
+            Recent Negative Reviews ({(data.recentNegative ?? []).length})
           </h3>
           <Table>
             <TableHeader>
@@ -105,7 +105,7 @@ export function ReportRatingsIssues({ params, onExportCSV, onExportPDF }: Props)
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.recentNegative.map((r) => (
+              {(data.recentNegative ?? []).map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="font-medium">{r.customerName}</TableCell>
                   <TableCell className="text-center">

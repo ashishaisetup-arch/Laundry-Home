@@ -19,9 +19,9 @@ export function ReportServices({ params, onExportCSV, onExportPDF }: Props) {
 
   if (loading) return <Card className="h-64 animate-pulse" />;
   if (error) return <ErrorState title="Failed to load services" message={error} onRetry={refetch} />;
-  if (!data || data.services.length === 0) return <EmptyState icon={Inbox} title="No service data" description="No services found for the selected period and filters." />;
+  if (!data || (data.services ?? []).length === 0) return <EmptyState icon={Inbox} title="No service data" description="No services found for the selected period and filters." />;
 
-  const chartData = data.services.slice(0, 8);
+  const chartData = (data.services ?? []).slice(0, 8);
 
   const columns = [
     { header: "Service", dataKey: "name" },
@@ -30,7 +30,7 @@ export function ReportServices({ params, onExportCSV, onExportPDF }: Props) {
     { header: "Avg Rating", dataKey: "avgRating" },
   ];
 
-  const exportData = data.services.map((s) => ({
+  const exportData = (data.services ?? []).map((s) => ({
     Service: s.name,
     Orders: s.orderCount,
     Revenue: s.revenue,
@@ -64,7 +64,7 @@ export function ReportServices({ params, onExportCSV, onExportPDF }: Props) {
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">Service Summary</h3>
           <div className="space-y-3">
-            {data.services.slice(0, 6).map((s) => (
+            {(data.services ?? []).slice(0, 6).map((s) => (
               <div key={s.name} className="flex items-center justify-between p-3 rounded-lg bg-tonal">
                 <div>
                   <p className="text-sm font-medium">{s.name}</p>
@@ -95,7 +95,7 @@ export function ReportServices({ params, onExportCSV, onExportPDF }: Props) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.services.map((s) => (
+            {(data.services ?? []).map((s) => (
               <TableRow key={s.name}>
                 <TableCell className="font-medium">{s.name}</TableCell>
                 <TableCell className="text-right">{s.orderCount}</TableCell>

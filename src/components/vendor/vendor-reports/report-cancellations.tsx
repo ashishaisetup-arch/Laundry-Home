@@ -41,7 +41,7 @@ export function ReportCancellations({ params, onDrillDown, onExportCSV, onExport
     { header: "Date", dataKey: "createdAt" },
   ];
 
-  const exportCancelledData = data.topCancelledOrders.map((o) => ({
+  const exportCancelledData = (data.topCancelledOrders ?? []).map((o) => ({
     code: o.code,
     customerName: o.customerName,
     total: o.total,
@@ -76,11 +76,11 @@ export function ReportCancellations({ params, onDrillDown, onExportCSV, onExport
         {/* Cancel Reasons */}
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">Cancellation Reasons</h3>
-          {data.reasonsBreakdown.length === 0 ? (
+          {(data.reasonsBreakdown ?? []).length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8">No cancellations this period.</p>
           ) : (
             <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={data.reasonsBreakdown}>
+              <BarChart data={data.reasonsBreakdown ?? []}>
                 <XAxis dataKey="reason" tick={{ fontSize: 9 }} angle={-30} textAnchor="end" height={80} />
                 <YAxis tick={{ fontSize: 10 }} />
                 <Tooltip />
@@ -94,7 +94,7 @@ export function ReportCancellations({ params, onDrillDown, onExportCSV, onExport
         <Card className="p-6 shadow-soft">
           <h3 className="text-sm font-semibold mb-4">Cancellation Trend</h3>
           <ResponsiveContainer width="100%" height={250}>
-            <LineChart data={data.cancellationTrend}>
+            <LineChart data={data.cancellationTrend ?? []}>
               <XAxis dataKey="week" tick={{ fontSize: 10 }} tickFormatter={(d: string) => d.slice(5)} />
               <YAxis tick={{ fontSize: 10 }} />
               <Tooltip />
@@ -105,7 +105,7 @@ export function ReportCancellations({ params, onDrillDown, onExportCSV, onExport
       </div>
 
       {/* Top Cancelled Orders */}
-      {data.topCancelledOrders.length > 0 && (
+      {(data.topCancelledOrders ?? []).length > 0 && (
         <Card className="p-6 shadow-soft">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold">Cancelled Orders ({data.cancelledOrders})</h3>
@@ -124,7 +124,7 @@ export function ReportCancellations({ params, onDrillDown, onExportCSV, onExport
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.topCancelledOrders.map((o) => (
+              {(data.topCancelledOrders ?? []).map((o) => (
                 <TableRow key={o.id}>
                   <TableCell className="font-medium">{o.code}</TableCell>
                   <TableCell>{o.customerName}</TableCell>

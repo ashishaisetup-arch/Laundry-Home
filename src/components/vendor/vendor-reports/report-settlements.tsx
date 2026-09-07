@@ -87,7 +87,7 @@ export function ReportSettlements({
   }
 
   // ── Empty ──
-  if (!data || data.settlements.length === 0) {
+  if (!data || (data.settlements ?? []).length === 0) {
     return (
       <EmptyState
         icon={IndianRupee}
@@ -100,7 +100,7 @@ export function ReportSettlements({
   const commissionRate = data.commissionRateBps / 100;
 
   // ── Export ──
-  const exportData = data.settlements.map((s) => ({
+  const exportData = (data.settlements ?? []).map((s) => ({
     Period: `${s.period_start.slice(0, 10)} — ${s.period_end.slice(0, 10)}`,
     Gross: formatINR(s.gross_order_value),
     Commission: formatINR(s.commission_amount),
@@ -196,7 +196,7 @@ export function ReportSettlements({
           Settlement History
         </h3>
         <div className="space-y-2">
-          {data.settlements.map((s) => {
+          {(data.settlements ?? []).map((s) => {
             const isExpanded = expanded === s.id;
             return (
               <div
@@ -284,7 +284,7 @@ export function ReportSettlements({
                           Items:
                         </span>{" "}
                         <span className="font-medium">
-                          {s.items.length}
+                          {(s.items ?? []).length}
                         </span>
                       </div>
                     </div>
@@ -337,7 +337,7 @@ export function ReportSettlements({
                     </div>
 
                     {/* Order-level items */}
-                    {s.items.length > 0 && (
+                    {(s.items ?? []).length > 0 && (
                       <div className="border-t pt-3">
                         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
                           Order-Level Reconciliation
@@ -364,7 +364,7 @@ export function ReportSettlements({
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {s.items.map((item) => (
+                            {(s.items ?? []).map((item) => (
                               <TableRow key={item.id}>
                                 <TableCell className="font-medium">
                                   {item.order_id.slice(0, 8)}
