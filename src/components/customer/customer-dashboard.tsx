@@ -32,7 +32,7 @@ export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel, featu
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_20%,rgba(255,255,255,0.15),transparent_50%)]" />
           <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
-              <p className="text-sm text-white/80">Good afternoon,</p>
+              <p className="text-sm text-white/80">{new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"},</p>
               <h2 className="text-2xl md:text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
                 {firstName} 👋
               </h2>

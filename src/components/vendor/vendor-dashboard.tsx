@@ -47,6 +47,8 @@ export function VendorDashboard() {
   }, [vid, refetchOrders]);
 
   const now = new Date();
+  const hour = now.getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const todayStr = now.toISOString().slice(0, 10);
   const orderList = orders || [];
   const pendingOrders = orderList.filter((o) => ["placed", "vendor_assigned"].includes(o.status));
@@ -72,7 +74,7 @@ export function VendorDashboard() {
                 <Badge className="bg-white/20 text-white border-0">Verified Vendor</Badge>
               </div>
               <h2 className="text-2xl md:text-3xl font-bold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-                Good afternoon, {vendorName}! 👋
+                {greeting}, {vendorName}! 👋
               </h2>
               <p className="text-sm text-white/80 mt-1">
                 You have <strong>{pendingCount} new order{pendingCount !== 1 ? "s" : ""}</strong> waiting · Today&apos;s revenue: <strong>{formatINR(todayRevenue)}</strong>
