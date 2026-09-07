@@ -98,6 +98,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   authError: null,
 
   initializeAuth: async () => {
+    set({ authLoading: true });
     try {
       const supabase = createClient();
       const user = await getCurrentUser(supabase);
@@ -148,7 +149,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       console.warn("[auth] initializeAuth error:", e);
     }
-    set({ authLoading: false });
+    set({
+      isAuthenticated: false,
+      role: "customer",
+      userId: null,
+      userName: "",
+      userEmail: "",
+      userPhone: "",
+      userAvatar: "",
+      authLoading: false,
+    });
   },
 
   signInWithEmail: async (email, password) => {

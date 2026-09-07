@@ -113,6 +113,17 @@ function AuthGate() {
     }
   }, []);
 
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        initializeAuth();
+      }
+    };
+
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, [initializeAuth]);
+
   if (authLoading && !isAuthRoute) {
     return (
       <div className="flex h-screen items-center justify-center bg-aurora">
