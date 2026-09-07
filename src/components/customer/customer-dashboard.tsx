@@ -20,6 +20,17 @@ export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel, featu
   const { userName, walletBalance, loyaltyPoints, orders } = useAppStore();
   const firstName = userName.split(" ")[0];
   const activeOrders = (orders || []).filter((o) => !["completed", "cancelled"].includes(o.status));
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const upcomingDeliveries = activeOrders
+    .filter((o) => o.deliveryDate && o.deliverySlot)
+    .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate));
+  const todayDelivery = upcomingDeliveries.find((o) => o.deliveryDate === todayStr);
+  const nextDeliveryText = todayDelivery
+    ? `Next delivery today at ${todayDelivery.deliverySlot}`
+    : upcomingDeliveries.length > 0
+      ? `Next delivery on ${new Date(upcomingDeliveries[0].deliveryDate).toLocaleDateString("en-IN", { weekday: "short", month: "short", day: "numeric" })} at ${upcomingDeliveries[0].deliverySlot}`
+      : null;
   const walletOn = features?.enableWallet !== false;
   const loyaltyOn = features?.enableLoyalty !== false;
   const couponsOn = features?.enableCoupons !== false;
@@ -37,7 +48,7 @@ export function CustomerDashboard({ onTrack, onBook, onNavigate, onCancel, featu
                 {firstName} 👋
               </h2>
               <p className="text-sm text-white/80 mt-1">
-                You have <strong>{activeOrders.length} active orders</strong> · Next delivery today at 8:00 PM
+                You have <strong>{activeOrders.length} active orders</strong>{nextDeliveryText && <> · {nextDeliveryText}</>}
               </p>
             </div>
             <div className="flex gap-3">
