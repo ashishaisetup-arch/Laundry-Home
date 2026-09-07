@@ -25,10 +25,10 @@ export function VendorApp() {
   const [manualOrderOpen, setManualOrderOpen] = useState(false);
   const vid = useMyVendorId();
   const { data: orders } = useOrders({ vendorId: vid });
-  const { data: vendors } = useFetch<{ name: string; area: string; city: string }[]>(
-    vid ? `/api/vendors?id=${vid}` : null
+  const { data: vendors } = useFetch<{ name: string; area: string; city: string }>(
+    vid ? `/api/vendors/${vid}` : null
   );
-  const vendor = vendors?.[0];
+  const vendor = vendors as { name: string; area: string; city: string } | null;
   const pendingCount = (orders || []).filter((o) => ["placed", "vendor_assigned"].includes(o.status)).length;
   const subtitle = view === "dashboard" && vendor
     ? `${vendor.name} · ${vendor.area}, ${vendor.city}`
