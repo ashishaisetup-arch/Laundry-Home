@@ -1,12 +1,149 @@
 import { Router, Request, Response } from "express";
-import { createAdminClient, createServerClientWithCookies } from "../supabase";
+import { createServerClientWithCookies } from "../supabase";
+import {
+  createTopupOrder,
+  verifyTopupPayment,
+  getPaymentSummary,
+  getTransactions,
+  getInvoices,
+} from "../services/payment-service";
 
 const router = Router();
+
+// ============================================================================
+// Helper: get authenticated user from cookies
+// ============================================================================
+
+async function getAuthenticatedUser(req: Request): Promise<{ id: string } | null> {
+  try {
+    const supabase = createServerClientWithCookies(
+      (name) => req.cookies?.[name]
+    );
+    const { data: { user } } = await supabase.auth.getUser();
+    return user ? { id: user.id } : null;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================================
+// POST /api/payments/wallet/topup/create-order
+// Creates a Razorpay order and a pending payment transaction.
+// ============================================================================
+
+router.post("/wallet/topup/create-order", async (req: Request, res: Response) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const { amount, idempotencyKey } = req.body;
+
+    if (!amount || typeof amount !== "number") {
+      res.status(400).json({ error: "Valid amount is required" });
+      return;
+    }
+
+    if (!idempotencyKey || typeof idempotencyKey !== "string") {
+      res.status(400).json({ error: "idempotencyKey is required" });
+      return;
+    }
+
+    const result = await createTopupOrder(user.id, amount, idempotencyKey);
+
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    res.json({
+      success: true,
+      transactionId: result.transactionId,
+      razorpayOrderId: result.razorpayOrderId,
+      amount: result.amount,
+      currency: result.currency,
+      publicKeyId: result.publicKeyId,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// POST /api/payments/wallet/topup/verify
+// Verifies Razorpay payment signature and finalizes wallet credit.
+// ============================================================================
+
+router.post("/wallet/topup/verify", async (req: Request, res: Response) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      transaction_id,
+    } = req.body;
+
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !transaction_id) {
+      res.status(400).json({ error: "Missing required fields" });
+      return;
+    }
+
+    const result = await verifyTopupPayment(
+      user.id,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      transaction_id
+    );
+
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+
+    res.json({
+      success: true,
+      alreadyCredited: result.alreadyCredited,
+      walletTransactionId: result.walletTransactionId,
+      newBalance: result.newBalance,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// POST /api/payments/wallet/add (DISABLED)
+// Direct wallet funding is no longer allowed.
+// Use /wallet/topup/create-order instead.
+// ============================================================================
+
+router.post("/wallet/add", async (_req: Request, res: Response) => {
+  res.status(405).json({
+    error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead.",
+  });
+});
+
+// ============================================================================
+// POST /api/payments/create-order (LEGACY — order payment, not wallet top-up)
+// Kept for backward compatibility with order checkout flow.
+// ============================================================================
 
 router.post("/create-order", async (req: Request, res: Response) => {
   try {
     const { amount, currency, order_id } = req.body;
-    if (!amount || !order_id) { res.status(400).json({ error: "amount and order_id are required" }); return; }
+    if (!amount || !order_id) {
+      res.status(400).json({ error: "amount and order_id are required" });
+      return;
+    }
 
     const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
     const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -32,12 +169,20 @@ router.post("/create-order", async (req: Request, res: Response) => {
     });
 
     const data = await response.json();
-    if (!response.ok) { res.status(response.status).json({ error: data.error?.description || "Razorpay error" }); return; }
+    if (!response.ok) {
+      res.status(response.status).json({ error: data.error?.description || "Razorpay error" });
+      return;
+    }
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ============================================================================
+// POST /api/payments/verify (LEGACY — order payment verification)
+// Kept for backward compatibility with order checkout flow.
+// ============================================================================
 
 router.post("/verify", async (req: Request, res: Response) => {
   try {
@@ -59,6 +204,9 @@ router.post("/verify", async (req: Request, res: Response) => {
       return;
     }
 
+    // Note: This legacy endpoint still uses direct Supabase update.
+    // A future phase should migrate this to use payment_transactions + finalize_wallet_topup.
+    const { createAdminClient } = await import("../supabase");
     const admin = createAdminClient();
 
     if (order_id) {
@@ -74,35 +222,69 @@ router.post("/verify", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/wallet/add", async (req: Request, res: Response) => {
+// ============================================================================
+// GET /api/customer/payments/summary
+// Returns wallet balance, spending, and counts for the overview.
+// ============================================================================
+
+router.get("/customer/payments/summary", async (req: Request, res: Response) => {
   try {
-    const { amount } = req.body;
-    if (!amount || amount <= 0) { res.status(400).json({ error: "Valid amount required" }); return; }
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
 
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { res.status(401).json({ error: "Unauthorized" }); return; }
+    const summary = await getPaymentSummary(user.id);
+    res.json(summary);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const admin = createAdminClient();
+// ============================================================================
+// GET /api/customer/payments/transactions
+// Paginated wallet transaction history.
+// ============================================================================
 
-    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
-    const currentBalance = (profile as any)?.wallet_balance || 0;
+router.get("/customer/payments/transactions", async (req: Request, res: Response) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
 
-    const { error: updateError } = await admin.from("user_profiles").update({
-      wallet_balance: currentBalance + amount,
-    }).eq("id", user.id);
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const type = req.query.type as string | undefined;
+    const status = req.query.status as string | undefined;
 
-    if (updateError) { res.status(500).json({ error: updateError.message }); return; }
+    const result = await getTransactions(user.id, { page, limit, type, status });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    await admin.from("wallet_transactions").insert({
-      user_id: user.id,
-      type: "credit",
-      amount,
-      description: "Wallet top-up via payment gateway",
-    });
+// ============================================================================
+// GET /api/customer/invoices
+// Paginated invoice list.
+// ============================================================================
 
-    const { data: updatedProfile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
-    res.json({ balance: (updatedProfile as any)?.wallet_balance || currentBalance + amount });
+router.get("/customer/invoices", async (req: Request, res: Response) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+
+    const result = await getInvoices(user.id, { page, limit });
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

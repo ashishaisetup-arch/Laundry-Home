@@ -46,10 +46,24 @@ import paymentsRouter from "./routes/payments";
 import customerConfigRouter from "./routes/customer-config";
 import settingsRouter from "./routes/settings";
 import vendorReportsRouter from "./routes/vendor-reports";
+import webhooksRouter from "./routes/webhooks";
 
 const app = express();
 
+// CORS (must be first)
 app.use(cors({ origin: true, credentials: true }));
+
+// ============================================================================
+// Razorpay webhook: mount with express.raw() BEFORE express.json()
+// This ensures req.body is a raw Buffer for signature verification.
+// ============================================================================
+app.post(
+  "/api/webhooks/razorpay",
+  express.raw({ type: "application/json" }),
+  webhooksRouter
+);
+
+// Global JSON parser (after webhook route)
 app.use(express.json());
 app.use(cookieParser());
 app.use(authMiddleware);
