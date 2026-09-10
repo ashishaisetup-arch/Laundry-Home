@@ -1,3 +1,5 @@
+import type { PaymentTransactionFilters } from "./hooks/usePayments";
+
 export const queryKeys = {
   orders: {
     all: ["orders"] as const,
@@ -18,6 +20,16 @@ export const queryKeys = {
   slots: { all: ["slots"] as const },
   notifications: { all: ["notifications"] as const },
   wallet: { details: ["wallet"] as const },
+  payments: {
+    all: ["payments"] as const,
+    summary: ["payments", "summary"] as const,
+    transactionsAll: ["payments", "transactions"] as const,
+    transactions: (filters: PaymentTransactionFilters) =>
+      ["payments", "transactions", filters] as const,
+    invoicesAll: ["payments", "invoices"] as const,
+    invoices: (page: number) =>
+      ["payments", "invoices", page] as const,
+  },
   subscriptions: { plans: ["subscriptions", "plans"] as const, user: ["subscriptions", "user"] as const },
   deliveryTasks: { all: ["delivery-tasks"] as const },
   admin: { kpis: ["admin", "kpis"] as const, analytics: ["admin", "analytics"] as const },
