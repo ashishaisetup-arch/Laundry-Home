@@ -5421,7 +5421,7 @@ async function getAuthenticatedUser(req) {
     return null;
   }
 }
-router41.post("/wallet/topup/create-order", async (req, res) => {
+router41.post("/payments/wallet/topup/create-order", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -5454,7 +5454,7 @@ router41.post("/wallet/topup/create-order", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.post("/wallet/topup/verify", async (req, res) => {
+router41.post("/payments/wallet/topup/verify", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -5492,12 +5492,12 @@ router41.post("/wallet/topup/verify", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.post("/wallet/add", async (_req, res) => {
+router41.post("/payments/wallet/add", async (_req, res) => {
   res.status(405).json({
     error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead."
   });
 });
-router41.post("/create-order", async (req, res) => {
+router41.post("/payments/create-order", async (req, res) => {
   try {
     const { amount, currency, order_id } = req.body;
     if (!amount || !order_id) {
@@ -5534,7 +5534,7 @@ router41.post("/create-order", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.post("/verify", async (req, res) => {
+router41.post("/payments/verify", async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -6569,7 +6569,7 @@ app.use("/api/routing", routing_default);
 app.use("/api/delivery/location", delivery_location_default);
 app.use("/api/vendor/onboarding", vendor_onboarding_default);
 app.use("/api/vendor-service-prices", vendor_service_prices_default);
-app.use("/api/payments", payments_default);
+app.use("/api", payments_default);
 app.use("/api/config/customer", customer_config_default);
 app.use("/api/settings", settings_default);
 app.use("/api/vendor/reports", vendor_reports_default);

@@ -110,7 +110,7 @@ app.use("/api/routing", routingRouter);
 app.use("/api/delivery/location", deliveryLocationRouter);
 app.use("/api/vendor/onboarding", vendorOnboardingRouter);
 app.use("/api/vendor-service-prices", vendorServicePricesRouter);
-app.use("/api/payments", paymentsRouter);
+app.use("/api", paymentsRouter);
 app.use("/api/config/customer", customerConfigRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/vendor/reports", vendorReportsRouter);

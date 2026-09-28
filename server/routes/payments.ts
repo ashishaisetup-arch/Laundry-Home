@@ -31,7 +31,7 @@ async function getAuthenticatedUser(req: Request): Promise<{ id: string } | null
 // Creates a Razorpay order and a pending payment transaction.
 // ============================================================================
 
-router.post("/wallet/topup/create-order", async (req: Request, res: Response) => {
+router.post("/payments/wallet/topup/create-order", async (req: Request, res: Response) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -76,7 +76,7 @@ router.post("/wallet/topup/create-order", async (req: Request, res: Response) =>
 // Verifies Razorpay payment signature and finalizes wallet credit.
 // ============================================================================
 
-router.post("/wallet/topup/verify", async (req: Request, res: Response) => {
+router.post("/payments/wallet/topup/verify", async (req: Request, res: Response) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -126,7 +126,7 @@ router.post("/wallet/topup/verify", async (req: Request, res: Response) => {
 // Use /wallet/topup/create-order instead.
 // ============================================================================
 
-router.post("/wallet/add", async (_req: Request, res: Response) => {
+router.post("/payments/wallet/add", async (_req: Request, res: Response) => {
   res.status(405).json({
     error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead.",
   });
@@ -137,7 +137,7 @@ router.post("/wallet/add", async (_req: Request, res: Response) => {
 // Kept for backward compatibility with order checkout flow.
 // ============================================================================
 
-router.post("/create-order", async (req: Request, res: Response) => {
+router.post("/payments/create-order", async (req: Request, res: Response) => {
   try {
     const { amount, currency, order_id } = req.body;
     if (!amount || !order_id) {
@@ -184,7 +184,7 @@ router.post("/create-order", async (req: Request, res: Response) => {
 // Kept for backward compatibility with order checkout flow.
 // ============================================================================
 
-router.post("/verify", async (req: Request, res: Response) => {
+router.post("/payments/verify", async (req: Request, res: Response) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
