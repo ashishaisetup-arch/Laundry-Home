@@ -6515,8 +6515,8 @@ var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
 var app = (0, import_express47.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
-app.post(
-  "/api/webhooks/razorpay",
+app.use(
+  "/api/webhooks",
   import_express47.default.raw({ type: "application/json" }),
   webhooks_default
 );

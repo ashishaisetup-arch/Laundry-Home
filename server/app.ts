@@ -57,8 +57,8 @@ app.use(cors({ origin: true, credentials: true }));
 // Razorpay webhook: mount with express.raw() BEFORE express.json()
 // This ensures req.body is a raw Buffer for signature verification.
 // ============================================================================
-app.post(
-  "/api/webhooks/razorpay",
+app.use(
+  "/api/webhooks",
   express.raw({ type: "application/json" }),
   webhooksRouter
 );
