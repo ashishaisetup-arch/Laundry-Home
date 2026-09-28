@@ -152,11 +152,6 @@ __export(api_entry_exports, {
 });
 module.exports = __toCommonJS(api_entry_exports);
 
-// server/app.ts
-var import_express44 = __toESM(require("express"));
-var import_cors = __toESM(require("cors"));
-var import_cookie_parser = __toESM(require("cookie-parser"));
-
 // server/middleware/auth.ts
 init_supabase();
 var ROLE_ROUTES = {
@@ -201,6 +196,7 @@ async function authMiddleware(req, res, next) {
       const admin = createAdminClient();
       const { data: profile } = await admin.from("user_profiles").select("role").eq("id", user.id).single();
       const userRole = profile?.role || "customer";
+      req.userRole = userRole;
       if (!matchedRoleRoute[1].includes(userRole)) {
         res.status(403).json({ error: "Forbidden: insufficient role" });
         return;
@@ -231,9 +227,9 @@ async function authMiddleware(req, res, next) {
 }
 
 // server/routes/addresses.ts
-var import_express = require("express");
+var import_express2 = require("express");
 init_supabase();
-var router = (0, import_express.Router)();
+var router = (0, import_express2.Router)();
 router.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -298,22 +294,80 @@ router.delete("/:id", async (req, res) => {
 });
 var addresses_default = router;
 
-// server/routes/areas.ts
-var import_express2 = require("express");
-init_supabase();
-
 // server/lib/area-cache.ts
 init_supabase();
 var cache = null;
 var lastFetch = 0;
 var TTL_MS = 5 * 60 * 1e3;
+async function getAreas() {
+  const now = Date.now();
+  if (cache && now - lastFetch < TTL_MS) return cache;
+  const supabase = createAdminClient();
+  const { data, error } = await supabase.from("service_areas").select("*").eq("is_active", true);
+  if (error) {
+    console.error("area-cache: failed to fetch areas", error.message);
+    return cache || [];
+  }
+  cache = (data || []).map((a) => ({
+    id: a.id,
+    cityId: a.city_id,
+    zone: a.zone,
+    areaName: a.area_name,
+    pincode: a.pincode,
+    lat: parseFloat(a.lat),
+    lng: parseFloat(a.lng),
+    isActive: a.is_active,
+    hasPickup: a.has_pickup,
+    hasDelivery: a.has_delivery,
+    expressAvailable: a.express_available
+  }));
+  lastFetch = now;
+  return cache;
+}
 function invalidateAreaCache() {
   cache = null;
   lastFetch = 0;
 }
+function findArea(name) {
+  if (!name) return void 0;
+  const q = name.trim().toLowerCase();
+  return (cache || []).find(
+    (a) => a.areaName.toLowerCase() === q
+  );
+}
+function findClosestArea(lat, lng) {
+  const areas = cache || [];
+  if (areas.length === 0) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const a of areas) {
+    const d = haversineKm(lat, lng, a.lat, a.lng);
+    if (d < bestDist) {
+      bestDist = d;
+      best = a;
+    }
+  }
+  return best;
+}
+function findAreasWithinRadius(lat, lng, radiusKm) {
+  const areas = cache || [];
+  return areas.filter((a) => {
+    const d = haversineKm(lat, lng, a.lat, a.lng);
+    return d <= radiusKm;
+  });
+}
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 // server/routes/areas.ts
-var router2 = (0, import_express2.Router)();
+var import_express3 = require("express");
+init_supabase();
+var router2 = (0, import_express3.Router)();
 router2.get("/", async (req, res) => {
   try {
     const city = req.query.city;
@@ -520,9 +574,9 @@ router2.get("/waitlist", async (req, res) => {
 var areas_default = router2;
 
 // server/routes/auth.ts
-var import_express3 = require("express");
+var import_express4 = require("express");
 init_supabase();
-var router3 = (0, import_express3.Router)();
+var router3 = (0, import_express4.Router)();
 router3.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -699,10 +753,6 @@ router3.get("/callback", (req, res) => {
   res.redirect(`${base}/?${new URLSearchParams(req.query).toString()}`);
 });
 var auth_default = router3;
-
-// server/routes/orders.ts
-var import_express4 = require("express");
-init_supabase();
 
 // server/pricing.ts
 init_supabase();
@@ -988,6 +1038,7 @@ function fail(message) {
 }
 
 // server/lib/photo-upload.ts
+var ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
 var MAX_PHOTO_BYTES = 2.5 * 1024 * 1024;
 var MAX_ORDER_PHOTOS = 5;
 var MAX_TICKET_PHOTOS = 3;
@@ -1028,7 +1079,178 @@ function validatePhotoDataUrl(dataUrl, maxBytes = MAX_PHOTO_BYTES) {
   return { ok: true, mimeType, bytes: buf.length };
 }
 
+// server/routes/vendor-reports-utils.ts
+init_supabase();
+async function resolveVendorId(req, res) {
+  const user = req.user;
+  const role = req.userRole;
+  if (role === "admin" || role === "superadmin") {
+    const vid = req.query.vendorId;
+    if (vid) return vid;
+  }
+  const admin = createAdminClient();
+  const { data: vendor } = await admin.from("vendors").select("id").eq("owner_id", user.id).single();
+  if (!vendor) {
+    res.status(404).json({ error: "Vendor profile not found" });
+    return null;
+  }
+  return vendor.id;
+}
+var COLORS = ["#0d9488", "#10b981", "#8b5cf6", "#f59e0b", "#06b6d4", "#ec4899", "#f97316"];
+var CUSTOMER_SEGMENTS = [
+  { key: "one_time", label: "One-Time", min: 1, max: 1 },
+  { key: "occasional", label: "Occasional", min: 2, max: 3 },
+  { key: "regular", label: "Regular", min: 4, max: 6 },
+  { key: "loyal", label: "Loyal", min: 7, max: 10 },
+  { key: "vip", label: "VIP", min: 11, max: Infinity }
+];
+var DEFAULT_TIMEZONE = "Asia/Kolkata";
+var TIMEZONE_OFFSETS = {
+  "Asia/Kolkata": 330,
+  "Asia/Kolkata_IST": 330,
+  "Asia/Karachi": 300,
+  "Asia/Dubai": 240,
+  "Asia/Bangkok": 420,
+  "Asia/Singapore": 480,
+  "Asia/Shanghai": 480,
+  "Asia/Tokyo": 540,
+  "Europe/London": 0,
+  "Europe/Paris": 60,
+  "Europe/Berlin": 60,
+  "America/New_York": -300,
+  "America/Chicago": -360,
+  "America/Denver": -420,
+  "America/Los_Angeles": -480,
+  "UTC": 0
+};
+function getOffsetMinutes(timezone) {
+  return TIMEZONE_OFFSETS[timezone] ?? 330;
+}
+function calendarDateToUTC(dateStr, timezone, isStart) {
+  const offset = getOffsetMinutes(timezone);
+  if (isStart) {
+    const d = /* @__PURE__ */ new Date(`${dateStr}T00:00:00`);
+    d.setMinutes(d.getMinutes() - offset);
+    return d.toISOString();
+  } else {
+    const d = /* @__PURE__ */ new Date(`${dateStr}T23:59:59.999`);
+    d.setMinutes(d.getMinutes() - offset);
+    return d.toISOString();
+  }
+}
+async function resolveBusinessTimezone(supabase, vendorId) {
+  try {
+    const { data: vendor } = await supabase.from("vendors").select("timezone").eq("id", vendorId).single();
+    return vendor?.timezone || DEFAULT_TIMEZONE;
+  } catch {
+    return DEFAULT_TIMEZONE;
+  }
+}
+function parseDateRange(req) {
+  const now = /* @__PURE__ */ new Date();
+  const defaultStart = new Date(now);
+  defaultStart.setDate(defaultStart.getDate() - 30);
+  const startStr = req.query.startDate || defaultStart.toISOString().slice(0, 10);
+  const endStr = req.query.endDate || now.toISOString().slice(0, 10);
+  const service = req.query.service || void 0;
+  const status = req.query.status || void 0;
+  return { startStr, endStr, service, status };
+}
+function resolveDateBoundaries(startStr, endStr, timezone) {
+  return {
+    startDate: calendarDateToUTC(startStr, timezone, true),
+    endDate: calendarDateToUTC(endStr, timezone, false)
+  };
+}
+function buildOrderQuery(supabase, vendorId, startDate, endDate, service, status) {
+  let q = supabase.from("orders").select("*").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate);
+  if (status) q = q.eq("status", status);
+  if (service) q = q.contains("items_v2", [{ serviceName: service }]);
+  return q;
+}
+async function loadStageEvents(supabase, orderIds) {
+  if (orderIds.length === 0) return {};
+  const { data: events } = await supabase.from("order_stage_events").select("order_id, stage, timestamp").in("order_id", orderIds).order("timestamp", { ascending: true });
+  if (!events || events.length === 0) return {};
+  const byOrder = {};
+  for (const e of events) {
+    if (!byOrder[e.order_id]) byOrder[e.order_id] = {};
+    if (!byOrder[e.order_id][e.stage]) {
+      byOrder[e.order_id][e.stage] = e.timestamp;
+    }
+  }
+  return byOrder;
+}
+function computeTurnaroundFromEvents(stageEvents) {
+  const diffs = [];
+  for (const stages of Object.values(stageEvents)) {
+    const pickup = stages["pickup_completed"];
+    const completion = stages["delivered"] ?? stages["completed"];
+    if (pickup && completion) {
+      const diff = (new Date(completion).getTime() - new Date(pickup).getTime()) / (1e3 * 60 * 60);
+      if (diff >= 0) diffs.push(diff);
+    }
+  }
+  if (diffs.length === 0) return null;
+  return Math.round(diffs.reduce((s, d) => s + d, 0) / diffs.length);
+}
+function computeOnTimeRateFromEvents(stageEvents, orders) {
+  const eligible = orders.filter(
+    (o) => ["completed", "delivered"].includes(o.status) && o.estimated_delivery_at
+  );
+  if (eligible.length === 0) return null;
+  let onTime = 0;
+  let counted = 0;
+  for (const o of eligible) {
+    const stages = stageEvents[o.id];
+    if (!stages) continue;
+    const completion = stages["delivered"] ?? stages["completed"];
+    if (completion) {
+      counted++;
+      if (new Date(completion).getTime() <= new Date(o.estimated_delivery_at).getTime()) {
+        onTime++;
+      }
+    }
+  }
+  if (counted === 0) return null;
+  return Math.round(onTime / counted * 100);
+}
+function computeRepeatRate(orders) {
+  const customerCounts = {};
+  orders.filter((o) => o.customer_id && ["completed", "delivered"].includes(o.status)).forEach((o) => {
+    customerCounts[o.customer_id] = (customerCounts[o.customer_id] || 0) + 1;
+  });
+  const uniqueCustomers = Object.keys(customerCounts).length;
+  if (uniqueCustomers === 0)
+    return { repeatRate: 0, repeatCount: 0, uniqueCustomers: 0 };
+  const repeatCount = Object.values(customerCounts).filter(
+    (c) => c >= 2
+  ).length;
+  return {
+    repeatRate: Math.round(repeatCount / uniqueCustomers * 100),
+    repeatCount,
+    uniqueCustomers
+  };
+}
+function computeSegment(count) {
+  for (const seg of CUSTOMER_SEGMENTS) {
+    if (count >= seg.min && count <= seg.max) return seg.label;
+  }
+  return CUSTOMER_SEGMENTS[CUSTOMER_SEGMENTS.length - 1].label;
+}
+function computePeriodComparison(startDate, endDate, current, previous) {
+  const revenueChange = previous.revenue > 0 ? Math.round(
+    (current.revenue - previous.revenue) / previous.revenue * 100
+  ) : 0;
+  const ordersChange = previous.orders > 0 ? Math.round(
+    (current.orders - previous.orders) / previous.orders * 100
+  ) : 0;
+  return { revenueChange, ordersChange };
+}
+
 // server/routes/orders.ts
+var import_express5 = require("express");
+init_supabase();
 function deriveScheduleModes(serviceSlugs, orderItems) {
   const enabled = /* @__PURE__ */ new Set();
   for (const line of orderItems) {
@@ -1091,7 +1313,7 @@ var STAGES = [
   "delivered",
   "completed"
 ];
-var router4 = (0, import_express4.Router)();
+var router4 = (0, import_express5.Router)();
 router4.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
@@ -1110,6 +1332,22 @@ router4.get("/", async (req, res) => {
     if (deliveryExecutiveId) query = query.eq("delivery_executive_id", deliveryExecutiveId);
     if (status) query = query.eq("status", status);
     if (search) query = query.or(`code.ilike.%${search}%,customer_name.ilike.%${search}%,vendor_name.ilike.%${search}%,status.ilike.%${search}%`);
+    const startDateStr = req.query.startDate;
+    const endDateStr = req.query.endDate;
+    const service = req.query.service;
+    const delayed = req.query.delayed === "true";
+    if (startDateStr && endDateStr && vendorId) {
+      const tz = await resolveBusinessTimezone(admin, vendorId);
+      const { startDate, endDate } = resolveDateBoundaries(startDateStr, endDateStr, tz);
+      query = query.gte("created_at", startDate).lte("created_at", endDate);
+    }
+    if (service) {
+      query = query.contains("items_v2", [{ serviceName: service }]);
+    }
+    if (delayed) {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      query = query.not("status", "eq", "completed").not("status", "eq", "cancelled").not("status", "eq", "delivered").not("estimated_delivery_at", "is", null).lt("estimated_delivery_at", now);
+    }
     const { data, error } = await query;
     if (error) {
       console.error("[orders] DB error:", error.message);
@@ -1628,7 +1866,7 @@ router4.post("/reorder/:id", async (req, res) => {
 var orders_default = router4;
 
 // server/routes/vendors.ts
-var import_express5 = require("express");
+var import_express6 = require("express");
 init_supabase();
 var KNOWN_AREAS2 = {
   "Indiranagar": { lat: 12.9719, lng: 77.6413 },
@@ -1657,7 +1895,7 @@ function findClosestAreaForVendor(areaName, userLat, userLng) {
   let best = null;
   for (const [name, coords] of Object.entries(KNOWN_AREAS2)) {
     const nameSimilar = name.toLowerCase().includes(nameL) || nameL.includes(name.toLowerCase());
-    const d = haversineKm(userLat, userLng, coords.lat, coords.lng);
+    const d = haversineKm2(userLat, userLng, coords.lat, coords.lng);
     if (nameSimilar && (!best || d < best.dist)) {
       best = { ...coords, dist: d };
     }
@@ -1665,14 +1903,14 @@ function findClosestAreaForVendor(areaName, userLat, userLng) {
   if (best && best.dist < 15) return { lat: best.lat, lng: best.lng };
   return null;
 }
-function haversineKm(lat1, lng1, lat2, lng2) {
+function haversineKm2(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLng = (lng2 - lng1) * Math.PI / 180;
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-var router5 = (0, import_express5.Router)();
+var router5 = (0, import_express6.Router)();
 router5.get("/", async (req, res) => {
   try {
     const area = req.query.area;
@@ -1708,7 +1946,7 @@ router5.get("/", async (req, res) => {
             if (!closest) return false;
             coords = closest;
           }
-          const d = haversineKm(userLat, userLng, coords.lat, coords.lng);
+          const d = haversineKm2(userLat, userLng, coords.lat, coords.lng);
           v.distance_km = parseFloat(d.toFixed(1));
           return d <= radiusKm;
         });
@@ -1764,7 +2002,7 @@ router5.patch("/:id", async (req, res) => {
 var vendors_default = router5;
 
 // server/routes/delivery-tasks.ts
-var import_express6 = require("express");
+var import_express7 = require("express");
 init_supabase();
 var TASK_TO_ORDER_STAGE = {
   heading_to_pickup: { status: "pickup_scheduled", index: 3 },
@@ -1783,7 +2021,7 @@ async function completeOrder(supabase, orderId) {
   }
   await supabase.from("orders").update({ status: "completed", current_stage_index: 17 }).eq("id", orderId);
 }
-var router6 = (0, import_express6.Router)();
+var router6 = (0, import_express7.Router)();
 router6.get("/", async (req, res) => {
   try {
     const execId = req.query.execId;
@@ -1969,13 +2207,13 @@ router6.post("/:id/signature", async (req, res) => {
 var delivery_tasks_default = router6;
 
 // server/routes/delivery-executives.ts
-var import_express7 = require("express");
+var import_express8 = require("express");
 init_supabase();
-var router7 = (0, import_express7.Router)();
+var router7 = (0, import_express8.Router)();
 function toRad(deg) {
   return deg * Math.PI / 180;
 }
-function haversineKm2(lat1, lng1, lat2, lng2) {
+function haversineKm3(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLng = toRad(lng2 - lng1);
@@ -2065,7 +2303,7 @@ router7.get("/available", async (req, res) => {
       const capacityPct = maxOrders > 0 ? assigned / maxOrders : 1;
       let distanceKm = 0;
       if (pickupLat != null && pickupLng != null && e.current_lat != null && e.current_lng != null) {
-        distanceKm = haversineKm2(
+        distanceKm = haversineKm3(
           pickupLat,
           pickupLng,
           Number(e.current_lat),
@@ -2161,9 +2399,9 @@ router7.get("/earnings", async (req, res) => {
 var delivery_executives_default = router7;
 
 // server/routes/notifications.ts
-var import_express8 = require("express");
+var import_express9 = require("express");
 init_supabase();
-var router8 = (0, import_express8.Router)();
+var router8 = (0, import_express9.Router)();
 router8.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -2200,9 +2438,9 @@ router8.patch("/:id", async (req, res) => {
 var notifications_default = router8;
 
 // server/routes/slots.ts
-var import_express9 = require("express");
+var import_express10 = require("express");
 init_supabase();
-var router9 = (0, import_express9.Router)();
+var router9 = (0, import_express10.Router)();
 var DEFAULT_PICKUP_SLOTS = [
   { slot: "7:00 AM - 9:00 AM", available: true, premium: false },
   { slot: "9:00 AM - 11:00 AM", available: true, premium: false },
@@ -2252,9 +2490,9 @@ router9.get("/", async (_req, res) => {
 var slots_default = router9;
 
 // server/routes/wallet.ts
-var import_express10 = require("express");
+var import_express11 = require("express");
 init_supabase();
-var router10 = (0, import_express10.Router)();
+var router10 = (0, import_express11.Router)();
 router10.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -2266,43 +2504,26 @@ router10.get("/", async (req, res) => {
     const admin = createAdminClient();
     const { data: profile } = await admin.from("user_profiles").select("wallet_balance, loyalty_points").eq("id", user.id).maybeSingle();
     const { data: transactions } = await admin.from("wallet_transactions").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50);
-    res.json({ balance: profile?.wallet_balance || 0, loyalty_points: profile?.loyalty_points || 0, transactions: transactions || [] });
+    res.json({
+      balance: profile?.wallet_balance || 0,
+      loyaltyPoints: profile?.loyalty_points || 0,
+      transactions: transactions || []
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-router10.post("/", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const { amount, method } = req.body;
-    const admin = createAdminClient();
-    await admin.from("wallet_transactions").insert({
-      user_id: user.id,
-      type: "credit",
-      amount,
-      method,
-      description: "Wallet top-up",
-      status: "success"
-    });
-    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
-    const newBalance = (profile?.wallet_balance || 0) + amount;
-    await admin.from("user_profiles").update({ wallet_balance: newBalance }).eq("id", user.id);
-    res.json({ balance: newBalance });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+router10.post("/", async (_req, res) => {
+  res.status(405).json({
+    error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead."
+  });
 });
 var wallet_default = router10;
 
 // server/routes/reviews.ts
-var import_express11 = require("express");
+var import_express12 = require("express");
 init_supabase();
-var router11 = (0, import_express11.Router)();
+var router11 = (0, import_express12.Router)();
 router11.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
@@ -2350,9 +2571,9 @@ router11.post("/", async (req, res) => {
 var reviews_default = router11;
 
 // server/routes/service-categories.ts
-var import_express12 = require("express");
+var import_express13 = require("express");
 init_supabase();
-var router12 = (0, import_express12.Router)();
+var router12 = (0, import_express13.Router)();
 router12.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
@@ -2410,9 +2631,9 @@ router12.delete("/:id", async (req, res) => {
 var service_categories_default = router12;
 
 // server/routes/service-items.ts
-var import_express13 = require("express");
+var import_express14 = require("express");
 init_supabase();
-var router13 = (0, import_express13.Router)();
+var router13 = (0, import_express14.Router)();
 router13.get("/", async (req, res) => {
   try {
     const supabase = createAdminClient();
@@ -2561,9 +2782,9 @@ router13.delete("/:id", async (req, res) => {
 var service_items_default = router13;
 
 // server/routes/services.ts
-var import_express14 = require("express");
+var import_express15 = require("express");
 init_supabase();
-var router14 = (0, import_express14.Router)();
+var router14 = (0, import_express15.Router)();
 router14.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
@@ -2705,9 +2926,9 @@ router14.delete("/:id", async (req, res) => {
 var services_default = router14;
 
 // server/routes/coupons.ts
-var import_express15 = require("express");
+var import_express16 = require("express");
 init_supabase();
-var router15 = (0, import_express15.Router)();
+var router15 = (0, import_express16.Router)();
 router15.get("/", async (_req, res) => {
   try {
     const supabase = createAdminClient();
@@ -2724,9 +2945,9 @@ router15.get("/", async (_req, res) => {
 var coupons_default = router15;
 
 // server/routes/admin.ts
-var import_express16 = require("express");
+var import_express17 = require("express");
 init_supabase();
-var router16 = (0, import_express16.Router)();
+var router16 = (0, import_express17.Router)();
 var DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 router16.get("/kpis", async (_req, res) => {
@@ -2873,11 +3094,11 @@ router16.get("/analytics", async (_req, res) => {
       }
     }
     const totalServices = Object.values(serviceBuckets).reduce((s, c) => s + c, 0);
-    const COLORS2 = ["#0d9488", "#10b981", "#8b5cf6", "#f59e0b", "#06b6d4", "#ec4899", "#f97316", "#22c55e"];
+    const COLORS3 = ["#0d9488", "#10b981", "#8b5cf6", "#f59e0b", "#06b6d4", "#ec4899", "#f97316", "#22c55e"];
     const serviceDemand = Object.entries(serviceBuckets).sort((a, b) => b[1] - a[1]).map(([name, count], i) => ({
       name,
       value: totalServices > 0 ? Math.round(count / totalServices * 100) : 0,
-      color: COLORS2[i % COLORS2.length]
+      color: COLORS3[i % COLORS3.length]
     }));
     res.json({
       revenue: revenueChart,
@@ -2948,10 +3169,10 @@ router16.get("/orders", async (req, res) => {
 var admin_default = router16;
 
 // server/routes/vendor-analytics.ts
-var import_express17 = require("express");
+var import_express18 = require("express");
 init_supabase();
-var router17 = (0, import_express17.Router)();
-var COLORS = ["#0d9488", "#10b981", "#8b5cf6", "#f59e0b", "#06b6d4", "#ec4899", "#f97316"];
+var router17 = (0, import_express18.Router)();
+var COLORS2 = ["#0d9488", "#10b981", "#8b5cf6", "#f59e0b", "#06b6d4", "#ec4899", "#f97316"];
 var DAY_LABELS2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 router17.get("/", async (req, res) => {
   try {
@@ -3037,7 +3258,7 @@ router17.get("/service-revenue", async (req, res) => {
       name,
       revenue: Math.round(revenue),
       percentage: totalRevenue > 0 ? Math.round(revenue / totalRevenue * 100) : 0,
-      color: COLORS[i % COLORS.length]
+      color: COLORS2[i % COLORS2.length]
     }));
     res.json(result);
   } catch (err) {
@@ -3116,9 +3337,9 @@ router17.get("/inventory", async (req, res) => {
 var vendor_analytics_default = router17;
 
 // server/routes/subscriptions.ts
-var import_express18 = require("express");
+var import_express19 = require("express");
 init_supabase();
-var router18 = (0, import_express18.Router)();
+var router18 = (0, import_express19.Router)();
 router18.get("/plans", async (_req, res) => {
   try {
     const supabase = createAdminClient();
@@ -3202,9 +3423,9 @@ router18.delete("/:id", async (req, res) => {
 var subscriptions_default = router18;
 
 // server/routes/vendor-staff.ts
-var import_express19 = require("express");
+var import_express20 = require("express");
 init_supabase();
-var router19 = (0, import_express19.Router)();
+var router19 = (0, import_express20.Router)();
 router19.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
@@ -3269,9 +3490,9 @@ router19.delete("/:id", async (req, res) => {
 var vendor_staff_default = router19;
 
 // server/routes/garments.ts
-var import_express20 = require("express");
+var import_express21 = require("express");
 init_supabase();
-var router20 = (0, import_express20.Router)();
+var router20 = (0, import_express21.Router)();
 router20.get("/", async (req, res) => {
   try {
     const vendorId = req.query.vendorId;
@@ -3330,9 +3551,9 @@ router20.delete("/:id", async (req, res) => {
 var garments_default = router20;
 
 // server/routes/wallet-methods.ts
-var import_express21 = require("express");
+var import_express22 = require("express");
 init_supabase();
-var router21 = (0, import_express21.Router)();
+var router21 = (0, import_express22.Router)();
 router21.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -3412,9 +3633,9 @@ router21.delete("/:id", async (req, res) => {
 var wallet_methods_default = router21;
 
 // server/routes/coupon-validate.ts
-var import_express22 = require("express");
+var import_express23 = require("express");
 init_supabase();
-var router22 = (0, import_express22.Router)();
+var router22 = (0, import_express23.Router)();
 router22.post("/", async (req, res) => {
   try {
     const { code, subtotal } = req.body;
@@ -3454,9 +3675,9 @@ router22.post("/", async (req, res) => {
 var coupon_validate_default = router22;
 
 // server/routes/support-tickets.ts
-var import_express23 = require("express");
+var import_express24 = require("express");
 init_supabase();
-var router23 = (0, import_express23.Router)();
+var router23 = (0, import_express24.Router)();
 router23.get("/", async (req, res) => {
   try {
     const status = req.query.status;
@@ -3488,9 +3709,24 @@ router23.post("/", async (req, res) => {
       }
     }
     if (photos.length > 0) body.photos = photos;
+    let validatedOrderId = null;
+    if (body.order_id) {
+      const { data: order, error: orderErr } = await admin.from("orders").select("id, customer_id").eq("id", body.order_id).single();
+      if (orderErr || !order) {
+        res.status(400).json({ error: "Referenced order does not exist" });
+        return;
+      }
+      const userId = body.user_id || user?.id;
+      if (userId && order.customer_id !== userId) {
+        res.status(403).json({ error: "Not authorized to attach ticket to this order" });
+        return;
+      }
+      validatedOrderId = order.id;
+    }
     const { data, error } = await admin.from("support_tickets").insert({
       ...body,
       user_id: body.user_id || user?.id,
+      order_id: validatedOrderId,
       status: "open"
     }).select().single();
     if (error) {
@@ -3590,9 +3826,9 @@ router23.post("/:id/close", async (req, res) => {
 var support_tickets_default = router23;
 
 // server/routes/admin-campaigns.ts
-var import_express24 = require("express");
+var import_express25 = require("express");
 init_supabase();
-var router24 = (0, import_express24.Router)();
+var router24 = (0, import_express25.Router)();
 router24.get("/", async (req, res) => {
   try {
     const admin = createAdminClient();
@@ -3635,9 +3871,9 @@ router24.patch("/:id", async (req, res) => {
 var admin_campaigns_default = router24;
 
 // server/routes/admin-features.ts
-var import_express25 = require("express");
+var import_express26 = require("express");
 init_supabase();
-var router25 = (0, import_express25.Router)();
+var router25 = (0, import_express26.Router)();
 router25.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
@@ -3667,9 +3903,9 @@ router25.patch("/:key", async (req, res) => {
 var admin_features_default = router25;
 
 // server/routes/admin-audit-logs.ts
-var import_express26 = require("express");
+var import_express27 = require("express");
 init_supabase();
-var router26 = (0, import_express26.Router)();
+var router26 = (0, import_express27.Router)();
 router26.get("/", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
@@ -3687,10 +3923,10 @@ router26.get("/", async (req, res) => {
 var admin_audit_logs_default = router26;
 
 // server/routes/admin-integrations.ts
-var import_express27 = require("express");
+var import_express28 = require("express");
 init_supabase();
 var import_crypto = __toESM(require("crypto"));
-var router27 = (0, import_express27.Router)();
+var router27 = (0, import_express28.Router)();
 router27.get("/api-keys", async (_req, res) => {
   try {
     const admin = createAdminClient();
@@ -3773,9 +4009,9 @@ router27.delete("/webhooks/:id", async (req, res) => {
 var admin_integrations_default = router27;
 
 // server/routes/admin-reports.ts
-var import_express28 = require("express");
+var import_express29 = require("express");
 init_supabase();
-var router28 = (0, import_express28.Router)();
+var router28 = (0, import_express29.Router)();
 router28.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
@@ -3836,9 +4072,9 @@ router28.delete("/scheduled/:id", async (req, res) => {
 var admin_reports_default = router28;
 
 // server/routes/admin-users.ts
-var import_express29 = require("express");
+var import_express30 = require("express");
 init_supabase();
-var router29 = (0, import_express29.Router)();
+var router29 = (0, import_express30.Router)();
 router29.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
@@ -3899,9 +4135,9 @@ router29.patch("/:id", async (req, res) => {
 var admin_users_default = router29;
 
 // server/routes/admin-config.ts
-var import_express30 = require("express");
+var import_express31 = require("express");
 init_supabase();
-var router30 = (0, import_express30.Router)();
+var router30 = (0, import_express31.Router)();
 router30.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
@@ -3945,9 +4181,9 @@ router30.patch("/", async (req, res) => {
 var admin_config_default = router30;
 
 // server/routes/admin-rbac.ts
-var import_express31 = require("express");
+var import_express32 = require("express");
 init_supabase();
-var router31 = (0, import_express31.Router)();
+var router31 = (0, import_express32.Router)();
 router31.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
@@ -3989,9 +4225,9 @@ router31.patch("/:id", async (req, res) => {
 var admin_rbac_default = router31;
 
 // server/routes/admin-commission.ts
-var import_express32 = require("express");
+var import_express33 = require("express");
 init_supabase();
-var router32 = (0, import_express32.Router)();
+var router32 = (0, import_express33.Router)();
 function getConfig(supabase) {
   return supabase.from("system_config").select("config").eq("id", 1).single().then((r) => r.data?.config || {});
 }
@@ -4164,9 +4400,9 @@ router32.get("/summary", async (_req, res) => {
 var admin_commission_default = router32;
 
 // server/routes/order-stages.ts
-var import_express33 = require("express");
+var import_express34 = require("express");
 init_supabase();
-var router33 = (0, import_express33.Router)();
+var router33 = (0, import_express34.Router)();
 router33.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
@@ -4183,9 +4419,9 @@ router33.get("/", async (_req, res) => {
 var order_stages_default = router33;
 
 // server/routes/chat.ts
-var import_express34 = require("express");
+var import_express35 = require("express");
 init_supabase();
-var router34 = (0, import_express34.Router)();
+var router34 = (0, import_express35.Router)();
 router34.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -4318,9 +4554,9 @@ How can I assist you today?`;
 var chat_default = router34;
 
 // server/routes/favorites.ts
-var import_express35 = require("express");
+var import_express36 = require("express");
 init_supabase();
-var router35 = (0, import_express35.Router)();
+var router35 = (0, import_express36.Router)();
 router35.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -4387,7 +4623,7 @@ router35.delete("/:vendor_id", async (req, res) => {
 var favorites_default = router35;
 
 // server/routes/geocode.ts
-var import_express36 = require("express");
+var import_express37 = require("express");
 var cache2 = /* @__PURE__ */ new Map();
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 function getCached(key) {
@@ -4438,17 +4674,17 @@ var KNOWN_AREAS3 = {
   "RT Nagar": { lat: 13.02, lng: 77.595, displayName: "RT Nagar, Bengaluru", pincode: "560032" },
   "Kengeri": { lat: 12.91, lng: 77.48, displayName: "Kengeri, Bengaluru", pincode: "560060" }
 };
-function findClosestArea(lat, lng) {
+function findClosestArea2(lat, lng) {
   let closest = null;
   for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
-    const d = haversineKm3(lat, lng, info.lat, info.lng);
+    const d = haversineKm4(lat, lng, info.lat, info.lng);
     if (!closest || d < closest.distance) {
       closest = { name, pincode: info.pincode, lat: info.lat, lng: info.lng, distance: d };
     }
   }
   return closest;
 }
-var router36 = (0, import_express36.Router)();
+var router36 = (0, import_express37.Router)();
 router36.get("/reverse", async (req, res) => {
   try {
     const lat = req.query.lat;
@@ -4466,7 +4702,7 @@ router36.get("/reverse", async (req, res) => {
       return;
     }
     for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
-      const d = haversineKm3(latNum, lngNum, info.lat, info.lng);
+      const d = haversineKm4(latNum, lngNum, info.lat, info.lng);
       if (d < 1) {
         const result2 = { area: name, city: "Bengaluru", pincode: info.pincode, lat: info.lat, lng: info.lng };
         setCache(cacheKey, result2);
@@ -4478,7 +4714,7 @@ router36.get("/reverse", async (req, res) => {
       `https://nominatim.openstreetmap.org/reverse?lat=${latNum}&lon=${lngNum}&format=json&addressdetails=1`
     );
     if (!data || data.error) {
-      const closest = findClosestArea(latNum, lngNum);
+      const closest = findClosestArea2(latNum, lngNum);
       if (closest) {
         const result2 = { area: closest.name, city: "Bengaluru", pincode: closest.pincode, lat: latNum, lng: lngNum };
         setCache(cacheKey, result2);
@@ -4497,7 +4733,7 @@ router36.get("/reverse", async (req, res) => {
     );
     let area = nominatimArea || "Unknown";
     if (!isKnown) {
-      const closest = findClosestArea(latNum, lngNum);
+      const closest = findClosestArea2(latNum, lngNum);
       if (closest && closest.distance < 3) {
         area = closest.name;
       }
@@ -4554,7 +4790,7 @@ router36.get("/search", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-function haversineKm3(lat1, lng1, lat2, lng2) {
+function haversineKm4(lat1, lng1, lat2, lng2) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLng = (lng2 - lng1) * Math.PI / 180;
@@ -4564,9 +4800,9 @@ function haversineKm3(lat1, lng1, lat2, lng2) {
 var geocode_default = router36;
 
 // server/routes/routing.ts
-var import_express37 = require("express");
+var import_express38 = require("express");
 var ORS_BASE = "https://api.openrouteservice.org/v2";
-var router37 = (0, import_express37.Router)();
+var router37 = (0, import_express38.Router)();
 router37.get("/directions", async (req, res) => {
   try {
     const apiKey = process.env.OPENROUTESERVICE_API_KEY;
@@ -4631,9 +4867,9 @@ router37.get("/geocode/search", async (req, res) => {
 var routing_default = router37;
 
 // server/routes/delivery-location.ts
-var import_express38 = require("express");
+var import_express39 = require("express");
 init_supabase();
-var router38 = (0, import_express38.Router)();
+var router38 = (0, import_express39.Router)();
 router38.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
@@ -4686,9 +4922,9 @@ router38.get("/:execId", async (req, res) => {
 var delivery_location_default = router38;
 
 // server/routes/vendor-onboarding.ts
-var import_express39 = require("express");
+var import_express40 = require("express");
 init_supabase();
-var router39 = (0, import_express39.Router)();
+var router39 = (0, import_express40.Router)();
 router39.post("/approve", async (req, res) => {
   try {
     const { vendor_id, owner_id } = req.body;
@@ -4757,9 +4993,9 @@ router39.get("/pending", async (_req, res) => {
 var vendor_onboarding_default = router39;
 
 // server/routes/vendor-service-prices.ts
-var import_express40 = require("express");
+var import_express41 = require("express");
 init_supabase();
-var router40 = (0, import_express40.Router)();
+var router40 = (0, import_express41.Router)();
 async function canManageVendor(req, vendorId) {
   const admin = createAdminClient();
   const user = req.user;
@@ -4838,10 +5074,429 @@ router40.delete("/:vendorId/:serviceId/:itemId", async (req, res) => {
 });
 var vendor_service_prices_default = router40;
 
-// server/routes/payments.ts
-var import_express41 = require("express");
+// server/services/payment-service.ts
+var import_crypto2 = __toESM(require("crypto"));
 init_supabase();
-var router41 = (0, import_express41.Router)();
+var RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
+var RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
+var STALE_CREATING_MINUTES = 5;
+function razorpayAuth() {
+  return Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
+}
+function isConfigured() {
+  return Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+}
+function deterministicReceipt(idempotencyKey) {
+  const hash = import_crypto2.default.createHash("sha256").update(idempotencyKey).digest("hex");
+  return `lh_${hash.slice(0, 32)}`;
+}
+function isStale(createdAt, minutes) {
+  const created = new Date(createdAt).getTime();
+  const now = Date.now();
+  return now - created > minutes * 60 * 1e3;
+}
+async function createTopupOrder(userId, amountRupees, idempotencyKey) {
+  if (!isConfigured()) {
+    return { success: false, error: "Payment gateway not configured" };
+  }
+  if (!amountRupees || amountRupees < 10 || amountRupees > 25e3) {
+    return { success: false, error: "Amount must be between \u20B910 and \u20B925,000" };
+  }
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.length < 8) {
+    return { success: false, error: "Invalid idempotency key" };
+  }
+  const admin = createAdminClient();
+  const { data: inserted, error: insertError } = await admin.from("payment_transactions").insert({
+    user_id: userId,
+    transaction_purpose: "wallet_topup",
+    amount: amountRupees,
+    currency: "INR",
+    gateway: "razorpay",
+    gateway_order_id: null,
+    payment_status: "creating",
+    idempotency_key: idempotencyKey
+  }).select("id, gateway_order_id, payment_status, updated_at").single();
+  let txnId;
+  if (insertError) {
+    const { data: existing } = await admin.from("payment_transactions").select("id, gateway_order_id, payment_status, updated_at").eq("idempotency_key", idempotencyKey).single();
+    if (!existing) {
+      return { success: false, error: "Failed to retrieve existing payment record" };
+    }
+    if (existing.gateway_order_id) {
+      return {
+        success: true,
+        transactionId: existing.id,
+        razorpayOrderId: existing.gateway_order_id,
+        amount: amountRupees,
+        currency: "INR",
+        publicKeyId: RAZORPAY_KEY_ID
+      };
+    }
+    if (existing.payment_status === "creating" && isStale(existing.updated_at, STALE_CREATING_MINUTES)) {
+      return {
+        success: false,
+        error: "Payment order status uncertain. Please try again later."
+      };
+    }
+    if (existing.payment_status === "creating") {
+      return {
+        success: false,
+        error: "Payment processing in progress. Please wait."
+      };
+    }
+    if (existing.payment_status === "created" && !existing.gateway_order_id) {
+      const { data: claimed, error: claimError } = await admin.from("payment_transactions").update({
+        payment_status: "creating",
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).eq("id", existing.id).eq("payment_status", "created").select("id").single();
+      if (claimError || !claimed) {
+        return {
+          success: false,
+          error: "Payment processing in progress. Please wait."
+        };
+      }
+      txnId = existing.id;
+    } else {
+      return {
+        success: false,
+        error: `Unexpected payment status: ${existing.payment_status}`
+      };
+    }
+  } else {
+    txnId = inserted.id;
+  }
+  const receipt = deterministicReceipt(idempotencyKey);
+  const amountPaise = Math.round(amountRupees * 100);
+  let response;
+  try {
+    response = await fetch("https://api.razorpay.com/v1/orders", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${razorpayAuth()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        amount: amountPaise,
+        currency: "INR",
+        receipt,
+        payment_capture: 1
+      })
+    });
+  } catch (err) {
+    await admin.from("payment_transactions").update({
+      failure_reason: `Network error: ${err.message}`,
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    return {
+      success: false,
+      error: "Payment order status uncertain. Please try again later."
+    };
+  }
+  if (response.ok) {
+    let razorpayOrder;
+    try {
+      razorpayOrder = await response.json();
+    } catch {
+      return {
+        success: false,
+        error: "Payment order status uncertain. Please try again later."
+      };
+    }
+    const { error: dbUpdateError } = await admin.from("payment_transactions").update({
+      gateway_order_id: razorpayOrder.id,
+      payment_status: "created",
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    if (!dbUpdateError) {
+      return {
+        success: true,
+        transactionId: txnId,
+        razorpayOrderId: razorpayOrder.id,
+        amount: amountRupees,
+        currency: "INR",
+        publicKeyId: RAZORPAY_KEY_ID
+      };
+    }
+    const { error: retryError } = await admin.from("payment_transactions").update({
+      gateway_order_id: razorpayOrder.id,
+      payment_status: "created",
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    if (!retryError) {
+      return {
+        success: true,
+        transactionId: txnId,
+        razorpayOrderId: razorpayOrder.id,
+        amount: amountRupees,
+        currency: "INR",
+        publicKeyId: RAZORPAY_KEY_ID
+      };
+    }
+    console.error(
+      `[payments] CRITICAL: Razorpay order created but gateway_order_id could not be persisted. transactionId=${txnId}, razorpayOrderId=${razorpayOrder.id}, error=${retryError.message}`
+    );
+    return {
+      success: false,
+      error: "Payment order created but could not be recorded. Reconciliation required."
+    };
+  }
+  const errorBody = await response.json().catch(() => ({}));
+  const errorMsg = errorBody.error?.description || "Razorpay order creation failed";
+  if (response.status >= 500) {
+    await admin.from("payment_transactions").update({
+      failure_reason: `Razorpay 5xx: ${errorMsg}`,
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    return {
+      success: false,
+      error: "Payment order status uncertain. Please try again later."
+    };
+  }
+  await admin.from("payment_transactions").update({
+    payment_status: "created",
+    failure_reason: `Razorpay ${response.status}: ${errorMsg}`,
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", txnId).eq("payment_status", "creating");
+  return {
+    success: false,
+    error: errorMsg
+  };
+}
+async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, razorpaySignature, transactionId) {
+  if (!isConfigured()) {
+    return { success: false, error: "Payment gateway not configured" };
+  }
+  const admin = createAdminClient();
+  const { data: txn, error: loadError } = await admin.from("payment_transactions").select("*").eq("id", transactionId).single();
+  if (loadError || !txn) {
+    return { success: false, error: "Payment transaction not found" };
+  }
+  if (txn.user_id !== userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+  if (txn.gateway_order_id !== razorpayOrderId) {
+    return { success: false, error: "Order ID mismatch" };
+  }
+  const crypto4 = await import("crypto");
+  const expectedSig = crypto4.createHmac("sha256", RAZORPAY_KEY_SECRET).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
+  if (!crypto4.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
+    return { success: false, error: "Invalid payment signature" };
+  }
+  try {
+    const response = await fetch(`https://api.razorpay.com/v1/payments/${razorpayPaymentId}`, {
+      headers: { Authorization: `Basic ${razorpayAuth()}` }
+    });
+    if (response.ok) {
+      const payment = await response.json();
+      if (payment.order_id !== razorpayOrderId) {
+        return { success: false, error: "Payment does not belong to expected order" };
+      }
+    }
+  } catch {
+  }
+  const { error: updateError } = await admin.from("payment_transactions").update({
+    gateway_payment_id: razorpayPaymentId,
+    gateway_signature_verified: true,
+    payment_status: "pending",
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", transactionId).eq("payment_status", "created");
+  if (updateError) {
+    return { success: false, error: `Failed to update payment record: ${updateError.message}` };
+  }
+  const result = await finalizeWalletTopup(transactionId);
+  return result;
+}
+async function finalizeWalletTopup(paymentTransactionId) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("finalize_wallet_topup", {
+    p_payment_transaction_id: paymentTransactionId
+  });
+  if (error) {
+    return { success: false, error: `RPC error: ${error.message}` };
+  }
+  if (!data) {
+    return { success: false, error: "No response from finalization" };
+  }
+  const result = data;
+  return {
+    success: result.success,
+    alreadyCredited: result.already_credited || false,
+    walletTransactionId: result.wallet_transaction_id || null,
+    newBalance: result.new_balance,
+    error: result.error
+  };
+}
+async function markPaymentCaptureVerified(gatewayOrderId, gatewayPaymentId) {
+  const admin = createAdminClient();
+  const { data: txn } = await admin.from("payment_transactions").select("id").eq("gateway_order_id", gatewayOrderId).eq("transaction_purpose", "wallet_topup").single();
+  if (!txn) {
+    return { transactionId: null, finalized: false };
+  }
+  await admin.from("payment_transactions").update({
+    gateway_capture_verified: true,
+    gateway_payment_id: gatewayPaymentId,
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", txn.id).in("payment_status", ["created", "pending", "authorized"]);
+  const result = await finalizeWalletTopup(txn.id);
+  return {
+    transactionId: txn.id,
+    finalized: result.success
+  };
+}
+async function getPaymentSummary(userId) {
+  const admin = createAdminClient();
+  const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", userId).single();
+  const walletBalance = profile?.wallet_balance || 0;
+  const sixMonthsAgo = /* @__PURE__ */ new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const { data: spendData } = await admin.from("payment_transactions").select("amount").eq("user_id", userId).eq("transaction_purpose", "order_payment").eq("payment_status", "captured").gte("created_at", sixMonthsAgo.toISOString());
+  const totalSpentSixMonths = (spendData || []).reduce(
+    (sum, row) => sum + (row.amount || 0),
+    0
+  );
+  const moneySaved = 0;
+  const { count: transactionCount } = await admin.from("wallet_transactions").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  const { count: invoiceCount } = await admin.from("customer_invoices").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  return {
+    walletBalance,
+    totalSpentSixMonths,
+    moneySaved,
+    transactionCount: transactionCount || 0,
+    invoiceCount: invoiceCount || 0
+  };
+}
+async function getTransactions(userId, options = {}) {
+  const admin = createAdminClient();
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(50, Math.max(1, options.limit || 20));
+  const offset = (page - 1) * limit;
+  let query = admin.from("wallet_transactions").select("*", { count: "exact" }).eq("user_id", userId);
+  if (options.type === "credit" || options.type === "debit") {
+    query = query.eq("type", options.type);
+  }
+  if (options.status) {
+    query = query.eq("status", options.status);
+  }
+  query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+  const { data, count, error } = await query;
+  if (error) {
+    return { transactions: [], total: 0, page, limit };
+  }
+  return {
+    transactions: data || [],
+    total: count || 0,
+    page,
+    limit
+  };
+}
+async function getInvoices(userId, options = {}) {
+  const admin = createAdminClient();
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(50, Math.max(1, options.limit || 20));
+  const offset = (page - 1) * limit;
+  const { data, count, error } = await admin.from("customer_invoices").select("*", { count: "exact" }).eq("user_id", userId).order("invoice_date", { ascending: false }).range(offset, offset + limit - 1);
+  if (error) {
+    return { invoices: [], total: 0, page, limit };
+  }
+  return {
+    invoices: data || [],
+    total: count || 0,
+    page,
+    limit
+  };
+}
+
+// server/routes/payments.ts
+var import_express42 = require("express");
+init_supabase();
+var router41 = (0, import_express42.Router)();
+async function getAuthenticatedUser(req) {
+  try {
+    const supabase = createServerClientWithCookies(
+      (name) => req.cookies?.[name]
+    );
+    const { data: { user } } = await supabase.auth.getUser();
+    return user ? { id: user.id } : null;
+  } catch {
+    return null;
+  }
+}
+router41.post("/wallet/topup/create-order", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { amount, idempotencyKey } = req.body;
+    if (!amount || typeof amount !== "number") {
+      res.status(400).json({ error: "Valid amount is required" });
+      return;
+    }
+    if (!idempotencyKey || typeof idempotencyKey !== "string") {
+      res.status(400).json({ error: "idempotencyKey is required" });
+      return;
+    }
+    const result = await createTopupOrder(user.id, amount, idempotencyKey);
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({
+      success: true,
+      transactionId: result.transactionId,
+      razorpayOrderId: result.razorpayOrderId,
+      amount: result.amount,
+      currency: result.currency,
+      publicKeyId: result.publicKeyId
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.post("/wallet/topup/verify", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      transaction_id
+    } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !transaction_id) {
+      res.status(400).json({ error: "Missing required fields" });
+      return;
+    }
+    const result = await verifyTopupPayment(
+      user.id,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      transaction_id
+    );
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({
+      success: true,
+      alreadyCredited: result.alreadyCredited,
+      walletTransactionId: result.walletTransactionId,
+      newBalance: result.newBalance
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.post("/wallet/add", async (_req, res) => {
+  res.status(405).json({
+    error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead."
+  });
+});
 router41.post("/create-order", async (req, res) => {
   try {
     const { amount, currency, order_id } = req.body;
@@ -4887,13 +5542,14 @@ router41.post("/verify", async (req, res) => {
       return;
     }
     const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
-    const crypto3 = await import("crypto");
-    const expectedSig = crypto3.createHmac("sha256", razorpayKeySecret).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
+    const crypto4 = await import("crypto");
+    const expectedSig = crypto4.createHmac("sha256", razorpayKeySecret).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
     if (expectedSig !== razorpay_signature) {
       res.status(400).json({ error: "Invalid payment signature" });
       return;
     }
-    const admin = createAdminClient();
+    const { createAdminClient: createAdminClient2 } = await Promise.resolve().then(() => (init_supabase(), supabase_exports));
+    const admin = createAdminClient2();
     if (order_id) {
       await admin.from("orders").update({
         payment_status: "paid",
@@ -4905,37 +5561,47 @@ router41.post("/verify", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.post("/wallet/add", async (req, res) => {
+router41.get("/customer/payments/summary", async (req, res) => {
   try {
-    const { amount } = req.body;
-    if (!amount || amount <= 0) {
-      res.status(400).json({ error: "Valid amount required" });
-      return;
-    }
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    const admin = createAdminClient();
-    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
-    const currentBalance = profile?.wallet_balance || 0;
-    const { error: updateError } = await admin.from("user_profiles").update({
-      wallet_balance: currentBalance + amount
-    }).eq("id", user.id);
-    if (updateError) {
-      res.status(500).json({ error: updateError.message });
+    const summary = await getPaymentSummary(user.id);
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.get("/customer/payments/transactions", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
       return;
     }
-    await admin.from("wallet_transactions").insert({
-      user_id: user.id,
-      type: "credit",
-      amount,
-      description: "Wallet top-up via payment gateway"
-    });
-    const { data: updatedProfile } = await admin.from("user_profiles").select("wallet_balance").eq("id", user.id).single();
-    res.json({ balance: updatedProfile?.wallet_balance || currentBalance + amount });
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const type = req.query.type;
+    const status = req.query.status;
+    const result = await getTransactions(user.id, { page, limit, type, status });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.get("/customer/invoices", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const result = await getInvoices(user.id, { page, limit });
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4943,9 +5609,9 @@ router41.post("/wallet/add", async (req, res) => {
 var payments_default = router41;
 
 // server/routes/customer-config.ts
-var import_express42 = require("express");
+var import_express43 = require("express");
 init_supabase();
-var router42 = (0, import_express42.Router)();
+var router42 = (0, import_express43.Router)();
 var CUSTOMER_FEATURE_DEFAULTS = {
   enableSubscriptions: true,
   enableCoupons: true,
@@ -4980,9 +5646,9 @@ router42.get("/", async (_req, res) => {
 var customer_config_default = router42;
 
 // server/routes/settings.ts
-var import_express43 = require("express");
+var import_express44 = require("express");
 init_supabase();
-var router43 = (0, import_express43.Router)();
+var router43 = (0, import_express44.Router)();
 var DEFAULTS = { pushEnabled: true, orderUpdates: true, promotions: false };
 router43.get("/", async (req, res) => {
   try {
@@ -5081,10 +5747,780 @@ router43.patch("/password", async (req, res) => {
 });
 var settings_default = router43;
 
+// server/routes/vendor-reports.ts
+var import_express45 = require("express");
+init_supabase();
+var router44 = (0, import_express45.Router)();
+router44.get("/overview", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = orders || [];
+    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
+    const cancelledOrders = allOrders.filter((o) => o.status === "cancelled");
+    const totalRevenue = completedOrders.reduce((s, o) => s + (o.total || 0), 0);
+    const aov = completedOrders.length > 0 ? Math.round(totalRevenue / completedOrders.length) : 0;
+    const orderIds = allOrders.map((o) => o.id);
+    const stageEvents = await loadStageEvents(supabase, orderIds);
+    const { repeatRate, repeatCount, uniqueCustomers } = computeRepeatRate(allOrders);
+    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
+    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
+    const cancellationRate = allOrders.length > 0 ? Math.round(cancelledOrders.length / allOrders.length * 100) : 0;
+    const { data: reviews } = await supabase.from("reviews").select("overall").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate);
+    const allReviews = reviews || [];
+    const avgRating = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const periodMs = new Date(endDate).getTime() - new Date(startDate).getTime();
+    const prevStart = new Date(new Date(startDate).getTime() - periodMs).toISOString();
+    const { data: prevOrders } = await buildOrderQuery(supabase, vendorId, prevStart, startDate, service, status);
+    const prevAll = prevOrders || [];
+    const prevCompleted = prevAll.filter((o) => ["completed", "delivered"].includes(o.status));
+    const prevRevenue = prevCompleted.reduce((s, o) => s + (o.total || 0), 0);
+    const revenueChange = prevRevenue > 0 ? Math.round((totalRevenue - prevRevenue) / prevRevenue * 100) : 0;
+    const ordersChange = prevAll.length > 0 ? Math.round((allOrders.length - prevAll.length) / prevAll.length * 100) : 0;
+    const delayed = allOrders.filter(
+      (o) => !["completed", "cancelled", "delivered"].includes(o.status) && o.estimated_delivery_at && new Date(o.estimated_delivery_at) < /* @__PURE__ */ new Date()
+    );
+    const serviceMap = {};
+    completedOrders.forEach((o) => {
+      const items = o.items_v2 || o.items || [];
+      if (Array.isArray(items)) {
+        items.forEach((item) => {
+          const name = item.serviceName || item.serviceKey || "Unknown";
+          serviceMap[name] = (serviceMap[name] || 0) + (item.unitPrice || 0) * (item.qty || 1);
+        });
+      }
+    });
+    const topServiceEntry = Object.entries(serviceMap).sort((a, b) => b[1] - a[1])[0];
+    const dayMap = {};
+    completedOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      dayMap[day] = (dayMap[day] || 0) + (o.total || 0);
+    });
+    const bestDayEntry = Object.entries(dayMap).sort((a, b) => b[1] - a[1])[0];
+    const customerCounts = {};
+    allOrders.forEach((o) => {
+      if (o.customer_id) customerCounts[o.customer_id] = (customerCounts[o.customer_id] || 0) + 1;
+    });
+    const topCustomerEntry = Object.entries(customerCounts).sort((a, b) => b[1] - a[1])[0];
+    const revenueTrend = Object.entries(dayMap).map(([day, revenue]) => ({ day, revenue })).sort((a, b) => a.day.localeCompare(b.day));
+    const ordersTrendMap = {};
+    allOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      ordersTrendMap[day] = (ordersTrendMap[day] || 0) + 1;
+    });
+    const ordersTrend = Object.entries(ordersTrendMap).map(([day, count]) => ({ day, count })).sort((a, b) => a.day.localeCompare(b.day));
+    res.json({
+      totalOrders: allOrders.length,
+      totalRevenue,
+      aov,
+      avgTurnaroundHrs,
+      repeatRate,
+      onTimeRate,
+      cancellationRate,
+      avgRating,
+      totalReviews: allReviews.length,
+      revenueChange,
+      ordersChange,
+      delayedCount: delayed.length,
+      topService: topServiceEntry ? { name: topServiceEntry[0], revenue: topServiceEntry[1] } : null,
+      bestDay: bestDayEntry ? { day: bestDayEntry[0], revenue: bestDayEntry[1] } : null,
+      mostActiveCustomer: topCustomerEntry ? { name: topCustomerEntry[0], orderCount: topCustomerEntry[1] } : null,
+      revenueTrend,
+      ordersTrend
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router44.get("/sales-revenue", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = (orders || []).filter((o) => o.status !== "cancelled");
+    const subtotal = allOrders.reduce((s, o) => s + (o.amount || 0), 0);
+    const couponDiscount = allOrders.reduce((s, o) => s + (o.coupon_discount || 0), 0);
+    const subscriptionDiscount = allOrders.reduce((s, o) => s + (o.subscription_discount || 0), 0);
+    const refunds = allOrders.filter((o) => o.payment_status === "refunded").reduce((s, o) => s + (o.total || 0), 0);
+    const platformFees = allOrders.reduce((s, o) => s + (o.platform_fee || 0), 0);
+    const deliveryFees = allOrders.reduce((s, o) => s + (o.delivery_fee || 0), 0);
+    const expressSurcharges = allOrders.reduce((s, o) => s + (o.express_surcharge || 0), 0);
+    const surgeCharges = allOrders.reduce((s, o) => s + (o.surge_charge || 0), 0);
+    const taxes = allOrders.reduce((s, o) => s + (o.taxes || 0), 0);
+    const netOrderValue = subtotal - couponDiscount - subscriptionDiscount;
+    const grossRevenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
+    const estimatedCommission = Math.round(grossRevenue * 0.1);
+    const estimatedVendorEarnings = grossRevenue - refunds - estimatedCommission;
+    const expectedCustomerAmount = netOrderValue + platformFees + deliveryFees + expressSurcharges + surgeCharges + taxes;
+    if (expectedCustomerAmount !== grossRevenue && allOrders.length > 0) {
+      console.warn(`[reports] Reconciliation mismatch: expected ${expectedCustomerAmount}, got ${grossRevenue}`);
+    }
+    const dailyMap = {};
+    allOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      if (!dailyMap[day]) dailyMap[day] = { revenue: 0, orders: 0 };
+      dailyMap[day].revenue += o.total || 0;
+      dailyMap[day].orders += 1;
+    });
+    const dailyRevenue = Object.entries(dailyMap).map(([day, v]) => ({ day, ...v })).sort((a, b) => a.day.localeCompare(b.day));
+    const serviceMap = {};
+    allOrders.forEach((o) => {
+      const items = o.items_v2 || o.items || [];
+      if (Array.isArray(items)) {
+        items.forEach((item) => {
+          const name = item.serviceName || item.serviceKey || "Unknown";
+          serviceMap[name] = (serviceMap[name] || 0) + (item.unitPrice || 0) * (item.qty || 1);
+        });
+      }
+    });
+    const totalServiceRevenue = Object.values(serviceMap).reduce((s, v) => s + v, 0);
+    const revenueByService = Object.entries(serviceMap).map(([name, revenue], i) => ({
+      name,
+      revenue,
+      percentage: totalServiceRevenue > 0 ? Math.round(revenue / totalServiceRevenue * 100) : 0,
+      color: COLORS[i % COLORS.length]
+    })).sort((a, b) => b.revenue - a.revenue);
+    const paymentMap = {};
+    allOrders.forEach((o) => {
+      const method = o.payment_method || "unknown";
+      paymentMap[method] = (paymentMap[method] || 0) + (o.total || 0);
+    });
+    const totalPaymentRevenue = Object.values(paymentMap).reduce((s, v) => s + v, 0);
+    const revenueByPaymentMethod = Object.entries(paymentMap).map(([method, revenue]) => ({
+      method,
+      revenue,
+      percentage: totalPaymentRevenue > 0 ? Math.round(revenue / totalPaymentRevenue * 100) : 0
+    }));
+    const dayOfWeekMap = {};
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    allOrders.forEach((o) => {
+      const d = new Date(o.created_at);
+      const dayName = dayNames[d.getDay()];
+      if (!dayOfWeekMap[dayName]) dayOfWeekMap[dayName] = { revenue: 0, orders: 0 };
+      dayOfWeekMap[dayName].revenue += o.total || 0;
+      dayOfWeekMap[dayName].orders += 1;
+    });
+    const revenueByDayOfWeek = dayNames.map((day) => ({
+      day,
+      revenue: dayOfWeekMap[day]?.revenue || 0,
+      orders: dayOfWeekMap[day]?.orders || 0
+    }));
+    const sorted = [...dailyRevenue].sort((a, b) => b.revenue - a.revenue);
+    const topDay = sorted[0] || null;
+    const worstDay = sorted[sorted.length - 1] || null;
+    const periodMs = new Date(endDate).getTime() - new Date(startDate).getTime();
+    const prevStart = new Date(new Date(startDate).getTime() - periodMs).toISOString();
+    const { data: prevOrders } = await buildOrderQuery(supabase, vendorId, prevStart, startDate, service, status);
+    const prevAll = (prevOrders || []).filter((o) => o.status !== "cancelled");
+    const prevRevenue = prevAll.reduce((s, o) => s + (o.total || 0), 0);
+    const revenueGrowth = prevRevenue > 0 ? Math.round((grossRevenue - prevRevenue) / prevRevenue * 100) : 0;
+    res.json({
+      subtotal,
+      couponDiscount,
+      subscriptionDiscount,
+      netOrderValue,
+      refunds,
+      platformFees,
+      deliveryFees,
+      expressSurcharges,
+      surgeCharges,
+      taxes,
+      grossRevenue,
+      estimatedCommission,
+      estimatedVendorEarnings,
+      dailyRevenue,
+      revenueByService,
+      revenueByPaymentMethod,
+      revenueByDayOfWeek,
+      topDay,
+      worstDay,
+      revenueGrowth
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router44.get("/orders-operations", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = orders || [];
+    const orderIds = allOrders.map((o) => o.id);
+    const stageEvents = await loadStageEvents(supabase, orderIds);
+    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
+    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
+    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
+    const delayed = allOrders.filter(
+      (o) => !["completed", "cancelled", "delivered"].includes(o.status) && o.estimated_delivery_at && new Date(o.estimated_delivery_at) < /* @__PURE__ */ new Date()
+    );
+    const express2 = allOrders.filter((o) => o.express);
+    const statusCounts = {};
+    allOrders.forEach((o) => {
+      statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
+    });
+    const ORDER_STAGE_FLOW = [
+      "placed",
+      "vendor_assigned",
+      "vendor_accepted",
+      "pickup_scheduled",
+      "pickup_completed",
+      "laundry_received",
+      "sorting",
+      "tagging",
+      "washing",
+      "drying",
+      "ironing",
+      "dry_cleaning",
+      "quality_inspection",
+      "packing",
+      "ready_for_dispatch",
+      "out_for_delivery",
+      "delivered",
+      "completed"
+    ];
+    const stageIndexMap = {};
+    ORDER_STAGE_FLOW.forEach((s, i) => {
+      stageIndexMap[s] = i;
+    });
+    const funnelMilestones = [
+      { key: "received", label: "Received", stage: "vendor_assigned" },
+      { key: "accepted", label: "Accepted", stage: "vendor_accepted" },
+      { key: "picked_up", label: "Picked Up", stage: "pickup_completed" },
+      { key: "processing", label: "Processing", stage: "laundry_received" },
+      { key: "ready", label: "Ready", stage: "ready_for_dispatch" },
+      { key: "delivered", label: "Delivered", stage: "delivered" }
+    ].map((m) => {
+      const minIndex = stageIndexMap[m.stage];
+      if (minIndex === void 0) {
+        throw new Error(`[reports] Unknown funnel milestone stage: "${m.stage}". Check ORDER_STAGE_FLOW.`);
+      }
+      return { ...m, minIndex };
+    });
+    const funnelStages = funnelMilestones.map((m, i) => {
+      const count = allOrders.filter((o) => {
+        const idx = stageIndexMap[o.status];
+        return idx !== void 0 && idx >= m.minIndex;
+      }).length;
+      const prevCount = i > 0 ? allOrders.filter((o) => {
+        const idx = stageIndexMap[o.status];
+        return idx !== void 0 && idx >= funnelMilestones[i - 1].minIndex;
+      }).length : allOrders.length;
+      return {
+        stage: m.label,
+        count,
+        conversionRate: prevCount > 0 ? Math.round(count / prevCount * 100) : null,
+        avgTimeHours: null
+      };
+    });
+    const dayMap = {};
+    allOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      dayMap[day] = (dayMap[day] || 0) + 1;
+    });
+    const ordersByDay = Object.entries(dayMap).map(([day, count]) => ({ day, count })).sort((a, b) => a.day.localeCompare(b.day));
+    const turnaroundDiffs = [];
+    for (const o of completedOrders) {
+      const stages = stageEvents[o.id];
+      if (!stages) continue;
+      const pickup = stages["pickup_completed"];
+      const completion = stages["delivered"] ?? stages["completed"];
+      if (pickup && completion) {
+        const hours = (new Date(completion).getTime() - new Date(pickup).getTime()) / (1e3 * 60 * 60);
+        if (hours >= 0) turnaroundDiffs.push(hours);
+      }
+    }
+    let turnaroundHistogram = [];
+    if (turnaroundDiffs.length > 0) {
+      const buckets = ["< 24h", "24-48h", "48-72h", "72-96h", "96h+"];
+      const map = {};
+      buckets.forEach((b) => map[b] = 0);
+      for (const h of turnaroundDiffs) {
+        if (h < 24) map["< 24h"]++;
+        else if (h < 48) map["24-48h"]++;
+        else if (h < 72) map["48-72h"]++;
+        else if (h < 96) map["72-96h"]++;
+        else map["96h+"]++;
+      }
+      turnaroundHistogram = buckets.map((bucket) => ({ bucket, count: map[bucket] }));
+    }
+    const attentionCategories = {
+      pendingPickup: statusCounts["placed"] || 0,
+      delayedInProgress: delayed.length,
+      qualityIssues: 0,
+      failedCancelled: statusCounts["cancelled"] || 0
+    };
+    const topDelayedOrders = delayed.slice(0, 10).map((o) => ({
+      id: o.id,
+      code: o.code,
+      customerName: o.customer_name,
+      total: o.total,
+      createdAt: o.created_at
+    }));
+    res.json({
+      totalOrders: allOrders.length,
+      completedOrders: completedOrders.length,
+      avgTurnaroundHrs,
+      onTimeRate,
+      delayedCount: delayed.length,
+      expressOrders: express2.length,
+      funnelStages,
+      statusDistribution: Object.entries(statusCounts).map(([status2, count]) => ({ status: status2, count })),
+      ordersByDay,
+      turnaroundHistogram,
+      expressVsRegular: {
+        express: { count: express2.length, revenue: express2.reduce((s, o) => s + (o.total || 0), 0) },
+        regular: { count: allOrders.length - express2.length, revenue: allOrders.filter((o) => !o.express).reduce((s, o) => s + (o.total || 0), 0) }
+      },
+      attentionCategories,
+      delayedDrillDown: { status: "processing", delayed: true, startDate: startStr, endDate: endStr, service, orderStatus: status },
+      topDelayedOrders
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router44.get("/services", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = (orders || []).filter((o) => o.status !== "cancelled");
+    const serviceMap = {};
+    allOrders.forEach((o) => {
+      const items = o.items_v2 || o.items || [];
+      if (Array.isArray(items)) {
+        items.forEach((item) => {
+          const name = item.serviceName || item.serviceKey || "Unknown";
+          if (!serviceMap[name]) serviceMap[name] = { orderCount: 0, revenue: 0 };
+          serviceMap[name].orderCount += 1;
+          serviceMap[name].revenue += (item.unitPrice || 0) * (item.qty || 1);
+        });
+      }
+    });
+    const { data: reviews } = await supabase.from("reviews").select("overall").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate);
+    const allReviews = reviews || [];
+    const avgRating = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const totalRevenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
+    const services = Object.entries(serviceMap).map(([name, data]) => ({
+      name,
+      orderCount: data.orderCount,
+      revenue: data.revenue,
+      aov: data.orderCount > 0 ? Math.round(data.revenue / data.orderCount) : 0,
+      avgTurnaroundHrs: null,
+      avgRating,
+      revenueShare: totalRevenue > 0 ? Math.round(data.revenue / totalRevenue * 100) : 0,
+      cancellationRate: 0,
+      repeatRate: 0
+    })).sort((a, b) => b.revenue - a.revenue);
+    const revenueByService = services.map((s, i) => ({
+      name: s.name,
+      revenue: s.revenue,
+      color: COLORS[i % COLORS.length]
+    }));
+    const orderVolumeByService = services.map((s, i) => ({
+      name: s.name,
+      count: s.orderCount,
+      color: COLORS[i % COLORS.length]
+    }));
+    res.json({
+      topRevenueService: services[0] ? { name: services[0].name, revenue: services[0].revenue } : null,
+      mostOrderedService: [...services].sort((a, b) => b.orderCount - a.orderCount)[0] ? { name: [...services].sort((a, b) => b.orderCount - a.orderCount)[0].name, orderCount: [...services].sort((a, b) => b.orderCount - a.orderCount)[0].orderCount } : null,
+      highestRatedService: services[0] ? { name: services[0].name, avgRating: services[0].avgRating } : null,
+      fastestService: null,
+      revenueByService,
+      orderVolumeByService,
+      services
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router44.get("/customers", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = orders || [];
+    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
+    const customerMap = {};
+    allOrders.forEach((o) => {
+      const id = o.customer_id;
+      if (!id) return;
+      if (!customerMap[id]) customerMap[id] = { name: o.customer_name || "Unknown", orderCount: 0, totalSpend: 0, lastOrder: o.created_at };
+      customerMap[id].orderCount += 1;
+      customerMap[id].totalSpend += o.total || 0;
+      if (o.created_at > customerMap[id].lastOrder) customerMap[id].lastOrder = o.created_at;
+    });
+    const totalCustomers = Object.keys(customerMap).length;
+    const repeatCount = Object.values(customerMap).filter((c) => c.orderCount >= 2).length;
+    const newCount = totalCustomers - repeatCount;
+    const { repeatRate } = computeRepeatRate(allOrders);
+    const avgSpendPerCustomer = totalCustomers > 0 ? Math.round(completedOrders.reduce((s, o) => s + (o.total || 0), 0) / totalCustomers) : 0;
+    const segmentCounts = {};
+    CUSTOMER_SEGMENTS.forEach((s) => segmentCounts[s.label] = 0);
+    Object.values(customerMap).forEach((c) => {
+      for (const seg of CUSTOMER_SEGMENTS) {
+        if (c.orderCount >= seg.min && c.orderCount <= seg.max) {
+          segmentCounts[seg.label]++;
+          break;
+        }
+      }
+    });
+    const customerSegments = CUSTOMER_SEGMENTS.map((seg) => ({
+      label: seg.label,
+      count: segmentCounts[seg.label],
+      percentage: totalCustomers > 0 ? Math.round(segmentCounts[seg.label] / totalCustomers * 100) : 0
+    }));
+    const freqMap = {};
+    Object.values(customerMap).forEach((c) => {
+      freqMap[c.orderCount] = (freqMap[c.orderCount] || 0) + 1;
+    });
+    const orderFrequencyDistribution = Object.entries(freqMap).map(([count, customers]) => ({ orderCount: Number(count), customerCount: customers })).sort((a, b) => a.orderCount - b.orderCount);
+    const repeatTrend = [{ period: startStr + " to " + endStr, repeatRate }];
+    const topCustomers = Object.entries(customerMap).map(([id, data]) => ({ id, ...data, avgOrder: data.orderCount > 0 ? Math.round(data.totalSpend / data.orderCount) : 0 })).sort((a, b) => b.totalSpend - a.totalSpend).slice(0, 10);
+    res.json({
+      totalCustomers,
+      newCustomers: newCount,
+      repeatCustomers: repeatCount,
+      repeatRate,
+      avgSpendPerCustomer,
+      historicalCustomerValue: avgSpendPerCustomer,
+      repeatVsNew: { repeat: repeatCount, new: newCount },
+      repeatTrend,
+      orderFrequencyDistribution,
+      customerSegments,
+      topCustomers
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router44.get("/settlements", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const supabase = createAdminClient();
+    const { data: settlements } = await supabase.from("vendor_settlements").select("*").eq("vendor_id", vendorId).order("period_start", { ascending: false });
+    const allSettlements = settlements || [];
+    const pendingPayout = allSettlements.filter((s) => s.status === "pending" || s.status === "processing").reduce((sum, s) => sum + (s.net_payout || 0), 0);
+    const settledTotal = allSettlements.filter((s) => s.status === "settled").reduce((sum, s) => sum + (s.net_payout || 0), 0);
+    const totalGross = allSettlements.reduce((sum, s) => sum + (s.gross_order_value || 0), 0);
+    const totalCommission = allSettlements.reduce((sum, s) => sum + (s.commission_amount || 0), 0);
+    const totalRefunds = allSettlements.reduce((sum, s) => sum + (s.refunds_amount || 0), 0);
+    const totalAdjustments = allSettlements.reduce((sum, s) => sum + (s.adjustments_amount || 0), 0);
+    const settlementIds = allSettlements.map((s) => s.id);
+    let items = [];
+    if (settlementIds.length > 0) {
+      const { data } = await supabase.from("vendor_settlement_items").select("*, orders(code, customer_name)").in("settlement_id", settlementIds);
+      items = data || [];
+    }
+    const itemsBySettlement = {};
+    items.forEach((item) => {
+      if (!itemsBySettlement[item.settlement_id]) itemsBySettlement[item.settlement_id] = [];
+      itemsBySettlement[item.settlement_id].push(item);
+    });
+    res.json({
+      pendingPayout,
+      settledTotal,
+      totalGross,
+      totalCommission,
+      totalRefunds,
+      totalAdjustments,
+      settlements: allSettlements.map((s) => ({
+        ...s,
+        items: itemsBySettlement[s.id] || []
+      })),
+      commissionRateBps: allSettlements.length > 0 ? allSettlements[0].commission_rate_bps : 1e3
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router44.get("/ratings-issues", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: reviews } = await supabase.from("reviews").select("*, orders(id, code)").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate).order("created_at", { ascending: false });
+    const allReviews = reviews || [];
+    const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    allReviews.forEach((r) => {
+      const star = Math.round(r.overall || 0);
+      if (star >= 1 && star <= 5) distribution[star] += 1;
+    });
+    const avgOverall = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgVendor = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.vendor_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgPickup = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.pickup_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgLaundry = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.laundry_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgDelivery = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.delivery_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const openIssues = (() => {
+      try {
+        const ticketIds = allReviews.filter((r) => (r.overall || 0) <= 3).map((r) => r.order_id).filter(Boolean);
+        if (ticketIds.length === 0) return 0;
+        return null;
+      } catch {
+        return null;
+      }
+    })();
+    const recentNegative = allReviews.filter((r) => (r.overall || 0) <= 3).slice(0, 10).map((r) => ({
+      id: r.id,
+      customerName: r.customer_name,
+      overall: r.overall,
+      comment: r.comment,
+      createdAt: r.created_at,
+      orderCode: r.orders?.code || null,
+      status: null
+    }));
+    const issueCategories = [];
+    const weekMap = {};
+    allReviews.forEach((r) => {
+      const d = new Date(r.created_at);
+      const weekStart = new Date(d);
+      weekStart.setDate(d.getDate() - d.getDay());
+      const key = weekStart.toISOString().slice(0, 10);
+      if (!weekMap[key]) weekMap[key] = { total: 0, count: 0 };
+      weekMap[key].total += r.overall || 0;
+      weekMap[key].count += 1;
+    });
+    const ratingTrend = Object.entries(weekMap).map(([week, v]) => ({ week, avg: Math.round(v.total / v.count * 10) / 10, count: v.count })).sort((a, b) => a.week.localeCompare(b.week));
+    res.json({
+      avgOverall,
+      avgVendor,
+      avgPickup,
+      avgLaundry,
+      avgDelivery,
+      openIssues,
+      distribution,
+      ratingTrend,
+      issueCategories,
+      recentNegative,
+      totalReviews: allReviews.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router44.get("/cancellations", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service);
+    const allOrders = orders || [];
+    const cancelled = allOrders.filter((o) => o.status === "cancelled");
+    const cancelRate = allOrders.length > 0 ? Math.round(cancelled.length / allOrders.length * 100) : 0;
+    const refundTotal = cancelled.reduce((s, o) => s + (o.total || 0), 0);
+    const vendorRejections = cancelled.filter((o) => o.cancelled_by === "vendor").length;
+    const customerCancellations = cancelled.filter((o) => o.cancelled_by === "customer").length;
+    const reasonMap = {};
+    cancelled.forEach((o) => {
+      const note = o.notes || "No reason specified";
+      reasonMap[note] = (reasonMap[note] || 0) + 1;
+    });
+    const reasonsBreakdown = Object.entries(reasonMap).map(([reason, count]) => ({
+      reason,
+      count,
+      percentage: cancelled.length > 0 ? Math.round(count / cancelled.length * 100) : 0,
+      lostRevenue: Math.round(refundTotal * count / (cancelled.length || 1))
+    })).sort((a, b) => b.count - a.count).slice(0, 5);
+    const weekMap = {};
+    cancelled.forEach((o) => {
+      const d = new Date(o.created_at);
+      const weekStart = new Date(d);
+      weekStart.setDate(d.getDate() - d.getDay());
+      const key = weekStart.toISOString().slice(0, 10);
+      weekMap[key] = (weekMap[key] || 0) + 1;
+    });
+    const cancellationTrend = Object.entries(weekMap).map(([week, count]) => ({ week, count })).sort((a, b) => a.week.localeCompare(b.week));
+    const typeMap = {};
+    cancelled.forEach((o) => {
+      const type = o.cancelled_by || "unknown";
+      typeMap[type] = (typeMap[type] || 0) + 1;
+    });
+    const cancellationByType = Object.entries(typeMap).map(([type, count]) => ({ type, count }));
+    const cancelDrillDown = { status: "cancelled", startDate, endDate };
+    res.json({
+      cancelledOrders: cancelled.length,
+      vendorRejections,
+      customerCancellations,
+      cancelRate,
+      refundTotal,
+      estimatedLostRevenue: refundTotal,
+      cancellationTrend,
+      cancellationByType,
+      reasonsBreakdown,
+      cancelDrillDown,
+      topCancelledOrders: cancelled.slice(0, 10).map((o) => ({
+        id: o.id,
+        code: o.code,
+        customerName: o.customer_name,
+        total: o.total,
+        createdAt: o.created_at,
+        notes: o.notes,
+        cancelledBy: o.cancelled_by || null
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var vendor_reports_default = router44;
+
+// server/routes/webhooks.ts
+var import_express46 = require("express");
+init_supabase();
+var router45 = (0, import_express46.Router)();
+var RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
+router45.post("/razorpay", async (req, res) => {
+  try {
+    if (!RAZORPAY_WEBHOOK_SECRET) {
+      console.warn("[webhook] RAZORPAY_WEBHOOK_SECRET not configured, rejecting webhook");
+      res.status(500).json({ error: "Webhook secret not configured" });
+      return;
+    }
+    const signature = req.headers["x-razorpay-signature"];
+    if (!signature) {
+      res.status(400).json({ error: "Missing webhook signature" });
+      return;
+    }
+    const rawBody = req.body;
+    const crypto4 = await import("crypto");
+    const expectedSig = crypto4.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
+    if (!crypto4.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
+      console.warn("[webhook] Invalid signature");
+      res.status(401).json({ error: "Invalid webhook signature" });
+      return;
+    }
+    const eventId = req.headers["x-razorpay-event-id"];
+    if (!eventId) {
+      res.status(400).json({ error: "Missing event ID" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { error: insertError } = await admin.from("payment_webhook_events").insert({
+      gateway: "razorpay",
+      event_id: eventId,
+      event_type: "unknown",
+      // will be updated after parsing
+      payload: null,
+      status: "pending"
+    });
+    if (insertError) {
+      if (insertError.code === "23505") {
+        res.json({ status: "already_processed" });
+        return;
+      }
+      console.error("[webhook] Failed to record event:", insertError.message);
+      res.status(500).json({ error: "Failed to record event" });
+      return;
+    }
+    let event;
+    try {
+      event = JSON.parse(rawBody.toString());
+    } catch {
+      await admin.from("payment_webhook_events").update({ status: "failed", processed_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("event_id", eventId);
+      res.status(400).json({ error: "Invalid JSON payload" });
+      return;
+    }
+    await admin.from("payment_webhook_events").update({
+      event_type: event.event,
+      payload: event.payload
+    }).eq("event_id", eventId);
+    switch (event.event) {
+      case "payment.captured": {
+        const paymentEntity = event.payload?.payment?.entity;
+        if (paymentEntity) {
+          const razorpayOrderId = paymentEntity.order_id;
+          const razorpayPaymentId = paymentEntity.id;
+          if (razorpayOrderId && razorpayPaymentId) {
+            const result = await markPaymentCaptureVerified(
+              razorpayOrderId,
+              razorpayPaymentId
+            );
+            console.log(
+              `[webhook] payment.captured processed: eventId=${eventId}, orderId=${razorpayOrderId}, transactionId=${result.transactionId}, finalized=${result.finalized}`
+            );
+          }
+        }
+        break;
+      }
+      case "payment.failed": {
+        const paymentEntity = event.payload?.payment?.entity;
+        if (paymentEntity) {
+          const razorpayOrderId = paymentEntity.order_id;
+          const failureReason = paymentEntity.error_description || "Payment failed";
+          if (razorpayOrderId) {
+            await admin.from("payment_transactions").update({
+              payment_status: "failed",
+              failure_reason: failureReason,
+              updated_at: (/* @__PURE__ */ new Date()).toISOString()
+            }).eq("gateway_order_id", razorpayOrderId).in("payment_status", ["created", "pending", "authorized"]);
+            console.log(
+              `[webhook] payment.failed processed: eventId=${eventId}, orderId=${razorpayOrderId}`
+            );
+          }
+        }
+        break;
+      }
+      case "refund.processed": {
+        console.log(`[webhook] refund.processed received: eventId=${eventId}`);
+        break;
+      }
+      default:
+        console.log(`[webhook] Unhandled event type: ${event.event} (eventId=${eventId})`);
+    }
+    await admin.from("payment_webhook_events").update({
+      status: "processed",
+      processed_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("event_id", eventId);
+    res.json({ status: "ok" });
+  } catch (err) {
+    console.error("[webhook] Error:", err.message);
+    res.status(500).json({ error: "Webhook processing failed" });
+  }
+});
+var webhooks_default = router45;
+
 // server/app.ts
-var app = (0, import_express44.default)();
+var import_express47 = __toESM(require("express"));
+var import_cors = __toESM(require("cors"));
+var import_cookie_parser = __toESM(require("cookie-parser"));
+var app = (0, import_express47.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
-app.use(import_express44.default.json());
+app.post(
+  "/api/webhooks/razorpay",
+  import_express47.default.raw({ type: "application/json" }),
+  webhooks_default
+);
+app.use(import_express47.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -5131,6 +6567,7 @@ app.use("/api/vendor-service-prices", vendor_service_prices_default);
 app.use("/api/payments", payments_default);
 app.use("/api/config/customer", customer_config_default);
 app.use("/api/settings", settings_default);
+app.use("/api/vendor/reports", vendor_reports_default);
 var app_default = app;
 
 // server/api-entry.ts

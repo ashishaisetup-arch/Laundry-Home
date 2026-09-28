@@ -6,7 +6,7 @@
     "dev": "concurrently \"vite\" \"tsx watch server/index.ts\"",
     "dev:frontend": "vite",
     "dev:backend": "tsx watch server/index.ts",
-    "build": "vite build && esbuild server/api-entry.ts --bundle --platform=node --outfile=api/index.js --packages=external",
+    "build": "vite build && esbuild server/api-entry.ts --bundle --platform=node --outfile=api/index.js --packages=external --tree-shaking=false",
     "start": "NODE_ENV=production node --import tsx server/index.ts",
     "lint": "eslint .",
     "test": "vitest run",
