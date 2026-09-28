@@ -6414,6 +6414,11 @@ router45.post("/razorpay", async (req, res) => {
     const rawBody = req.body;
     const crypto4 = await import("crypto");
     const expectedSig = crypto4.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
+    if (Buffer.byteLength(expectedSig) !== Buffer.byteLength(signature)) {
+      console.warn("[webhook] Invalid signature length");
+      res.status(401).json({ error: "Invalid webhook signature" });
+      return;
+    }
     if (!crypto4.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
       console.warn("[webhook] Invalid signature");
       res.status(401).json({ error: "Invalid webhook signature" });
