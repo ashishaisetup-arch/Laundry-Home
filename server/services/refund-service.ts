@@ -127,8 +127,36 @@ export async function requestWalletTopupRefund(params: {
     return { success: false, error: "invalid_status" };
   }
 
-  // Advisory precheck: wallet balance can absorb eventual debit
-  // RPC is authoritative for remaining_refundable and idempotency checks
+  // Idempotency check BEFORE wallet check
+  // If key exists with matching params → valid retry (skip wallet check)
+  // If key exists with mismatched params → idempotency_conflict
+  // If key doesn't exist → do wallet check, then call RPC
+  const { data: existingRefund } = await admin
+    .from("payment_refunds")
+    .select("id, payment_transaction_id, amount")
+    .eq("idempotency_key", idempotencyKey)
+    .single();
+
+  if (existingRefund) {
+    if (
+      (existingRefund as any).payment_transaction_id === paymentTransactionId &&
+      (existingRefund as any).amount === amount
+    ) {
+      // Valid retry — return existing refund
+      return {
+        success: true,
+        alreadyExists: true,
+        refundId: (existingRefund as any).id,
+        refundStatus: "completed",
+        amount,
+      };
+    } else {
+      // Idempotency conflict
+      return { success: false, error: "idempotency_conflict" };
+    }
+  }
+
+  // Advisory precheck: wallet balance (only for NEW refunds)
   // Real protection is in complete_payment_refund() at gateway completion (3A3)
   const { data: profile } = await admin
     .from("user_profiles")
@@ -146,7 +174,7 @@ export async function requestWalletTopupRefund(params: {
     };
   }
 
-  // Call create_payment_refund RPC
+  // Call create_payment_refund RPC (authoritative for remaining_refundable)
   const { data: rpcResult, error: rpcError } = await admin.rpc("create_payment_refund", {
     p_payment_transaction_id: paymentTransactionId,
     p_amount: amount,

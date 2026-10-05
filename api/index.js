@@ -4479,6 +4479,20 @@ async function requestWalletTopupRefund(params) {
   if (!["captured", "partially_refunded"].includes(txn.payment_status)) {
     return { success: false, error: "invalid_status" };
   }
+  const { data: existingRefund } = await admin.from("payment_refunds").select("id, payment_transaction_id, amount").eq("idempotency_key", idempotencyKey).single();
+  if (existingRefund) {
+    if (existingRefund.payment_transaction_id === paymentTransactionId && existingRefund.amount === amount) {
+      return {
+        success: true,
+        alreadyExists: true,
+        refundId: existingRefund.id,
+        refundStatus: "completed",
+        amount
+      };
+    } else {
+      return { success: false, error: "idempotency_conflict" };
+    }
+  }
   const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", txn.user_id).single();
   const walletBalance = profile?.wallet_balance ?? 0;
   if (walletBalance < amount) {
