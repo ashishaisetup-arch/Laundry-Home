@@ -890,6 +890,7 @@ async function calculatePricing(input) {
     rewardPointsUsed,
     rewardDiscount,
     walletUsed: input.useWalletAmount || 0,
+    taxableAmount,
     taxes,
     platformFee,
     deliveryFee,
@@ -900,8 +901,16 @@ async function calculatePricing(input) {
     lines
   };
 }
-async function applyPricingToOrder(orderData, pricing, userId) {
+async function applyPricingToOrder(orderId, orderCode, pricing, userId) {
   const admin = createAdminClient();
+  const emptyResult = {
+    walletApplied: false,
+    walletAmount: 0,
+    walletTransactionId: null,
+    paymentTransactionId: null,
+    balanceBefore: null,
+    balanceAfter: null
+  };
   if (pricing.rewardPointsUsed > 0) {
     const { data: profile } = await admin.from("user_profiles").select("loyalty_points").eq("id", userId).single();
     const current = profile?.loyalty_points || 0;
@@ -909,18 +918,36 @@ async function applyPricingToOrder(orderData, pricing, userId) {
       await admin.from("user_profiles").update({ loyalty_points: current - pricing.rewardPointsUsed }).eq("id", userId);
     }
   }
+  let walletResult = emptyResult;
   if (pricing.walletUsed > 0) {
-    const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", userId).single();
-    const balance = profile?.wallet_balance || 0;
-    if (balance >= pricing.walletUsed) {
-      await admin.from("user_profiles").update({ wallet_balance: balance - pricing.walletUsed }).eq("id", userId);
-      await admin.from("wallet_transactions").insert({
-        user_id: userId,
-        amount: -pricing.walletUsed,
-        type: "debit",
-        description: `Payment for order ${orderData.code}`
-      });
+    const { data: rpcResult, error: rpcError } = await admin.rpc(
+      "apply_order_wallet_payment",
+      { p_order_id: orderId, p_amount: pricing.walletUsed }
+    );
+    if (rpcError) {
+      throw new Error(`Wallet payment RPC failed: ${rpcError.message}`);
     }
+    if (!rpcResult?.success) {
+      if (rpcResult?.error === "insufficient_balance") {
+        throw new Error(
+          `Insufficient wallet balance: need \u20B9${pricing.walletUsed}, have \u20B9${rpcResult.wallet_balance}`
+        );
+      }
+      if (rpcResult?.error === "amount_exceeds_remaining") {
+        throw new Error(
+          `Amount \u20B9${pricing.walletUsed} exceeds remaining payable \u20B9${rpcResult.remaining}`
+        );
+      }
+      throw new Error(`Wallet payment failed: ${rpcResult?.error}`);
+    }
+    walletResult = {
+      walletApplied: true,
+      walletAmount: pricing.walletUsed,
+      walletTransactionId: rpcResult.wallet_transaction_id || null,
+      paymentTransactionId: rpcResult.payment_transaction_id || null,
+      balanceBefore: rpcResult.balance_before ?? null,
+      balanceAfter: rpcResult.balance_after ?? null
+    };
   }
   if (pricing.couponCode) {
     const { data: coupon } = await admin.from("coupons").select("code, used_count").eq("code", pricing.couponCode.toUpperCase()).single();
@@ -928,6 +955,7 @@ async function applyPricingToOrder(orderData, pricing, userId) {
       await admin.from("coupons").update({ used_count: coupon.used_count + 1 }).eq("code", coupon.code);
     }
   }
+  return walletResult;
 }
 
 // server/lib/schedule.ts
@@ -1504,7 +1532,11 @@ router4.post("/", async (req, res) => {
       surge_charge: pricing.surgeCharge || 0,
       pricing_breakdown: pricing,
       payment_method: body.payment_method || "cod",
-      payment_status: pricing.walletUsed >= pricing.total ? "paid" : "pending",
+      payment_status: "pending",
+      taxable_amount: pricing.taxableAmount,
+      wallet_paid_amount: 0,
+      gateway_paid_amount: 0,
+      tender_type: "cod",
       pickup_lat: pickupCoords?.lat || null,
       pickup_lng: pickupCoords?.lng || null,
       delivery_lat: vendorCoords?.lat || null,
@@ -1532,7 +1564,25 @@ router4.post("/", async (req, res) => {
       const { error: itemsErr } = await adminClient.from("order_items").insert(orderItemRows);
       if (itemsErr) console.error("[orders] order_items insert error:", itemsErr.message);
     }
-    await applyPricingToOrder(orderData, pricing, user.id);
+    let pricingResult;
+    try {
+      pricingResult = await applyPricingToOrder(data.id, data.code, pricing, user.id);
+    } catch (walletErr) {
+      await adminClient.from("orders").update({
+        wallet_paid_amount: 0,
+        tender_type: "cod"
+      }).eq("id", data.id);
+      throw walletErr;
+    }
+    const walletPaid = pricingResult.walletApplied ? pricingResult.walletAmount : 0;
+    const gatewayPaid = 0;
+    const isFullyPaid = walletPaid >= pricing.total && pricing.total > 0;
+    await adminClient.from("orders").update({
+      wallet_paid_amount: walletPaid,
+      gateway_paid_amount: gatewayPaid,
+      tender_type: walletPaid > 0 ? "wallet" : "cod",
+      payment_status: isFullyPaid ? "paid" : "pending"
+    }).eq("id", data.id);
     const { data: stages } = await adminClient.from("order_stage_definitions").select("*").order("sort_order");
     if (stages) {
       const doneUpTo = hasVendor ? 1 : 0;
@@ -5277,9 +5327,9 @@ async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, ra
   if (txn.gateway_order_id !== razorpayOrderId) {
     return { success: false, error: "Order ID mismatch" };
   }
-  const crypto4 = await import("crypto");
-  const expectedSig = crypto4.createHmac("sha256", RAZORPAY_KEY_SECRET).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
-  if (!crypto4.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
+  const crypto5 = await import("crypto");
+  const expectedSig = crypto5.createHmac("sha256", RAZORPAY_KEY_SECRET).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
+  if (!crypto5.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
     return { success: false, error: "Invalid payment signature" };
   }
   try {
@@ -5409,6 +5459,7 @@ async function getInvoices(userId, options = {}) {
 // server/routes/payments.ts
 var import_express42 = require("express");
 init_supabase();
+var crypto4 = __toESM(require("crypto"));
 var router41 = (0, import_express42.Router)();
 async function getAuthenticatedUser(req) {
   try {
@@ -5529,6 +5580,19 @@ router41.post("/payments/create-order", async (req, res) => {
       res.status(response.status).json({ error: data.error?.description || "Razorpay error" });
       return;
     }
+    if (order_id && data.id) {
+      const admin = createAdminClient();
+      const { data: orderRow } = await admin.from("orders").select("payment_details").eq("id", order_id).single();
+      if (orderRow) {
+        const existingDetails = orderRow.payment_details || {};
+        await admin.from("orders").update({
+          payment_details: {
+            ...existingDetails,
+            razorpay_order_id: data.id
+          }
+        }).eq("id", order_id);
+      }
+    }
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -5537,26 +5601,73 @@ router41.post("/payments/create-order", async (req, res) => {
 router41.post("/payments/verify", async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !order_id) {
       res.status(400).json({ error: "Missing payment verification fields" });
       return;
     }
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data: orderRow } = await admin.from("orders").select("id, customer_id, total, wallet_paid_amount, payment_status, payment_details").eq("id", order_id).single();
+    if (!orderRow) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    if (orderRow.customer_id !== user.id) {
+      res.status(403).json({ error: "Not your order" });
+      return;
+    }
+    const storedRazorpayOrderId = orderRow.payment_details?.razorpay_order_id;
+    if (!storedRazorpayOrderId) {
+      res.status(400).json({ error: "No Razorpay order linked to this order" });
+      return;
+    }
+    if (storedRazorpayOrderId !== razorpay_order_id) {
+      res.status(400).json({ error: "Razorpay order mismatch" });
+      return;
+    }
     const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
-    const crypto4 = await import("crypto");
     const expectedSig = crypto4.createHmac("sha256", razorpayKeySecret).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
-    if (expectedSig !== razorpay_signature) {
+    const sigBuf = Buffer.from(expectedSig, "hex");
+    const providedBuf = Buffer.from(razorpay_signature, "hex");
+    if (sigBuf.length !== providedBuf.length || !crypto4.timingSafeEqual(sigBuf, providedBuf)) {
       res.status(400).json({ error: "Invalid payment signature" });
       return;
     }
-    const { createAdminClient: createAdminClient2 } = await Promise.resolve().then(() => (init_supabase(), supabase_exports));
-    const admin = createAdminClient2();
-    if (order_id) {
-      await admin.from("orders").update({
-        payment_status: "paid",
-        payment_details: { razorpay_payment_id, razorpay_order_id }
-      }).eq("id", order_id);
+    if (orderRow.payment_status === "paid" && orderRow.payment_details?.razorpay_payment_id === razorpay_payment_id) {
+      res.json({ success: true, already_verified: true, payment_id: razorpay_payment_id });
+      return;
     }
-    res.json({ success: true, payment_id: razorpay_payment_id });
+    const gatewayAmount = orderRow.total - (orderRow.wallet_paid_amount || 0);
+    if (gatewayAmount <= 0) {
+      res.json({ success: true, payment_id: razorpay_payment_id, note: "fully_covered_by_wallet" });
+      return;
+    }
+    const { data: rpcResult, error: rpcError } = await admin.rpc(
+      "finalize_order_gateway_payment",
+      {
+        p_order_id: order_id,
+        p_gateway_order_id: razorpay_order_id,
+        p_gateway_payment_id: razorpay_payment_id,
+        p_amount: gatewayAmount
+      }
+    );
+    if (rpcError) {
+      res.status(500).json({ error: `Finalization RPC failed: ${rpcError.message}` });
+      return;
+    }
+    if (!rpcResult?.success) {
+      res.status(400).json({ error: rpcResult?.error || "Finalization failed" });
+      return;
+    }
+    res.json({
+      success: true,
+      already_finalized: rpcResult.already_finalized || false,
+      payment_id: razorpay_payment_id
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6412,14 +6523,14 @@ router45.post("/razorpay", async (req, res) => {
       return;
     }
     const rawBody = req.body;
-    const crypto4 = await import("crypto");
-    const expectedSig = crypto4.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
+    const crypto5 = await import("crypto");
+    const expectedSig = crypto5.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
     if (Buffer.byteLength(expectedSig) !== Buffer.byteLength(signature)) {
       console.warn("[webhook] Invalid signature length");
       res.status(401).json({ error: "Invalid webhook signature" });
       return;
     }
-    if (!crypto4.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
+    if (!crypto5.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
       console.warn("[webhook] Invalid signature");
       res.status(401).json({ error: "Invalid webhook signature" });
       return;

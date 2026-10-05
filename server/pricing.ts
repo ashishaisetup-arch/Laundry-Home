@@ -41,6 +41,7 @@ export interface PricingBreakdown {
   rewardPointsUsed: number;
   rewardDiscount: number;
   walletUsed: number;
+  taxableAmount: number;
   taxes: number;
   platformFee: number;
   deliveryFee: number;
@@ -52,6 +53,15 @@ export interface PricingBreakdown {
     amount: number;
   }[];
   lines?: PricingLine[];
+}
+
+export interface PricingApplyResult {
+  walletApplied: boolean;
+  walletAmount: number;
+  walletTransactionId: string | null;
+  paymentTransactionId: string | null;
+  balanceBefore: number | null;
+  balanceAfter: number | null;
 }
 
 async function computeSubtotal(items: CartItem[], admin: ReturnType<typeof createAdminClient>, vendorId?: string): Promise<{ subtotal: number; hasExpress: boolean; lines: PricingLine[] }> {
@@ -222,6 +232,7 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
     rewardPointsUsed,
     rewardDiscount,
     walletUsed: input.useWalletAmount || 0,
+    taxableAmount,
     taxes,
     platformFee,
     deliveryFee,
@@ -233,8 +244,22 @@ export async function calculatePricing(input: PricingInput): Promise<PricingBrea
   };
 }
 
-export async function applyPricingToOrder(orderData: any, pricing: PricingBreakdown, userId: string) {
+export async function applyPricingToOrder(
+  orderId: string,
+  orderCode: string,
+  pricing: PricingBreakdown,
+  userId: string
+): Promise<PricingApplyResult> {
   const admin = createAdminClient();
+
+  const emptyResult: PricingApplyResult = {
+    walletApplied: false,
+    walletAmount: 0,
+    walletTransactionId: null,
+    paymentTransactionId: null,
+    balanceBefore: null,
+    balanceAfter: null,
+  };
 
   if (pricing.rewardPointsUsed > 0) {
     const { data: profile } = await admin
@@ -251,27 +276,40 @@ export async function applyPricingToOrder(orderData: any, pricing: PricingBreakd
     }
   }
 
+  let walletResult = emptyResult;
+
   if (pricing.walletUsed > 0) {
-    const { data: profile } = await admin
-      .from("user_profiles")
-      .select("wallet_balance")
-      .eq("id", userId)
-      .single();
-    const balance = (profile as any)?.wallet_balance || 0;
-    if (balance >= pricing.walletUsed) {
-      await admin
-        .from("user_profiles")
-        .update({ wallet_balance: balance - pricing.walletUsed })
-        .eq("id", userId);
-      await admin
-        .from("wallet_transactions")
-        .insert({
-          user_id: userId,
-          amount: -pricing.walletUsed,
-          type: "debit",
-          description: `Payment for order ${orderData.code}`,
-        });
+    const { data: rpcResult, error: rpcError } = await admin.rpc(
+      "apply_order_wallet_payment",
+      { p_order_id: orderId, p_amount: pricing.walletUsed }
+    );
+
+    if (rpcError) {
+      throw new Error(`Wallet payment RPC failed: ${rpcError.message}`);
     }
+
+    if (!rpcResult?.success) {
+      if (rpcResult?.error === "insufficient_balance") {
+        throw new Error(
+          `Insufficient wallet balance: need ₹${pricing.walletUsed}, have ₹${rpcResult.wallet_balance}`
+        );
+      }
+      if (rpcResult?.error === "amount_exceeds_remaining") {
+        throw new Error(
+          `Amount ₹${pricing.walletUsed} exceeds remaining payable ₹${rpcResult.remaining}`
+        );
+      }
+      throw new Error(`Wallet payment failed: ${rpcResult?.error}`);
+    }
+
+    walletResult = {
+      walletApplied: true,
+      walletAmount: pricing.walletUsed,
+      walletTransactionId: rpcResult.wallet_transaction_id || null,
+      paymentTransactionId: rpcResult.payment_transaction_id || null,
+      balanceBefore: rpcResult.balance_before ?? null,
+      balanceAfter: rpcResult.balance_after ?? null,
+    };
   }
 
   if (pricing.couponCode) {
@@ -287,4 +325,6 @@ export async function applyPricingToOrder(orderData: any, pricing: PricingBreakd
           .eq("code", (coupon as any).code);
       }
   }
+
+  return walletResult;
 }

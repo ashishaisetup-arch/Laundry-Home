@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { createAdminClient, createServerClientWithCookies } from "../supabase";
-import { calculatePricing, applyPricingToOrder } from "../pricing";
+import { calculatePricing, applyPricingToOrder, PricingApplyResult } from "../pricing";
 import { validateSchedule, SCHEDULE_ADD_ON_SLUGS } from "../lib/schedule";
 import { validatePhotoDataUrl, MAX_ORDER_PHOTOS } from "../lib/photo-upload";
 import { resolveDateBoundaries, resolveBusinessTimezone } from "./vendor-reports-utils";
@@ -296,7 +296,11 @@ router.post("/", async (req: Request, res: Response) => {
       surge_charge: pricing.surgeCharge || 0,
       pricing_breakdown: pricing,
       payment_method: body.payment_method || "cod",
-      payment_status: pricing.walletUsed >= pricing.total ? "paid" : "pending",
+      payment_status: "pending",
+      taxable_amount: pricing.taxableAmount,
+      wallet_paid_amount: 0,
+      gateway_paid_amount: 0,
+      tender_type: "cod",
       pickup_lat: pickupCoords?.lat || null,
       pickup_lng: pickupCoords?.lng || null,
       delivery_lat: vendorCoords?.lat || null,
@@ -327,7 +331,31 @@ router.post("/", async (req: Request, res: Response) => {
     }
 
     // Apply reward/wallet deductions and increment coupon usage
-    await applyPricingToOrder(orderData, pricing, user.id);
+    // Uses persisted order ID (data.id) — not the pre-insert orderData object
+    let pricingResult: PricingApplyResult;
+    try {
+      pricingResult = await applyPricingToOrder(data.id, data.code, pricing, user.id);
+    } catch (walletErr: any) {
+      // Wallet settlement failed — order stays pending, no money moved
+      // Update tender fields to reflect reality
+      await adminClient.from("orders").update({
+        wallet_paid_amount: 0,
+        tender_type: "cod",
+      }).eq("id", data.id);
+      throw walletErr;
+    }
+
+    // Update order with actual settled amounts from RPC result
+    const walletPaid = pricingResult.walletApplied ? pricingResult.walletAmount : 0;
+    const gatewayPaid = 0; // no gateway payment in live booking flow yet
+    const isFullyPaid = walletPaid >= pricing.total && pricing.total > 0;
+
+    await adminClient.from("orders").update({
+      wallet_paid_amount: walletPaid,
+      gateway_paid_amount: gatewayPaid,
+      tender_type: walletPaid > 0 ? "wallet" : "cod",
+      payment_status: isFullyPaid ? "paid" : "pending",
+    }).eq("id", data.id);
 
     const { data: stages } = await adminClient.from("order_stage_definitions").select("*").order("sort_order");
     if (stages) {

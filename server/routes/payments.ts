@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { createServerClientWithCookies } from "../supabase";
+import { createAdminClient, createServerClientWithCookies } from "../supabase";
 import {
   createTopupOrder,
   verifyTopupPayment,
@@ -7,6 +7,7 @@ import {
   getTransactions,
   getInvoices,
 } from "../services/payment-service";
+import * as crypto from "crypto";
 
 const router = Router();
 
@@ -173,6 +174,27 @@ router.post("/payments/create-order", async (req: Request, res: Response) => {
       res.status(response.status).json({ error: data.error?.description || "Razorpay error" });
       return;
     }
+
+    // Persist Razorpay order ID to the Laundry order (merge, don't replace)
+    if (order_id && data.id) {
+      const admin = createAdminClient();
+      const { data: orderRow } = await admin
+        .from("orders")
+        .select("payment_details")
+        .eq("id", order_id)
+        .single();
+
+      if (orderRow) {
+        const existingDetails = orderRow.payment_details || {};
+        await admin.from("orders").update({
+          payment_details: {
+            ...existingDetails,
+            razorpay_order_id: data.id,
+          },
+        }).eq("id", order_id);
+      }
+    }
+
     res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -181,42 +203,113 @@ router.post("/payments/create-order", async (req: Request, res: Response) => {
 
 // ============================================================================
 // POST /api/payments/verify (LEGACY — order payment verification)
-// Kept for backward compatibility with order checkout flow.
+// Full verification chain:
+//   authenticated user owns order
+//   ↔ stored Razorpay order ID matches callback
+//   ↔ HMAC signature valid
+//   → atomic finalize_order_gateway_payment RPC
 // ============================================================================
 
 router.post("/payments/verify", async (req: Request, res: Response) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !order_id) {
       res.status(400).json({ error: "Missing payment verification fields" });
       return;
     }
 
+    // 1. Authentication
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const admin = createAdminClient();
+
+    // 2. Load order
+    const { data: orderRow } = await admin
+      .from("orders")
+      .select("id, customer_id, total, wallet_paid_amount, payment_status, payment_details")
+      .eq("id", order_id)
+      .single();
+
+    if (!orderRow) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+
+    // 3. Ownership check
+    if (orderRow.customer_id !== user.id) {
+      res.status(403).json({ error: "Not your order" });
+      return;
+    }
+
+    // 4. Razorpay order linkage check
+    const storedRazorpayOrderId = orderRow.payment_details?.razorpay_order_id;
+    if (!storedRazorpayOrderId) {
+      res.status(400).json({ error: "No Razorpay order linked to this order" });
+      return;
+    }
+    if (storedRazorpayOrderId !== razorpay_order_id) {
+      res.status(400).json({ error: "Razorpay order mismatch" });
+      return;
+    }
+
+    // 5. Signature verification
     const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
-    const crypto = await import("crypto");
     const expectedSig = crypto
       .createHmac("sha256", razorpayKeySecret)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
-    if (expectedSig !== razorpay_signature) {
+    const sigBuf = Buffer.from(expectedSig, "hex");
+    const providedBuf = Buffer.from(razorpay_signature, "hex");
+    if (sigBuf.length !== providedBuf.length || !crypto.timingSafeEqual(sigBuf, providedBuf)) {
       res.status(400).json({ error: "Invalid payment signature" });
       return;
     }
 
-    // Note: This legacy endpoint still uses direct Supabase update.
-    // A future phase should migrate this to use payment_transactions + finalize_wallet_topup.
-    const { createAdminClient } = await import("../supabase");
-    const admin = createAdminClient();
-
-    if (order_id) {
-      await admin.from("orders").update({
-        payment_status: "paid",
-        payment_details: { razorpay_payment_id, razorpay_order_id },
-      }).eq("id", order_id);
+    // 6. Idempotency check
+    if (orderRow.payment_status === "paid" &&
+        orderRow.payment_details?.razorpay_payment_id === razorpay_payment_id) {
+      res.json({ success: true, already_verified: true, payment_id: razorpay_payment_id });
+      return;
     }
 
-    res.json({ success: true, payment_id: razorpay_payment_id });
+    // 7. Compute gateway amount and call atomic RPC
+    const gatewayAmount = orderRow.total - (orderRow.wallet_paid_amount || 0);
+    if (gatewayAmount <= 0) {
+      // Wallet already fully covers this order — nothing to charge via gateway
+      res.json({ success: true, payment_id: razorpay_payment_id, note: "fully_covered_by_wallet" });
+      return;
+    }
+
+    const { data: rpcResult, error: rpcError } = await admin.rpc(
+      "finalize_order_gateway_payment",
+      {
+        p_order_id: order_id,
+        p_gateway_order_id: razorpay_order_id,
+        p_gateway_payment_id: razorpay_payment_id,
+        p_amount: gatewayAmount,
+      }
+    );
+
+    if (rpcError) {
+      res.status(500).json({ error: `Finalization RPC failed: ${rpcError.message}` });
+      return;
+    }
+
+    if (!rpcResult?.success) {
+      res.status(400).json({ error: rpcResult?.error || "Finalization failed" });
+      return;
+    }
+
+    res.json({
+      success: true,
+      already_finalized: rpcResult.already_finalized || false,
+      payment_id: razorpay_payment_id,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
