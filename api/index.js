@@ -4451,8 +4451,25 @@ var admin_commission_default = router32;
 
 // server/services/refund-service.ts
 init_supabase();
+var RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
+var RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
 function isValidUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+function razorpayAuth() {
+  return Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
+}
+function isConfigured() {
+  return Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+}
+function isKnownDefinitiveRazorpayRefundRejection(errorPayload) {
+  const description = (errorPayload?.error?.description || "").toLowerCase();
+  const definitivePatterns = [
+    "refund amount exceeds",
+    "payment has already been fully refunded",
+    "payment not found"
+  ];
+  return definitivePatterns.some((pattern) => description.includes(pattern));
 }
 async function requestWalletTopupRefund(params) {
   const { paymentTransactionId, amount, idempotencyKey, refundReason } = params;
@@ -4479,14 +4496,14 @@ async function requestWalletTopupRefund(params) {
   if (!["captured", "partially_refunded"].includes(txn.payment_status)) {
     return { success: false, error: "invalid_status" };
   }
-  const { data: existingRefund } = await admin.from("payment_refunds").select("id, payment_transaction_id, amount").eq("idempotency_key", idempotencyKey).single();
+  const { data: existingRefund } = await admin.from("payment_refunds").select("id, payment_transaction_id, amount, refund_status").eq("idempotency_key", idempotencyKey).single();
   if (existingRefund) {
     if (existingRefund.payment_transaction_id === paymentTransactionId && existingRefund.amount === amount) {
       return {
         success: true,
         alreadyExists: true,
         refundId: existingRefund.id,
-        refundStatus: "completed",
+        refundStatus: existingRefund.refund_status,
         amount
       };
     } else {
@@ -4547,7 +4564,7 @@ async function getRefundEligibility(transactionId) {
   if (txn.gateway !== "razorpay") {
     return { success: false, error: "unsupported_gateway" };
   }
-  const { data: existingRefunds } = await admin.from("payment_refunds").select("amount").eq("payment_transaction_id", transactionId).in("refund_status", ["completed", "pending", "processing"]);
+  const { data: existingRefunds } = await admin.from("payment_refunds").select("amount").eq("payment_transaction_id", transactionId).in("refund_status", ["completed", "pending", "submitting", "processing", "reconciliation_required"]);
   const reservedTotal = (existingRefunds || []).reduce((sum, r) => sum + r.amount, 0);
   const remainingRefundable = txn.amount - reservedTotal;
   const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", txn.user_id).single();
@@ -4601,6 +4618,413 @@ async function getRefundById(refundId) {
     return { success: false, error: "refund_not_found" };
   }
   return { success: true, refund: data };
+}
+async function beginRefundSubmission(refundId) {
+  if (!refundId || !isValidUuid(refundId)) {
+    return { success: false, error: "Invalid refund ID" };
+  }
+  const admin = createAdminClient();
+  const { data: current, error: loadError } = await admin.from("payment_refunds").select("*").eq("id", refundId).single();
+  if (loadError || !current) {
+    return { success: false, error: "refund_not_found" };
+  }
+  const status = current.refund_status;
+  if (status === "pending") {
+    const { data: updated, error: updateError } = await admin.from("payment_refunds").update({ refund_status: "submitting", updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", refundId).eq("refund_status", "pending").select("*").single();
+    if (updateError || !updated) {
+      const { data: reloaded } = await admin.from("payment_refunds").select("*").eq("id", refundId).single();
+      return { success: true, alreadyExists: true, refund: reloaded };
+    }
+    return { success: true, refund: updated };
+  }
+  if (status === "submitting" || status === "processing") {
+    return { success: true, alreadyExists: true, refund: current };
+  }
+  if (status === "completed") {
+    return { success: false, error: "already_completed" };
+  }
+  if (status === "failed") {
+    return { success: false, error: "refund_already_failed" };
+  }
+  if (status === "reconciliation_required") {
+    return { success: false, error: "reconciliation_required" };
+  }
+  return { success: false, error: `invalid_refund_state: ${status}` };
+}
+async function submitRefundToGateway(refundId) {
+  if (!refundId || !isValidUuid(refundId)) {
+    return { success: false, error: "Invalid refund ID" };
+  }
+  if (!isConfigured()) {
+    return { success: false, error: "Razorpay not configured" };
+  }
+  const admin = createAdminClient();
+  const { data: refund, error: refundError } = await admin.from("payment_refunds").select("*").eq("id", refundId).single();
+  if (refundError || !refund) {
+    return { success: false, error: "refund_not_found" };
+  }
+  const refundRow = refund;
+  if (refundRow.refund_status !== "submitting") {
+    return { success: false, error: `refund_not_in_submitting_state: ${refundRow.refund_status}` };
+  }
+  if (!refundRow.gateway_refund_amount || refundRow.gateway_refund_amount <= 0) {
+    return { success: false, error: "gateway_refund_amount_required" };
+  }
+  const { data: txn, error: txnError } = await admin.from("payment_transactions").select("gateway_payment_id, gateway").eq("id", refundRow.payment_transaction_id).single();
+  if (txnError || !txn) {
+    return { success: false, error: "payment_transaction_not_found" };
+  }
+  const gatewayPaymentId = txn.gateway_payment_id;
+  if (!gatewayPaymentId) {
+    return { success: false, error: "gateway_payment_id_missing" };
+  }
+  const amountPaise = Math.round(refundRow.gateway_refund_amount * 100);
+  let response;
+  try {
+    response = await fetch(`https://api.razorpay.com/v1/payments/${gatewayPaymentId}/refunds`, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${razorpayAuth()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        amount: amountPaise,
+        speed: "normal",
+        notes: {
+          laundry_refund_id: refundRow.id,
+          idempotency_key: refundRow.idempotency_key
+        }
+      })
+    });
+  } catch (err) {
+    return {
+      success: false,
+      uncertain: true,
+      error: `gateway_refund_uncertain_network: ${err.message}`
+    };
+  }
+  if (response.ok) {
+    let razorpayRefund;
+    try {
+      razorpayRefund = await response.json();
+    } catch {
+      return { success: false, uncertain: true, error: "gateway_refund_response_parse_failed" };
+    }
+    const gatewayRefundId = razorpayRefund.id;
+    const { data: confirmResult } = await admin.rpc("confirm_refund_gateway_submission", {
+      p_refund_id: refundRow.id,
+      p_gateway_refund_id: gatewayRefundId
+    });
+    if (!confirmResult?.success) {
+      if (confirmResult?.error === "gateway_refund_id_conflict") {
+        console.error(`[refund] Conflict: refund ${refundRow.id} gateway_refund_id conflict`);
+        return { success: false, error: "gateway_refund_id_conflict" };
+      }
+      return { success: false, error: `confirm_failed: ${confirmResult?.error}` };
+    }
+    const finalStatus = confirmResult.refund_status;
+    if (finalStatus === "processing") {
+      return {
+        success: true,
+        refundId: refundRow.id,
+        refundStatus: "processing",
+        gatewayRefundId
+      };
+    }
+    if (finalStatus === "completed") {
+      return {
+        success: true,
+        refundId: refundRow.id,
+        refundStatus: "completed",
+        gatewayRefundId,
+        webhookWonRace: true
+      };
+    }
+    if (finalStatus === "reconciliation_required") {
+      return {
+        success: true,
+        refundId: refundRow.id,
+        refundStatus: "reconciliation_required",
+        gatewayRefundId
+      };
+    }
+    if (finalStatus === "failed") {
+      console.error(`[refund] Conflict: refund ${refundRow.id} confirmed but status is failed`);
+      return { success: false, error: "refund_status_conflict_investigate" };
+    }
+    return { success: false, error: `unexpected_refund_status: ${finalStatus}` };
+  }
+  if (response.status === 408 || response.status === 429 || response.status >= 500) {
+    return {
+      success: false,
+      uncertain: true,
+      error: `gateway_refund_uncertain_${response.status}`
+    };
+  }
+  let errorPayload = null;
+  try {
+    errorPayload = await response.json();
+  } catch {
+    return {
+      success: false,
+      uncertain: true,
+      error: `gateway_refund_uncertain_${response.status}_unparseable`
+    };
+  }
+  if (isKnownDefinitiveRazorpayRefundRejection(errorPayload)) {
+    const failureReason = errorPayload?.error?.description || `Razorpay rejected refund: ${response.status}`;
+    await admin.rpc("mark_refund_failed", {
+      p_refund_id: refundRow.id,
+      p_failure_reason: failureReason
+    });
+    return {
+      success: false,
+      error: "gateway_refund_failed",
+      refundStatus: "failed"
+    };
+  }
+  return {
+    success: false,
+    uncertain: true,
+    error: `gateway_refund_uncertain_${response.status}`
+  };
+}
+async function processRefundViaGateway(refundId) {
+  if (!refundId || !isValidUuid(refundId)) {
+    return { success: false, error: "Invalid refund ID" };
+  }
+  const admin = createAdminClient();
+  const { data: refund, error: refundError } = await admin.from("payment_refunds").select("*").eq("id", refundId).single();
+  if (refundError || !refund) {
+    return { success: false, error: "refund_not_found" };
+  }
+  const refundRow = refund;
+  const status = refundRow.refund_status;
+  switch (status) {
+    case "pending": {
+      const beginResult = await beginRefundSubmission(refundId);
+      if (!beginResult.success) {
+        return { success: false, error: beginResult.error };
+      }
+      if (beginResult.alreadyExists && beginResult.refund) {
+        const currentStatus = beginResult.refund.refund_status;
+        if (currentStatus === "processing") {
+          return {
+            success: true,
+            refundId,
+            refundStatus: "processing",
+            gatewayRefundId: beginResult.refund.gateway_refund_id,
+            alreadyExists: true
+          };
+        }
+        if (currentStatus === "submitting") {
+          const submitResult2 = await submitRefundToGateway(refundId);
+          return mapSubmitResult(submitResult2);
+        }
+      }
+      const submitResult = await submitRefundToGateway(refundId);
+      return mapSubmitResult(submitResult);
+    }
+    case "submitting":
+      return {
+        success: false,
+        uncertain: true,
+        error: "submission_uncertain_reconciliation_required"
+      };
+    case "processing":
+      return {
+        success: true,
+        refundId,
+        refundStatus: "processing",
+        gatewayRefundId: refundRow.gateway_refund_id,
+        alreadyExists: true
+      };
+    case "completed":
+      return {
+        success: true,
+        refundId,
+        refundStatus: "completed",
+        gatewayRefundId: refundRow.gateway_refund_id,
+        alreadyCompleted: true
+      };
+    case "failed":
+      return { success: false, error: "refund_already_failed" };
+    case "reconciliation_required":
+      return { success: false, error: "reconciliation_required" };
+    default:
+      return { success: false, error: `invalid_refund_state: ${status}` };
+  }
+}
+function mapSubmitResult(result) {
+  return {
+    success: result.success,
+    refundId: result.refundId,
+    refundStatus: result.refundStatus,
+    gatewayRefundId: result.gatewayRefundId,
+    alreadyExists: result.alreadyExists,
+    uncertain: result.uncertain,
+    error: result.error
+  };
+}
+async function resolveLocalRefund(refundEntity) {
+  const admin = createAdminClient();
+  const gatewayRefundId = refundEntity?.id;
+  if (!gatewayRefundId) {
+    return { success: false, error: "missing_gateway_refund_id" };
+  }
+  let { data: refund } = await admin.from("payment_refunds").select("*").eq("gateway_refund_id", gatewayRefundId).single();
+  if (!refund) {
+    const laundryRefundId = refundEntity?.notes?.laundry_refund_id;
+    if (!laundryRefundId) {
+      return { success: false, error: "missing_notes_correlation" };
+    }
+    const { data: byNotes } = await admin.from("payment_refunds").select("*").eq("id", laundryRefundId).single();
+    if (!byNotes) {
+      return { success: false, error: "refund_not_found" };
+    }
+    refund = byNotes;
+  }
+  const refundRow = refund;
+  const expectedAmountPaise = refundRow.gateway_refund_amount * 100;
+  if (refundEntity.amount && refundEntity.amount !== expectedAmountPaise) {
+    return { success: false, error: "webhook_amount_mismatch" };
+  }
+  if (refundEntity.payment_id) {
+    const { data: txn } = await admin.from("payment_transactions").select("gateway_payment_id").eq("id", refundRow.payment_transaction_id).single();
+    if (txn && txn.gateway_payment_id && txn.gateway_payment_id !== refundEntity.payment_id) {
+      return { success: false, error: "webhook_payment_id_mismatch" };
+    }
+  }
+  if (!refundRow.gateway_refund_id) {
+    const { data: bound } = await admin.from("payment_refunds").update({ gateway_refund_id: gatewayRefundId, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", refundRow.id).is("gateway_refund_id", null).select("*").single();
+    if (bound) {
+      refundRow.gateway_refund_id = gatewayRefundId;
+    } else {
+      const { data: reloaded } = await admin.from("payment_refunds").select("*").eq("id", refundRow.id).single();
+      if (reloaded) {
+        Object.assign(refundRow, reloaded);
+      }
+    }
+  }
+  if (refundRow.gateway_refund_id && refundRow.gateway_refund_id !== gatewayRefundId) {
+    return { success: false, critical: true, error: "gateway_refund_id_conflict" };
+  }
+  return { success: true, refund: refundRow };
+}
+async function handleRefundCreatedWebhook(refund, refundEntity) {
+  const admin = createAdminClient();
+  if (["pending", "submitting"].includes(refund.refund_status)) {
+    const { data: updated } = await admin.from("payment_refunds").update({
+      refund_status: "processing",
+      gateway_refund_id: refundEntity.id,
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", refund.id).in("refund_status", ["pending", "submitting"]).select("*").single();
+    if (updated) {
+      return {
+        success: true,
+        refundId: refund.id,
+        refundStatus: "processing",
+        gatewayRefundId: refundEntity.id
+      };
+    }
+  }
+  return {
+    success: true,
+    refundId: refund.id,
+    refundStatus: refund.refund_status,
+    gatewayRefundId: refund.gateway_refund_id || refundEntity.id
+  };
+}
+async function handleRefundProcessedWebhook(refund, refundEntity) {
+  const admin = createAdminClient();
+  if (refund.refund_status === "completed") {
+    return {
+      success: true,
+      refundId: refund.id,
+      refundStatus: "completed",
+      alreadyCompleted: true
+    };
+  }
+  if (refund.refund_status === "reconciliation_required") {
+    return {
+      success: true,
+      refundId: refund.id,
+      refundStatus: "reconciliation_required"
+    };
+  }
+  const { data: rpcResult } = await admin.rpc("complete_payment_refund", {
+    p_refund_id: refund.id,
+    p_gateway_refund_id: refundEntity.id
+  });
+  if (rpcResult?.success) {
+    return {
+      success: true,
+      refundId: refund.id,
+      refundStatus: "completed",
+      gatewayRefundId: refundEntity.id,
+      walletMoved: rpcResult.wallet_moved,
+      newWalletBalance: rpcResult.new_wallet_balance
+    };
+  }
+  if (rpcResult?.error === "insufficient_wallet_balance") {
+    const { data: reconResult } = await admin.rpc("mark_refund_reconciliation_required", {
+      p_refund_id: refund.id,
+      p_gateway_refund_id: refundEntity.id,
+      p_failure_reason: "wallet_debit_failed"
+    });
+    if (reconResult?.success) {
+      return {
+        success: false,
+        refundId: refund.id,
+        refundStatus: "reconciliation_required",
+        error: "reconciliation_required"
+      };
+    }
+    return {
+      success: false,
+      error: `reconciliation_transition_failed: ${reconResult?.error}`
+    };
+  }
+  if (rpcResult?.already_completed) {
+    return {
+      success: true,
+      refundId: refund.id,
+      refundStatus: "completed",
+      alreadyCompleted: true
+    };
+  }
+  return {
+    success: false,
+    refundId: refund.id,
+    error: rpcResult?.error || "complete_payment_refund_failed"
+  };
+}
+async function handleRefundFailedWebhook(refund, refundEntity) {
+  const admin = createAdminClient();
+  if (refund.refund_status === "failed") {
+    return {
+      success: true,
+      refundId: refund.id,
+      refundStatus: "failed"
+    };
+  }
+  const failureReason = refundEntity?.error_description || "Gateway refund failed";
+  const { data: rpcResult } = await admin.rpc("mark_refund_failed", {
+    p_refund_id: refund.id,
+    p_failure_reason: failureReason
+  });
+  if (rpcResult?.success) {
+    return {
+      success: true,
+      refundId: refund.id,
+      refundStatus: "failed"
+    };
+  }
+  return {
+    success: false,
+    refundId: refund.id,
+    error: rpcResult?.error || "mark_refund_failed_failed"
+  };
 }
 
 // server/routes/admin-refunds.ts
@@ -4679,6 +5103,26 @@ router33.post("/wallet-topup", async (req, res) => {
       walletRefundAmount: result.walletRefundAmount,
       remainingRefundable: result.remainingRefundable,
       walletBalance: result.walletBalance
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router33.post("/:id/process", async (req, res) => {
+  try {
+    const refundId = req.params.id;
+    const result = await processRefundViaGateway(refundId);
+    if (!result.success) {
+      const statusCode = result.uncertain || result.error === "reconciliation_required" ? 409 : 400;
+      res.status(statusCode).json({ error: result.error });
+      return;
+    }
+    res.json({
+      success: true,
+      refundId: result.refundId,
+      refundStatus: result.refundStatus,
+      gatewayRefundId: result.gatewayRefundId,
+      alreadyCompleted: result.alreadyCompleted || false
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -5398,14 +5842,14 @@ var vendor_service_prices_default = router41;
 // server/services/payment-service.ts
 var import_crypto2 = __toESM(require("crypto"));
 init_supabase();
-var RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || "";
-var RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || "";
+var RAZORPAY_KEY_ID2 = process.env.RAZORPAY_KEY_ID || "";
+var RAZORPAY_KEY_SECRET2 = process.env.RAZORPAY_KEY_SECRET || "";
 var STALE_CREATING_MINUTES = 5;
-function razorpayAuth() {
-  return Buffer.from(`${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`).toString("base64");
+function razorpayAuth2() {
+  return Buffer.from(`${RAZORPAY_KEY_ID2}:${RAZORPAY_KEY_SECRET2}`).toString("base64");
 }
-function isConfigured() {
-  return Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+function isConfigured2() {
+  return Boolean(RAZORPAY_KEY_ID2 && RAZORPAY_KEY_SECRET2);
 }
 function deterministicReceipt(idempotencyKey) {
   const hash = import_crypto2.default.createHash("sha256").update(idempotencyKey).digest("hex");
@@ -5417,7 +5861,7 @@ function isStale(createdAt, minutes) {
   return now - created > minutes * 60 * 1e3;
 }
 async function createTopupOrder(userId, amountRupees, idempotencyKey) {
-  if (!isConfigured()) {
+  if (!isConfigured2()) {
     return { success: false, error: "Payment gateway not configured" };
   }
   if (!amountRupees || amountRupees < 10 || amountRupees > 25e3) {
@@ -5450,7 +5894,7 @@ async function createTopupOrder(userId, amountRupees, idempotencyKey) {
         razorpayOrderId: existing.gateway_order_id,
         amount: amountRupees,
         currency: "INR",
-        publicKeyId: RAZORPAY_KEY_ID
+        publicKeyId: RAZORPAY_KEY_ID2
       };
     }
     if (existing.payment_status === "creating" && isStale(existing.updated_at, STALE_CREATING_MINUTES)) {
@@ -5493,7 +5937,7 @@ async function createTopupOrder(userId, amountRupees, idempotencyKey) {
     response = await fetch("https://api.razorpay.com/v1/orders", {
       method: "POST",
       headers: {
-        Authorization: `Basic ${razorpayAuth()}`,
+        Authorization: `Basic ${razorpayAuth2()}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -5535,7 +5979,7 @@ async function createTopupOrder(userId, amountRupees, idempotencyKey) {
         razorpayOrderId: razorpayOrder.id,
         amount: amountRupees,
         currency: "INR",
-        publicKeyId: RAZORPAY_KEY_ID
+        publicKeyId: RAZORPAY_KEY_ID2
       };
     }
     const { error: retryError } = await admin.from("payment_transactions").update({
@@ -5550,7 +5994,7 @@ async function createTopupOrder(userId, amountRupees, idempotencyKey) {
         razorpayOrderId: razorpayOrder.id,
         amount: amountRupees,
         currency: "INR",
-        publicKeyId: RAZORPAY_KEY_ID
+        publicKeyId: RAZORPAY_KEY_ID2
       };
     }
     console.error(
@@ -5584,7 +6028,7 @@ async function createTopupOrder(userId, amountRupees, idempotencyKey) {
   };
 }
 async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, razorpaySignature, transactionId) {
-  if (!isConfigured()) {
+  if (!isConfigured2()) {
     return { success: false, error: "Payment gateway not configured" };
   }
   const admin = createAdminClient();
@@ -5599,13 +6043,13 @@ async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, ra
     return { success: false, error: "Order ID mismatch" };
   }
   const crypto5 = await import("crypto");
-  const expectedSig = crypto5.createHmac("sha256", RAZORPAY_KEY_SECRET).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
+  const expectedSig = crypto5.createHmac("sha256", RAZORPAY_KEY_SECRET2).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
   if (!crypto5.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
     return { success: false, error: "Invalid payment signature" };
   }
   try {
     const response = await fetch(`https://api.razorpay.com/v1/payments/${razorpayPaymentId}`, {
-      headers: { Authorization: `Basic ${razorpayAuth()}` }
+      headers: { Authorization: `Basic ${razorpayAuth2()}` }
     });
     if (response.ok) {
       const payment = await response.json();
@@ -6816,15 +7260,39 @@ router46.post("/razorpay", async (req, res) => {
       gateway: "razorpay",
       event_id: eventId,
       event_type: "unknown",
-      // will be updated after parsing
       payload: null,
       status: "pending"
     });
-    if (insertError) {
-      if (insertError.code === "23505") {
+    if (insertError && insertError.code === "23505") {
+      const { data: existingEvent } = await admin.from("payment_webhook_events").select("status").eq("event_id", eventId).single();
+      const existingStatus = existingEvent?.status;
+      if (existingStatus === "processed") {
         res.json({ status: "already_processed" });
         return;
       }
+      if (existingStatus === "pending") {
+        res.status(202).json({ status: "already_in_progress" });
+        return;
+      }
+      if (existingStatus === "failed") {
+        let parsedEvent = null;
+        try {
+          parsedEvent = JSON.parse(rawBody.toString());
+        } catch {
+        }
+        const { data: reclaimed, error: reclaimError } = await admin.from("payment_webhook_events").update({
+          status: "pending",
+          processed_at: null,
+          event_type: parsedEvent?.event || "unknown",
+          payload: parsedEvent?.payload || null
+        }).eq("event_id", eventId).eq("status", "failed").select("status").single();
+        if (reclaimError || !reclaimed) {
+          res.status(202).json({ status: "already_in_progress" });
+          return;
+        }
+      }
+    }
+    if (insertError && insertError.code !== "23505") {
       console.error("[webhook] Failed to record event:", insertError.message);
       res.status(500).json({ error: "Failed to record event" });
       return;
@@ -6877,8 +7345,57 @@ router46.post("/razorpay", async (req, res) => {
         }
         break;
       }
-      case "refund.processed": {
-        console.log(`[webhook] refund.processed received: eventId=${eventId}`);
+      case "refund.created":
+      case "refund.processed":
+      case "refund.failed": {
+        const refundEntity = event.payload?.refund?.entity;
+        if (refundEntity?.id) {
+          const resolved = await resolveLocalRefund(refundEntity);
+          if (!resolved.success) {
+            if (resolved.critical) {
+              await admin.from("payment_webhook_events").update({
+                status: "processed",
+                processed_at: (/* @__PURE__ */ new Date()).toISOString(),
+                payload: { ...event.payload, critical_error: resolved.error }
+              }).eq("event_id", eventId);
+              res.json({ status: "critical_conflict" });
+              return;
+            }
+            console.warn(
+              `[webhook] ${event.event}: resolve failed \u2014 ${resolved.error} (eventId=${eventId}, gatewayRefundId=${refundEntity.id})`
+            );
+            break;
+          }
+          switch (event.event) {
+            case "refund.created": {
+              const result = await handleRefundCreatedWebhook(resolved.refund, refundEntity);
+              console.log(
+                `[webhook] refund.created: gatewayRefundId=${refundEntity.id}, success=${result.success}, refundStatus=${result.refundStatus}`
+              );
+              break;
+            }
+            case "refund.processed": {
+              const result = await handleRefundProcessedWebhook(resolved.refund, refundEntity);
+              if (result.error === "reconciliation_required") {
+                console.warn(
+                  `[webhook] refund.processed: reconciliation_required, gatewayRefundId=${refundEntity.id}`
+                );
+              } else {
+                console.log(
+                  `[webhook] refund.processed: success=${result.success}, walletMoved=${result.walletMoved || false}, gatewayRefundId=${refundEntity.id}`
+                );
+              }
+              break;
+            }
+            case "refund.failed": {
+              const result = await handleRefundFailedWebhook(resolved.refund, refundEntity);
+              console.log(
+                `[webhook] refund.failed: success=${result.success}, gatewayRefundId=${refundEntity.id}`
+              );
+              break;
+            }
+          }
+        }
         break;
       }
       default:
@@ -6891,6 +7408,15 @@ router46.post("/razorpay", async (req, res) => {
     res.json({ status: "ok" });
   } catch (err) {
     console.error("[webhook] Error:", err.message);
+    try {
+      const admin = createAdminClient();
+      const eventId = req.headers["x-razorpay-event-id"];
+      if (eventId) {
+        await admin.from("payment_webhook_events").update({ status: "failed", processed_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("event_id", eventId);
+      }
+    } catch (markErr) {
+      console.error("[webhook] Failed to mark event as failed:", markErr.message);
+    }
     res.status(500).json({ error: "Webhook processing failed" });
   }
 });

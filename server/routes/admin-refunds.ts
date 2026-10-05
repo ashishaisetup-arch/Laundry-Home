@@ -4,6 +4,7 @@ import {
   getRefundEligibility,
   listRefunds,
   getRefundById,
+  processRefundViaGateway,
 } from "../services/refund-service";
 
 const router = Router();
@@ -109,6 +110,37 @@ router.post("/wallet-topup", async (req: Request, res: Response) => {
       walletRefundAmount: result.walletRefundAmount,
       remainingRefundable: result.remainingRefundable,
       walletBalance: result.walletBalance,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// POST /:id/process
+// ============================================================================
+// Submits a pending refund to Razorpay gateway. Idempotent based on status.
+// Must be defined before GET /:id to avoid route capture.
+
+router.post("/:id/process", async (req: Request, res: Response) => {
+  try {
+    const refundId = req.params.id as string;
+    const result = await processRefundViaGateway(refundId);
+
+    if (!result.success) {
+      // uncertain → 409, reconciliation_required → 409, others → 400
+      const statusCode =
+        result.uncertain || result.error === "reconciliation_required" ? 409 : 400;
+      res.status(statusCode).json({ error: result.error });
+      return;
+    }
+
+    res.json({
+      success: true,
+      refundId: result.refundId,
+      refundStatus: result.refundStatus,
+      gatewayRefundId: result.gatewayRefundId,
+      alreadyCompleted: result.alreadyCompleted || false,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
