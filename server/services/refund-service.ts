@@ -127,25 +127,8 @@ export async function requestWalletTopupRefund(params: {
     return { success: false, error: "invalid_status" };
   }
 
-  // Calculate remaining refundable
-  const { data: existingRefunds } = await admin
-    .from("payment_refunds")
-    .select("amount")
-    .eq("payment_transaction_id", paymentTransactionId)
-    .in("refund_status", ["completed", "pending", "processing"]);
-
-  const reservedTotal = (existingRefunds || []).reduce((sum, r) => sum + (r as any).amount, 0);
-  const remainingRefundable = txn.amount - reservedTotal;
-
-  if (amount > remainingRefundable) {
-    return {
-      success: false,
-      error: "amount_exceeds_refundable",
-      remainingRefundable,
-    };
-  }
-
   // Advisory precheck: wallet balance can absorb eventual debit
+  // RPC is authoritative for remaining_refundable and idempotency checks
   // Real protection is in complete_payment_refund() at gateway completion (3A3)
   const { data: profile } = await admin
     .from("user_profiles")

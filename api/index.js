@@ -4479,16 +4479,6 @@ async function requestWalletTopupRefund(params) {
   if (!["captured", "partially_refunded"].includes(txn.payment_status)) {
     return { success: false, error: "invalid_status" };
   }
-  const { data: existingRefunds } = await admin.from("payment_refunds").select("amount").eq("payment_transaction_id", paymentTransactionId).in("refund_status", ["completed", "pending", "processing"]);
-  const reservedTotal = (existingRefunds || []).reduce((sum, r) => sum + r.amount, 0);
-  const remainingRefundable = txn.amount - reservedTotal;
-  if (amount > remainingRefundable) {
-    return {
-      success: false,
-      error: "amount_exceeds_refundable",
-      remainingRefundable
-    };
-  }
   const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", txn.user_id).single();
   const walletBalance = profile?.wallet_balance ?? 0;
   if (walletBalance < amount) {
