@@ -1580,7 +1580,7 @@ router4.post("/", async (req, res) => {
     await adminClient.from("orders").update({
       wallet_paid_amount: walletPaid,
       gateway_paid_amount: gatewayPaid,
-      tender_type: walletPaid > 0 ? "wallet" : "cod",
+      tender_type: walletPaid >= pricing.total && pricing.total > 0 ? "wallet" : walletPaid > 0 ? "mixed" : "cod",
       payment_status: isFullyPaid ? "paid" : "pending"
     }).eq("id", data.id);
     const { data: stages } = await adminClient.from("order_stage_definitions").select("*").order("sort_order");
