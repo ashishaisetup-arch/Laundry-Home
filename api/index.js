@@ -4449,11 +4449,278 @@ router32.get("/summary", async (_req, res) => {
 });
 var admin_commission_default = router32;
 
-// server/routes/order-stages.ts
-var import_express34 = require("express");
+// server/services/refund-service.ts
 init_supabase();
+function isValidUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+async function requestWalletTopupRefund(params) {
+  const { paymentTransactionId, amount, idempotencyKey, refundReason } = params;
+  if (!paymentTransactionId || !isValidUuid(paymentTransactionId)) {
+    return { success: false, error: "Invalid payment transaction ID" };
+  }
+  if (!amount || typeof amount !== "number" || amount <= 0 || !Number.isInteger(amount)) {
+    return { success: false, error: "Valid amount is required" };
+  }
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+    return { success: false, error: "Valid idempotency key is required" };
+  }
+  const admin = createAdminClient();
+  const { data: txn, error: txnError } = await admin.from("payment_transactions").select("id, user_id, amount, gateway, transaction_purpose, payment_status, amount_refunded").eq("id", paymentTransactionId).single();
+  if (txnError || !txn) {
+    return { success: false, error: "payment_transaction_not_found" };
+  }
+  if (txn.transaction_purpose !== "wallet_topup") {
+    return { success: false, error: "invalid_transaction_purpose" };
+  }
+  if (txn.gateway !== "razorpay") {
+    return { success: false, error: "unsupported_gateway" };
+  }
+  if (!["captured", "partially_refunded"].includes(txn.payment_status)) {
+    return { success: false, error: "invalid_status" };
+  }
+  const { data: existingRefunds } = await admin.from("payment_refunds").select("amount").eq("payment_transaction_id", paymentTransactionId).in("refund_status", ["completed", "pending", "processing"]);
+  const reservedTotal = (existingRefunds || []).reduce((sum, r) => sum + r.amount, 0);
+  const remainingRefundable = txn.amount - reservedTotal;
+  if (amount > remainingRefundable) {
+    return {
+      success: false,
+      error: "amount_exceeds_refundable",
+      remainingRefundable
+    };
+  }
+  const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", txn.user_id).single();
+  const walletBalance = profile?.wallet_balance ?? 0;
+  if (walletBalance < amount) {
+    return {
+      success: false,
+      error: "insufficient_wallet_balance_for_refund",
+      walletBalance
+    };
+  }
+  const { data: rpcResult, error: rpcError } = await admin.rpc("create_payment_refund", {
+    p_payment_transaction_id: paymentTransactionId,
+    p_amount: amount,
+    p_idempotency_key: idempotencyKey,
+    p_refund_reason: refundReason || null,
+    p_refund_source: "admin"
+  });
+  if (rpcError) {
+    return { success: false, error: `RPC failed: ${rpcError.message}` };
+  }
+  if (!rpcResult?.success) {
+    return {
+      success: false,
+      error: rpcResult?.error || "refund_creation_failed",
+      remainingRefundable: rpcResult?.remaining_refundable,
+      walletBalance
+    };
+  }
+  return {
+    success: true,
+    alreadyExists: rpcResult.already_exists || false,
+    refundId: rpcResult.refund_id,
+    refundStatus: rpcResult.refund_status,
+    amount: rpcResult.amount,
+    gatewayRefundAmount: rpcResult.gateway_refund_amount,
+    walletRefundAmount: rpcResult.wallet_refund_amount,
+    remainingRefundable: rpcResult.remaining_refundable,
+    walletBalance
+  };
+}
+async function getRefundEligibility(transactionId) {
+  if (!transactionId || !isValidUuid(transactionId)) {
+    return { success: false, error: "Invalid transaction ID" };
+  }
+  const admin = createAdminClient();
+  const { data: txn, error: txnError } = await admin.from("payment_transactions").select("id, user_id, amount, gateway, transaction_purpose, payment_status, amount_refunded").eq("id", transactionId).single();
+  if (txnError || !txn) {
+    return { success: false, error: "payment_transaction_not_found" };
+  }
+  if (txn.transaction_purpose !== "wallet_topup") {
+    return { success: false, error: "invalid_transaction_purpose" };
+  }
+  if (txn.gateway !== "razorpay") {
+    return { success: false, error: "unsupported_gateway" };
+  }
+  const { data: existingRefunds } = await admin.from("payment_refunds").select("amount").eq("payment_transaction_id", transactionId).in("refund_status", ["completed", "pending", "processing"]);
+  const reservedTotal = (existingRefunds || []).reduce((sum, r) => sum + r.amount, 0);
+  const remainingRefundable = txn.amount - reservedTotal;
+  const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", txn.user_id).single();
+  const walletBalance = profile?.wallet_balance ?? 0;
+  const eligible = ["captured", "partially_refunded"].includes(txn.payment_status) && remainingRefundable > 0;
+  return {
+    success: true,
+    eligible,
+    transactionId: txn.id,
+    amount: txn.amount,
+    amountRefunded: txn.amount_refunded || 0,
+    paymentStatus: txn.payment_status,
+    gateway: txn.gateway,
+    transactionPurpose: txn.transaction_purpose,
+    remainingRefundable,
+    walletBalance,
+    canAbsorbDebit: walletBalance >= (remainingRefundable > 0 ? Math.min(remainingRefundable, txn.amount) : 0)
+  };
+}
+async function listRefunds(params) {
+  const page = Math.max(1, params.page || 1);
+  const limit = Math.min(100, Math.max(1, params.limit || 20));
+  const offset = (page - 1) * limit;
+  const admin = createAdminClient();
+  let query = admin.from("payment_refunds").select("*", { count: "exact" });
+  if (params.status) {
+    query = query.eq("refund_status", params.status);
+  }
+  if (params.userId) {
+    query = query.eq("user_id", params.userId);
+  }
+  const { data, error, count } = await query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+  if (error) {
+    return { success: false, error: error.message };
+  }
+  return {
+    success: true,
+    refunds: data || [],
+    total: count || 0,
+    page,
+    limit
+  };
+}
+async function getRefundById(refundId) {
+  if (!refundId || !isValidUuid(refundId)) {
+    return { success: false, error: "Invalid refund ID" };
+  }
+  const admin = createAdminClient();
+  const { data, error } = await admin.from("payment_refunds").select("*").eq("id", refundId).single();
+  if (error || !data) {
+    return { success: false, error: "refund_not_found" };
+  }
+  return { success: true, refund: data };
+}
+
+// server/routes/admin-refunds.ts
+var import_express34 = require("express");
 var router33 = (0, import_express34.Router)();
-router33.get("/", async (_req, res) => {
+function requireAdmin(req, res, next) {
+  const role = req.userRole;
+  if (!role || !["admin", "superadmin"].includes(role)) {
+    res.status(403).json({ error: "Forbidden: insufficient role" });
+    return;
+  }
+  next();
+}
+router33.use(requireAdmin);
+router33.get("/wallet-topup/:transactionId/eligibility", async (req, res) => {
+  try {
+    const transactionId = req.params.transactionId;
+    const result = await getRefundEligibility(transactionId);
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({
+      transactionId: result.transactionId,
+      amount: result.amount,
+      amountRefunded: result.amountRefunded,
+      paymentStatus: result.paymentStatus,
+      gateway: result.gateway,
+      transactionPurpose: result.transactionPurpose,
+      remainingRefundable: result.remainingRefundable,
+      walletBalance: result.walletBalance,
+      canAbsorbDebit: result.canAbsorbDebit,
+      eligible: result.eligible
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router33.post("/wallet-topup", async (req, res) => {
+  try {
+    const { paymentTransactionId, amount, idempotencyKey, refundReason } = req.body;
+    if (!paymentTransactionId || typeof paymentTransactionId !== "string") {
+      res.status(400).json({ error: "paymentTransactionId is required" });
+      return;
+    }
+    if (!amount || typeof amount !== "number") {
+      res.status(400).json({ error: "amount is required" });
+      return;
+    }
+    if (!idempotencyKey || typeof idempotencyKey !== "string") {
+      res.status(400).json({ error: "idempotencyKey is required" });
+      return;
+    }
+    const result = await requestWalletTopupRefund({
+      paymentTransactionId,
+      amount,
+      idempotencyKey,
+      refundReason
+    });
+    if (!result.success) {
+      res.status(400).json({
+        error: result.error,
+        remainingRefundable: result.remainingRefundable,
+        walletBalance: result.walletBalance
+      });
+      return;
+    }
+    const statusCode = result.alreadyExists ? 200 : 201;
+    res.status(statusCode).json({
+      success: true,
+      alreadyExists: result.alreadyExists,
+      refundId: result.refundId,
+      refundStatus: result.refundStatus,
+      amount: result.amount,
+      gatewayRefundAmount: result.gatewayRefundAmount,
+      walletRefundAmount: result.walletRefundAmount,
+      remainingRefundable: result.remainingRefundable,
+      walletBalance: result.walletBalance
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router33.get("/", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const status = req.query.status;
+    const userId = req.query.userId;
+    const result = await listRefunds({ page, limit, status, userId });
+    if (!result.success) {
+      res.status(500).json({ error: result.error });
+      return;
+    }
+    res.json({
+      refunds: result.refunds,
+      total: result.total,
+      page: result.page,
+      limit: result.limit
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router33.get("/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await getRefundById(id);
+    if (!result.success) {
+      res.status(404).json({ error: result.error });
+      return;
+    }
+    res.json(result.refund);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var admin_refunds_default = router33;
+
+// server/routes/order-stages.ts
+var import_express35 = require("express");
+init_supabase();
+var router34 = (0, import_express35.Router)();
+router34.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("order_stage_definitions").select("*").order("sort_order");
@@ -4466,13 +4733,13 @@ router33.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var order_stages_default = router33;
+var order_stages_default = router34;
 
 // server/routes/chat.ts
-var import_express35 = require("express");
+var import_express36 = require("express");
 init_supabase();
-var router34 = (0, import_express35.Router)();
-router34.get("/", async (req, res) => {
+var router35 = (0, import_express36.Router)();
+router35.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4492,7 +4759,7 @@ router34.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router34.post("/", async (req, res) => {
+router35.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4511,7 +4778,7 @@ router34.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router34.post("/ask", async (req, res) => {
+router35.post("/ask", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4601,13 +4868,13 @@ How can I assist you today?`;
     res.status(500).json({ error: err.message });
   }
 });
-var chat_default = router34;
+var chat_default = router35;
 
 // server/routes/favorites.ts
-var import_express36 = require("express");
+var import_express37 = require("express");
 init_supabase();
-var router35 = (0, import_express36.Router)();
-router35.get("/", async (req, res) => {
+var router36 = (0, import_express37.Router)();
+router36.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4626,7 +4893,7 @@ router35.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router35.post("/", async (req, res) => {
+router36.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4650,7 +4917,7 @@ router35.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router35.delete("/:vendor_id", async (req, res) => {
+router36.delete("/:vendor_id", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4670,10 +4937,10 @@ router35.delete("/:vendor_id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var favorites_default = router35;
+var favorites_default = router36;
 
 // server/routes/geocode.ts
-var import_express37 = require("express");
+var import_express38 = require("express");
 var cache2 = /* @__PURE__ */ new Map();
 var CACHE_TTL_MS = 60 * 60 * 1e3;
 function getCached(key) {
@@ -4734,8 +5001,8 @@ function findClosestArea2(lat, lng) {
   }
   return closest;
 }
-var router36 = (0, import_express37.Router)();
-router36.get("/reverse", async (req, res) => {
+var router37 = (0, import_express38.Router)();
+router37.get("/reverse", async (req, res) => {
   try {
     const lat = req.query.lat;
     const lng = req.query.lng;
@@ -4795,7 +5062,7 @@ router36.get("/reverse", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router36.get("/search", async (req, res) => {
+router37.get("/search", async (req, res) => {
   try {
     const q = (req.query.q || "").trim();
     if (!q || q.length < 2) {
@@ -4847,13 +5114,13 @@ function haversineKm4(lat1, lng1, lat2, lng2) {
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
-var geocode_default = router36;
+var geocode_default = router37;
 
 // server/routes/routing.ts
-var import_express38 = require("express");
+var import_express39 = require("express");
 var ORS_BASE = "https://api.openrouteservice.org/v2";
-var router37 = (0, import_express38.Router)();
-router37.get("/directions", async (req, res) => {
+var router38 = (0, import_express39.Router)();
+router38.get("/directions", async (req, res) => {
   try {
     const apiKey = process.env.OPENROUTESERVICE_API_KEY;
     if (!apiKey) {
@@ -4887,7 +5154,7 @@ router37.get("/directions", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router37.get("/geocode/search", async (req, res) => {
+router38.get("/geocode/search", async (req, res) => {
   try {
     const apiKey = process.env.OPENROUTESERVICE_API_KEY;
     if (!apiKey) {
@@ -4914,13 +5181,13 @@ router37.get("/geocode/search", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var routing_default = router37;
+var routing_default = router38;
 
 // server/routes/delivery-location.ts
-var import_express39 = require("express");
+var import_express40 = require("express");
 init_supabase();
-var router38 = (0, import_express39.Router)();
-router38.post("/", async (req, res) => {
+var router39 = (0, import_express40.Router)();
+router39.post("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -4955,7 +5222,7 @@ router38.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router38.get("/:execId", async (req, res) => {
+router39.get("/:execId", async (req, res) => {
   try {
     const { execId } = req.params;
     const admin = createAdminClient();
@@ -4969,13 +5236,13 @@ router38.get("/:execId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var delivery_location_default = router38;
+var delivery_location_default = router39;
 
 // server/routes/vendor-onboarding.ts
-var import_express40 = require("express");
+var import_express41 = require("express");
 init_supabase();
-var router39 = (0, import_express40.Router)();
-router39.post("/approve", async (req, res) => {
+var router40 = (0, import_express41.Router)();
+router40.post("/approve", async (req, res) => {
   try {
     const { vendor_id, owner_id } = req.body;
     if (!vendor_id) {
@@ -5005,7 +5272,7 @@ router39.post("/approve", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router39.post("/reject", async (req, res) => {
+router40.post("/reject", async (req, res) => {
   try {
     const { vendor_id, reason } = req.body;
     if (!vendor_id) {
@@ -5027,7 +5294,7 @@ router39.post("/reject", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router39.get("/pending", async (_req, res) => {
+router40.get("/pending", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("vendors").select("*, owner:owner_id(id, name, email, phone)").in("kyc_status", ["pending"]).order("created_at", { ascending: false });
@@ -5040,12 +5307,12 @@ router39.get("/pending", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_onboarding_default = router39;
+var vendor_onboarding_default = router40;
 
 // server/routes/vendor-service-prices.ts
-var import_express41 = require("express");
+var import_express42 = require("express");
 init_supabase();
-var router40 = (0, import_express41.Router)();
+var router41 = (0, import_express42.Router)();
 async function canManageVendor(req, vendorId) {
   const admin = createAdminClient();
   const user = req.user;
@@ -5056,7 +5323,7 @@ async function canManageVendor(req, vendorId) {
   const { data: vendor } = await admin.from("vendors").select("id").eq("id", vendorId).eq("owner_id", user.id).maybeSingle();
   return !!vendor;
 }
-router40.get("/:vendorId", async (req, res) => {
+router41.get("/:vendorId", async (req, res) => {
   try {
     const supabase = createAdminClient();
     const { data, error } = await supabase.from("vendor_service_prices").select("*, services(name, unit), service_items(item_name, unit)").eq("vendor_id", req.params.vendorId).eq("is_active", true);
@@ -5079,7 +5346,7 @@ router40.get("/:vendorId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router40.post("/", async (req, res) => {
+router41.post("/", async (req, res) => {
   try {
     const { vendor_id, service_id, item_id, price } = req.body;
     if (!vendor_id || !service_id || !item_id || typeof price !== "number" || price <= 0) {
@@ -5104,7 +5371,7 @@ router40.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router40.delete("/:vendorId/:serviceId/:itemId", async (req, res) => {
+router41.delete("/:vendorId/:serviceId/:itemId", async (req, res) => {
   try {
     const { vendorId, serviceId, itemId } = req.params;
     if (!await canManageVendor(req, vendorId)) {
@@ -5122,7 +5389,7 @@ router40.delete("/:vendorId/:serviceId/:itemId", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_service_prices_default = router40;
+var vendor_service_prices_default = router41;
 
 // server/services/payment-service.ts
 var import_crypto2 = __toESM(require("crypto"));
@@ -5457,10 +5724,10 @@ async function getInvoices(userId, options = {}) {
 }
 
 // server/routes/payments.ts
-var import_express42 = require("express");
+var import_express43 = require("express");
 init_supabase();
 var crypto4 = __toESM(require("crypto"));
-var router41 = (0, import_express42.Router)();
+var router42 = (0, import_express43.Router)();
 async function getAuthenticatedUser(req) {
   try {
     const supabase = createServerClientWithCookies(
@@ -5472,7 +5739,7 @@ async function getAuthenticatedUser(req) {
     return null;
   }
 }
-router41.post("/payments/wallet/topup/create-order", async (req, res) => {
+router42.post("/payments/wallet/topup/create-order", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -5505,7 +5772,7 @@ router41.post("/payments/wallet/topup/create-order", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.post("/payments/wallet/topup/verify", async (req, res) => {
+router42.post("/payments/wallet/topup/verify", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -5543,12 +5810,12 @@ router41.post("/payments/wallet/topup/verify", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.post("/payments/wallet/add", async (_req, res) => {
+router42.post("/payments/wallet/add", async (_req, res) => {
   res.status(405).json({
     error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead."
   });
 });
-router41.post("/payments/create-order", async (req, res) => {
+router42.post("/payments/create-order", async (req, res) => {
   try {
     const { amount, currency, order_id } = req.body;
     if (!amount || !order_id) {
@@ -5598,7 +5865,7 @@ router41.post("/payments/create-order", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.post("/payments/verify", async (req, res) => {
+router42.post("/payments/verify", async (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !order_id) {
@@ -5672,7 +5939,7 @@ router41.post("/payments/verify", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.get("/customer/payments/summary", async (req, res) => {
+router42.get("/customer/payments/summary", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -5685,7 +5952,7 @@ router41.get("/customer/payments/summary", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.get("/customer/payments/transactions", async (req, res) => {
+router42.get("/customer/payments/transactions", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -5702,7 +5969,7 @@ router41.get("/customer/payments/transactions", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router41.get("/customer/invoices", async (req, res) => {
+router42.get("/customer/invoices", async (req, res) => {
   try {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -5717,12 +5984,12 @@ router41.get("/customer/invoices", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var payments_default = router41;
+var payments_default = router42;
 
 // server/routes/customer-config.ts
-var import_express43 = require("express");
+var import_express44 = require("express");
 init_supabase();
-var router42 = (0, import_express43.Router)();
+var router43 = (0, import_express44.Router)();
 var CUSTOMER_FEATURE_DEFAULTS = {
   enableSubscriptions: true,
   enableCoupons: true,
@@ -5736,7 +6003,7 @@ var CUSTOMER_FEATURE_DEFAULTS = {
   enableLaundryBag: true,
   enableMixedBooking: true
 };
-router42.get("/", async (_req, res) => {
+router43.get("/", async (_req, res) => {
   try {
     const admin = createAdminClient();
     const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
@@ -5754,14 +6021,14 @@ router42.get("/", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var customer_config_default = router42;
+var customer_config_default = router43;
 
 // server/routes/settings.ts
-var import_express44 = require("express");
+var import_express45 = require("express");
 init_supabase();
-var router43 = (0, import_express44.Router)();
+var router44 = (0, import_express45.Router)();
 var DEFAULTS = { pushEnabled: true, orderUpdates: true, promotions: false };
-router43.get("/", async (req, res) => {
+router44.get("/", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -5786,7 +6053,7 @@ router43.get("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router43.patch("/notifications", async (req, res) => {
+router44.patch("/notifications", async (req, res) => {
   try {
     const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
     const { data: { user } } = await supabase.auth.getUser();
@@ -5817,7 +6084,7 @@ router43.patch("/notifications", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router43.patch("/password", async (req, res) => {
+router44.patch("/password", async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
@@ -5856,13 +6123,13 @@ router43.patch("/password", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var settings_default = router43;
+var settings_default = router44;
 
 // server/routes/vendor-reports.ts
-var import_express45 = require("express");
+var import_express46 = require("express");
 init_supabase();
-var router44 = (0, import_express45.Router)();
-router44.get("/overview", async (req, res) => {
+var router45 = (0, import_express46.Router)();
+router45.get("/overview", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -5948,7 +6215,7 @@ router44.get("/overview", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router44.get("/sales-revenue", async (req, res) => {
+router45.get("/sales-revenue", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -6060,7 +6327,7 @@ router44.get("/sales-revenue", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router44.get("/orders-operations", async (req, res) => {
+router45.get("/orders-operations", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -6204,7 +6471,7 @@ router44.get("/orders-operations", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router44.get("/services", async (req, res) => {
+router45.get("/services", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -6264,7 +6531,7 @@ router44.get("/services", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router44.get("/customers", async (req, res) => {
+router45.get("/customers", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -6328,7 +6595,7 @@ router44.get("/customers", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router44.get("/settlements", async (req, res) => {
+router45.get("/settlements", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -6369,7 +6636,7 @@ router44.get("/settlements", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router44.get("/ratings-issues", async (req, res) => {
+router45.get("/ratings-issues", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -6436,7 +6703,7 @@ router44.get("/ratings-issues", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router44.get("/cancellations", async (req, res) => {
+router45.get("/cancellations", async (req, res) => {
   try {
     const vendorId = await resolveVendorId(req, res);
     if (!vendorId) return;
@@ -6503,14 +6770,14 @@ router44.get("/cancellations", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-var vendor_reports_default = router44;
+var vendor_reports_default = router45;
 
 // server/routes/webhooks.ts
-var import_express46 = require("express");
+var import_express47 = require("express");
 init_supabase();
-var router45 = (0, import_express46.Router)();
+var router46 = (0, import_express47.Router)();
 var RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
-router45.post("/razorpay", async (req, res) => {
+router46.post("/razorpay", async (req, res) => {
   try {
     if (!RAZORPAY_WEBHOOK_SECRET) {
       console.warn("[webhook] RAZORPAY_WEBHOOK_SECRET not configured, rejecting webhook");
@@ -6623,20 +6890,20 @@ router45.post("/razorpay", async (req, res) => {
     res.status(500).json({ error: "Webhook processing failed" });
   }
 });
-var webhooks_default = router45;
+var webhooks_default = router46;
 
 // server/app.ts
-var import_express47 = __toESM(require("express"));
+var import_express48 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
-var app = (0, import_express47.default)();
+var app = (0, import_express48.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
 app.use(
   "/api/webhooks",
-  import_express47.default.raw({ type: "application/json" }),
+  import_express48.default.raw({ type: "application/json" }),
   webhooks_default
 );
-app.use(import_express47.default.json());
+app.use(import_express48.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -6672,6 +6939,7 @@ app.use("/api/admin/users", admin_users_default);
 app.use("/api/admin/config", admin_config_default);
 app.use("/api/admin/rbac", admin_rbac_default);
 app.use("/api/admin/commission", admin_commission_default);
+app.use("/api/admin/refunds", admin_refunds_default);
 app.use("/api/order-stages", order_stages_default);
 app.use("/api/chat", chat_default);
 app.use("/api/favorites", favorites_default);
