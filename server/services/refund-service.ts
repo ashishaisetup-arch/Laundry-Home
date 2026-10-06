@@ -87,7 +87,7 @@ export interface ProcessRefundResult {
   success: boolean;
   refundId?: string;
   refundStatus?: string;
-  gatewayRefundId?: string;
+  gatewayRefundId?: string | null;
   alreadyCompleted?: boolean;
   alreadyExists?: boolean;
   uncertain?: boolean;

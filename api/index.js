@@ -6059,14 +6059,32 @@ async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, ra
     }
   } catch {
   }
-  const { error: updateError } = await admin.from("payment_transactions").update({
-    gateway_payment_id: razorpayPaymentId,
+  if (txn.gateway_payment_id && txn.gateway_payment_id !== razorpayPaymentId) {
+    return {
+      success: false,
+      error: "gateway_payment_id_conflict"
+    };
+  }
+  const { error: flagError } = await admin.from("payment_transactions").update({
     gateway_signature_verified: true,
+    gateway_payment_id: txn.gateway_payment_id ?? razorpayPaymentId,
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", transactionId);
+  if (flagError) {
+    return {
+      success: false,
+      error: "signature_verification_persist_failed"
+    };
+  }
+  const { error: statusError } = await admin.from("payment_transactions").update({
     payment_status: "pending",
     updated_at: (/* @__PURE__ */ new Date()).toISOString()
   }).eq("id", transactionId).eq("payment_status", "created");
-  if (updateError) {
-    return { success: false, error: `Failed to update payment record: ${updateError.message}` };
+  if (statusError) {
+    return {
+      success: false,
+      error: "payment_status_transition_failed"
+    };
   }
   const result = await finalizeWalletTopup(transactionId);
   return result;
