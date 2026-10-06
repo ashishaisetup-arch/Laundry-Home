@@ -542,7 +542,7 @@ export async function submitRefundToGateway(refundId: string): Promise<SubmitRef
 
   let response: Response;
   try {
-    response = await fetch(`https://api.razorpay.com/v1/payments/${gatewayPaymentId}/refunds`, {
+    response = await fetch(`https://api.razorpay.com/v1/payments/${gatewayPaymentId}/refund`, {
       method: "POST",
       headers: {
         Authorization: `Basic ${razorpayAuth()}`,

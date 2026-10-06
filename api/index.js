@@ -4681,7 +4681,7 @@ async function submitRefundToGateway(refundId) {
   const amountPaise = Math.round(refundRow.gateway_refund_amount * 100);
   let response;
   try {
-    response = await fetch(`https://api.razorpay.com/v1/payments/${gatewayPaymentId}/refunds`, {
+    response = await fetch(`https://api.razorpay.com/v1/payments/${gatewayPaymentId}/refund`, {
       method: "POST",
       headers: {
         Authorization: `Basic ${razorpayAuth()}`,
