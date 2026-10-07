@@ -6,7 +6,7 @@ import { runReconciliation } from "../reconciliation-service";
 import { createAdminClient } from "../../supabase";
 
 // ============================================================================
-// Real-DB immutability test — Phase 3B-1
+// Real-DB immutability test — Phase 3B-1 / 3B-2 (C6)
 // ============================================================================
 // Invariant: runReconciliation writes ONLY to reconciliation_runs and
 // reconciliation_findings. It must never mutate the five protected financial
@@ -14,7 +14,10 @@ import { createAdminClient } from "../../supabase";
 //
 // Method:
 //   1. hash + count an exact ordered projection of each protected table
-//   2. run one reconciliation (trigger "test")
+//   2. run one reconciliation (trigger "test") with an injected gateway that
+//      answers every lookup with 404 (not_found): hermetic (no network, no
+//      RAZORPAY env needed) while still exercising C6's real write path
+//      against the real database (evidence findings may be written)
 //   3. hash + count the SAME projections again and require byte equality
 //
 // Between steps 1 and 3 this test performs SELECTs only — no helper seeds,
@@ -119,8 +122,19 @@ describe.skipIf(!hasEnv)("reconciliation immutability (real DB)", () => {
       const runsBefore = await countAll(client, "reconciliation_runs");
       const findingsBefore = await countAll(client, "reconciliation_findings");
 
-      // 2. one full reconciliation against the real database
-      const summary = await runReconciliation({ client, trigger: "test" });
+      // 2. one full reconciliation against the real database — gateway
+      //    answers every GET with 404: deterministic, offline, and C6 still
+      //    produces and merges (evidence) findings like it would in prod
+      const notFoundGateway = {
+        getPayment: async () => ({ kind: "not_found" as const, status: 404 }),
+        getRefund: async () => ({ kind: "not_found" as const, status: 404 }),
+      };
+      const summary = await runReconciliation({
+        client,
+        trigger: "test",
+        gateway: notFoundGateway,
+        sleep: async () => {},
+      });
 
       // 3. after — identical projections
       const after = await snapshot(client);
@@ -131,12 +145,26 @@ describe.skipIf(!hasEnv)("reconciliation immutability (real DB)", () => {
       expect(summary.runId).toBeTruthy();
       expect(summary.status).toBe("success");
       expect(Object.keys(summary.checkResults).sort()).toEqual(
-        ["C1", "C2", "C3", "C4", "C5", "C7", "C8"].sort()
+        ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"].sort()
       );
 
       // every check — C7 in particular — must have succeeded untruncated now
       // that payment_webhook_events.created_at exists (migration 00062)
       expect(summary.checkResults.C7.status).toBe("success");
+      // C6 runs against the injected gateway: success with meta on every path
+      expect(summary.checkResults.C6.status).toBe("success");
+      expect(summary.checkResults.C6.meta).toMatchObject({
+        attempted: expect.any(Number),
+        succeeded: expect.any(Number),
+        skippedNoGatewayId: expect.any(Number),
+        rateLimited: false,
+        budgetExhausted: false,
+      });
+      // zero attempts are only legal when fully explained by skipped lookups
+      const c6Meta = summary.checkResults.C6.meta!;
+      if (c6Meta.candidateCount > 0 && c6Meta.attempted === 0) {
+        expect(c6Meta.skippedNoGatewayId).toBe(c6Meta.candidateCount);
+      }
       expect(summary.failedChecks).toEqual([]);
       expect(summary.truncatedChecks).toEqual([]);
       for (const [id, result] of Object.entries(summary.checkResults)) {

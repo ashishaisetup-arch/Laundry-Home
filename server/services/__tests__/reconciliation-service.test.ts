@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { randomUUID } from "crypto";
-import { runReconciliation } from "../reconciliation-service";
+import {
+  runReconciliation,
+  compareGatewayPayment,
+  compareGatewayRefund,
+} from "../reconciliation-service";
 
 // ============================================================================
 // Fake Supabase client
@@ -311,8 +315,39 @@ function webhook(overrides: Row = {}): Row {
   };
 }
 
-async function run(client: any, now: Date = NOW) {
-  return runReconciliation({ client, trigger: "test", now });
+// Injected gateway: records every lookup. Default handlers fail on purpose so
+// legacy tests observe C6 as a failed check with ZERO owned-code writes and
+// never touch the network. C6 tests pass explicit handlers.
+function fakeGateway(opts: {
+  payment?: (id: string) => any | Promise<any>;
+  refund?: (id: string) => any | Promise<any>;
+} = {}) {
+  const calls: Array<{ kind: "payment" | "refund"; id: string; timeoutMs: number }> = [];
+  return {
+    calls,
+    async getPayment(id: string, timeoutMs: number) {
+      calls.push({ kind: "payment", id, timeoutMs });
+      return opts.payment
+        ? await opts.payment(id)
+        : { kind: "failure" as const, error: "injected gateway failure" };
+    },
+    async getRefund(id: string, timeoutMs: number) {
+      calls.push({ kind: "refund", id, timeoutMs });
+      return opts.refund
+        ? await opts.refund(id)
+        : { kind: "failure" as const, error: "injected gateway failure" };
+    },
+  };
+}
+
+async function run(
+  client: any,
+  now: Date = NOW,
+  opts: { gateway?: any; sleep?: (ms: number) => Promise<void> } = {}
+) {
+  const gateway = opts.gateway ?? fakeGateway();
+  const sleep = opts.sleep ?? (async () => {});
+  return runReconciliation({ client, trigger: "test", now, gateway, sleep });
 }
 
 function findingsOf(db: FakeDb, checkCode?: string): Row[] {
@@ -744,7 +779,7 @@ describe("failed and truncated checks perform zero writes", () => {
     expect(summary.checkResults.C2.status).toBe("failed");
     expect(summary.checkResults.C3.status).toBe("failed");
     expect(summary.checkResults.C4.status).toBe("success");
-    expect(summary.failedChecks).toEqual(["C1", "C2", "C3"]);
+    expect(summary.failedChecks).toEqual(["C1", "C2", "C3", "C6"]);
     expect(summary.truncatedChecks).toEqual([]);
     expect(summary.findingsResolved).toBe(0);
     expect(summary.findingsNew).toBe(0);
@@ -804,7 +839,8 @@ describe("failed and truncated checks perform zero writes", () => {
     expect(summary.checkResults.C2.status).toBe("truncated");
     // order by updated_at asc keeps r1(70m) and r2(60m) — both aged -> reported
     expect(summary.checkResults.C2.findings).toBe(2);
-    expect(summary.truncatedChecks).toEqual(["C2"]);
+    // C2 truncated propagates: C6 is source-dependent
+    expect(summary.truncatedChecks).toEqual(["C2", "C6"]);
     expect(summary.failedChecks).toEqual([]);
     // but nothing was written for C2
     expect(findingsOf(db)).toHaveLength(beforeCount);
@@ -828,7 +864,9 @@ describe("failed and truncated checks perform zero writes", () => {
 
     expect(summary.status).toBe("failed");
     expect(summary.error).toBe("all checks failed");
-    expect(summary.failedChecks).toEqual(["C1", "C2", "C3", "C4", "C5", "C7", "C8"]);
+    expect(summary.failedChecks).toEqual([
+      "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8",
+    ]);
     expect(summary.truncatedChecks).toEqual([]);
     const runRow = runsOf(db)[0];
     expect(runRow.status).toBe("failed");
@@ -853,11 +891,23 @@ describe("run recording", () => {
     expect(runRow.status).toBe("success");
     expect(runRow.started_at).toBe(NOW.toISOString());
     expect(runRow.finished_at).toBeTruthy();
-    expect(runRow.checks_run).toEqual(["C1", "C2", "C3", "C4", "C5", "C7", "C8"]);
+    expect(runRow.checks_run).toEqual(["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"]);
     expect(Object.keys(runRow.check_results).sort()).toEqual(
-      ["C1", "C2", "C3", "C4", "C5", "C7", "C8"].sort()
+      ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"].sort()
     );
     expect(runRow.check_results.C1).toEqual({ status: "success", findings: 1 });
+    expect(runRow.check_results.C6).toEqual({
+      status: "success",
+      findings: 0,
+      meta: {
+        candidateCount: 1,
+        attempted: 0,
+        succeeded: 0,
+        skippedNoGatewayId: 1,
+        rateLimited: false,
+        budgetExhausted: false,
+      },
+    });
     expect(runRow.findings_new).toBe(1);
     expect(runRow.findings_open).toBe(1);
     expect(runRow.findings_resolved).toBe(0);
@@ -945,5 +995,640 @@ describe("run recording", () => {
     // fillers untouched
     expect(fillers[0].status).toBe("resolved");
     expect(fillers[0].occurrence_count).toBe(1);
+  });
+});
+
+// ============================================================================
+// C6 — gateway-vs-DB reconciliation (Phase 3B-2)
+// ============================================================================
+describe("C6 gateway-vs-DB reconciliation", () => {
+  const gwOk = (over: Record<string, any> = {}) => ({
+    kind: "ok" as const,
+    data: {
+      id: "pay_x",
+      status: "created",
+      refund_status: null,
+      amount: 10000,
+      amount_refunded: 0,
+      currency: "INR",
+      order_id: null,
+      ...over,
+    },
+  });
+
+  function gatewayFindings(db: FakeDb): Row[] {
+    return findingsOf(db).filter((r) => String(r.check_code).startsWith("gateway_"));
+  }
+
+  function gwFinding(code: string, subjectType: string, subjectId: string): Row {
+    return {
+      id: randomUUID(),
+      check_code: code,
+      severity: "critical",
+      subject_type: subjectType,
+      subject_id: subjectId,
+      summary: "seeded C6 finding",
+      details: {},
+      status: "open",
+      first_detected_at: minusMin(NOW, 500),
+      last_detected_at: minusMin(NOW, 500),
+      occurrence_count: 3,
+      resolved_at: null,
+      resolution_note: null,
+      created_at: minusMin(NOW, 500),
+    };
+  }
+
+  it("zero-attempt success when every candidate lacks a gateway id (explained by meta)", async () => {
+    const r = refund({ refund_status: "reconciliation_required" }); // gateway_refund_id: null
+    const p = payment({ gateway_payment_id: null });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_refunds: [r],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway();
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.status).toBe("success");
+    expect(summary.failedChecks).toEqual([]);
+    expect(summary.checkResults.C6).toEqual({
+      status: "success",
+      findings: 0,
+      meta: {
+        candidateCount: 2,
+        attempted: 0,
+        succeeded: 0,
+        skippedNoGatewayId: 2,
+        rateLimited: false,
+        budgetExhausted: false,
+      },
+    });
+    expect(gw.calls).toHaveLength(0);
+    expect(gatewayFindings(db)).toHaveLength(0);
+  });
+
+  it("status mismatch: uncertain DB + captured at gateway => critical finding; full meta emitted", async () => {
+    const p = payment({ gateway_payment_id: "pay_st" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway({ payment: () => gwOk({ id: "pay_st", status: "captured" }) });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.status).toBe("success");
+    expect(summary.checkResults.C6).toEqual({
+      status: "success",
+      findings: 1,
+      meta: {
+        candidateCount: 1,
+        attempted: 1,
+        succeeded: 1,
+        skippedNoGatewayId: 0,
+        rateLimited: false,
+        budgetExhausted: false,
+      },
+    });
+    const rows = findingsOf(db, "gateway_payment_status_mismatch");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      severity: "critical",
+      subject_type: "payment",
+      subject_id: p.id,
+      status: "open",
+      occurrence_count: 1,
+    });
+    expect(gatewayFindings(db)).toHaveLength(1);
+    expect(summary.findingsNew).toBeGreaterThan(0);
+  });
+
+  it("amount + currency mismatch aggregate into one critical finding with fields", async () => {
+    const p = payment({ gateway_payment_id: "pay_amt" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway({
+      payment: () => gwOk({ id: "pay_amt", amount: 99999, currency: "USD" }),
+    });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.status).toBe("success");
+    expect(summary.checkResults.C6.findings).toBe(1);
+    const rows = findingsOf(db, "gateway_payment_amount_mismatch");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].severity).toBe("critical");
+    expect(rows[0].details.fields).toEqual(["amount", "currency"]);
+    expect(findingsOf(db, "gateway_payment_status_mismatch")).toHaveLength(0);
+    expect(gatewayFindings(db)).toHaveLength(1);
+  });
+
+  it("refunded-amount mismatch takes precedence over the status cell (no status finding)", async () => {
+    const p = payment({
+      payment_status: "captured",
+      gateway_payment_id: "pay_pc",
+      amount_refunded: 0,
+    });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway({
+      payment: () =>
+        gwOk({ id: "pay_pc", status: "captured", refund_status: "partial", amount_refunded: 5000 }),
+    });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.checkResults.C6.status).toBe("success");
+    const am = findingsOf(db, "gateway_payment_amount_mismatch");
+    expect(am).toHaveLength(1);
+    expect(am[0].details.fields).toEqual(["amount_refunded"]);
+    // the status cell would have disagreed (DB captured + gw refund_status partial)
+    // but the refunded-amount divergence explains it first:
+    expect(findingsOf(db, "gateway_payment_status_mismatch")).toHaveLength(0);
+  });
+
+  it("unknown gateway payment status => warning finding; matrix skipped; amounts still checked", async () => {
+    const p = payment({ gateway_payment_id: "pay_z" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway({ payment: () => gwOk({ id: "pay_z", status: "zombie" }) });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.status).toBe("success");
+    const unknown = findingsOf(db, "gateway_payment_unknown_status");
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0].severity).toBe("warning");
+    expect(unknown[0].details.unknownField).toBe("status");
+    expect(findingsOf(db, "gateway_payment_status_mismatch")).toHaveLength(0);
+    expect(findingsOf(db, "gateway_payment_amount_mismatch")).toHaveLength(0);
+    expect(gatewayFindings(db)).toHaveLength(1);
+  });
+
+  it("404 at gateway => evidence finding, check stays success", async () => {
+    const p = payment({ gateway_payment_id: "pay_404" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway({ payment: () => ({ kind: "not_found" as const, status: 404 }) });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.status).toBe("success");
+    expect(summary.failedChecks).toEqual([]);
+    expect(summary.checkResults.C6).toEqual({
+      status: "success",
+      findings: 1,
+      meta: {
+        candidateCount: 1,
+        attempted: 1,
+        succeeded: 1,
+        skippedNoGatewayId: 0,
+        rateLimited: false,
+        budgetExhausted: false,
+      },
+    });
+    const rows = findingsOf(db, "gateway_payment_not_found");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ severity: "critical", subject_id: p.id });
+  });
+
+  it("any lookup failure => C6 failed, zero writes across owned codes, first failure aborts", async () => {
+    const p = payment({ gateway_payment_id: "pay_f" });
+    const r = refund({ refund_status: "reconciliation_required", gateway_refund_id: "rf_f" });
+    const seedPayment = gwFinding("gateway_payment_status_mismatch", "payment", p.id);
+    const seedRefund = gwFinding("gateway_refund_amount_mismatch", "refund", r.id);
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      payment_refunds: [r],
+      reconciliation_findings: [seedPayment, seedRefund],
+    });
+    const gw = fakeGateway({
+      payment: () => ({ kind: "failure" as const, error: "injected gateway failure" }),
+    });
+
+    const before = JSON.stringify(gatewayFindings(db));
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(JSON.stringify(gatewayFindings(db))).toBe(before);
+    expect(summary.status).toBe("success"); // other checks unaffected
+    expect(summary.failedChecks).toContain("C6");
+    expect(summary.checkResults.C6.status).toBe("failed");
+    expect(summary.checkResults.C6.error).toContain("injected gateway failure");
+    expect(summary.checkResults.C6.meta).toMatchObject({ attempted: 1, succeeded: 0 });
+    expect(gw.calls).toHaveLength(1); // payment item first; failure aborts the refund lookup
+    expect(seedPayment.occurrence_count).toBe(3);
+    expect(seedPayment.status).toBe("open");
+  });
+
+  it("429 aborts immediately: single attempt, rateLimited meta, error tagged", async () => {
+    const a = payment({ gateway_payment_id: "pay_a" });
+    const b = payment({ gateway_payment_id: "pay_b" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [a, b],
+    });
+    const gw = fakeGateway({
+      payment: () => ({ kind: "failure" as const, rateLimited: true, error: "429 too many requests" }),
+    });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.failedChecks).toContain("C6");
+    expect(summary.checkResults.C6.status).toBe("failed");
+    expect(summary.checkResults.C6.error).toContain("[rate limited]");
+    expect(summary.checkResults.C6.meta).toMatchObject({
+      attempted: 1,
+      rateLimited: true,
+    });
+    expect(gw.calls).toHaveLength(1);
+    expect(gatewayFindings(db)).toHaveLength(0);
+  });
+
+  it("lookup cap exceeded => truncated, zero writes, no attempts", async () => {
+    const a = payment({ gateway_payment_id: "pay_a" });
+    const b = payment({ gateway_payment_id: "pay_b" });
+    const seed = gwFinding("gateway_payment_status_mismatch", "payment", a.id);
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow({ gatewayMaxLookupsPerRun: 1 })],
+      payment_transactions: [a, b],
+      reconciliation_findings: [seed],
+    });
+    const gw = fakeGateway({ payment: () => gwOk() });
+
+    const before = JSON.stringify(gatewayFindings(db));
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.checkResults.C6.status).toBe("truncated");
+    expect(summary.checkResults.C6.error).toContain("gateway lookup cap exceeded");
+    expect(summary.checkResults.C6.meta).toMatchObject({
+      candidateCount: 2,
+      attempted: 0,
+      budgetExhausted: false,
+    });
+    expect(summary.truncatedChecks).toContain("C6");
+    expect(JSON.stringify(gatewayFindings(db))).toBe(before);
+    expect(gw.calls).toHaveLength(0);
+  });
+
+  it("time budget exhausted => truncated with budgetExhausted meta after one attempt", async () => {
+    const a = payment({ gateway_payment_id: "pay_a" });
+    const b = payment({ gateway_payment_id: "pay_b" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow({ gatewayTimeBudgetMs: 50 })],
+      payment_transactions: [a, b],
+    });
+    const gw = fakeGateway({ payment: () => gwOk() });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.checkResults.C6.status).toBe("truncated");
+    expect(summary.checkResults.C6.error).toContain("gateway time budget");
+    expect(summary.checkResults.C6.meta).toMatchObject({
+      candidateCount: 2,
+      attempted: 1,
+      succeeded: 1,
+      budgetExhausted: true,
+    });
+    expect(summary.truncatedChecks).toContain("C6");
+    expect(summary.failedChecks).toEqual([]);
+    expect(gw.calls).toHaveLength(1);
+    expect(gatewayFindings(db)).toHaveLength(0);
+  });
+
+  it("sleeps between lookups and never after the final one; timeouts bounded", async () => {
+    const ids = ["pay_a", "pay_b", "pay_c"];
+    const rows = ids.map((id) => payment({ gateway_payment_id: id }));
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: rows,
+    });
+    const gw = fakeGateway({ payment: () => gwOk() });
+    const sleeps: number[] = [];
+
+    const summary = await run(client, NOW, {
+      gateway: gw,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+    });
+
+    expect(summary.status).toBe("success");
+    expect(summary.checkResults.C6.status).toBe("success");
+    expect(summary.checkResults.C6.meta).toMatchObject({
+      candidateCount: 3,
+      attempted: 3,
+      succeeded: 3,
+    });
+    expect(gw.calls).toHaveLength(3);
+    expect(sleeps).toHaveLength(2); // between lookups only
+    expect(gw.calls.every((c) => c.timeoutMs > 0 && c.timeoutMs <= 5000)).toBe(true);
+    expect(gatewayFindings(db)).toHaveLength(0); // consistent payloads
+  });
+
+  it("source check failure => C6 failed with source error before any reload", async () => {
+    const { db, client } = createFakeDb({ system_config: [systemConfigRow()] });
+    db.fail("payment_transactions", "payments db down");
+
+    const summary = await run(client);
+
+    expect(summary.checkResults.C6.status).toBe("failed");
+    expect(summary.checkResults.C6.error).toContain("source check C4 failed");
+    expect(summary.checkResults.C6.meta).toEqual({
+      candidateCount: 0,
+      attempted: 0,
+      succeeded: 0,
+      skippedNoGatewayId: 0,
+      rateLimited: false,
+      budgetExhausted: false,
+    });
+    expect(summary.failedChecks).toContain("C4");
+    expect(summary.failedChecks).toContain("C6");
+    expect(gatewayFindings(db)).toHaveLength(0);
+  });
+
+  it("source truncation => C6 truncated with source error", async () => {
+    const r1 = refund({ refund_status: "submitting", updated_at: minusMin(NOW, 70) });
+    const r2 = refund({ refund_status: "submitting", updated_at: minusMin(NOW, 60) });
+    const r3 = refund({ refund_status: "submitting", updated_at: minusMin(NOW, 20) });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow({ maxFindingsPerCheck: 2 })],
+      payment_refunds: [r1, r2, r3],
+    });
+
+    const summary = await run(client);
+
+    expect(summary.checkResults.C6.status).toBe("truncated");
+    expect(summary.checkResults.C6.error).toContain("source check C2 truncated");
+    expect(summary.truncatedChecks).toEqual(["C2", "C6"]);
+    expect(summary.failedChecks).toEqual([]);
+    expect(gatewayFindings(db)).toHaveLength(0);
+  });
+
+  it("missing gateway credentials => C6 failed with 'gateway not configured', zero writes", async () => {
+    const p = payment({ gateway_payment_id: "pay_c" });
+    const seed = gwFinding("gateway_payment_status_mismatch", "payment", p.id);
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      reconciliation_findings: [seed],
+    });
+
+    const prevId = process.env.RAZORPAY_KEY_ID;
+    const prevSecret = process.env.RAZORPAY_KEY_SECRET;
+    delete process.env.RAZORPAY_KEY_ID;
+    delete process.env.RAZORPAY_KEY_SECRET;
+    try {
+      const before = JSON.stringify(gatewayFindings(db));
+      const summary = await runReconciliation({ client, trigger: "test", now: NOW });
+
+      expect(summary.status).toBe("success");
+      expect(summary.failedChecks).toEqual(["C6"]);
+      expect(summary.checkResults.C6.status).toBe("failed");
+      expect(summary.checkResults.C6.error).toContain("gateway not configured");
+      expect(JSON.stringify(gatewayFindings(db))).toBe(before);
+      expect(gatewayFindings(db)).toHaveLength(1);
+    } finally {
+      if (prevId !== undefined) process.env.RAZORPAY_KEY_ID = prevId;
+      else delete process.env.RAZORPAY_KEY_ID;
+      if (prevSecret !== undefined) process.env.RAZORPAY_KEY_SECRET = prevSecret;
+      else delete process.env.RAZORPAY_KEY_SECRET;
+    }
+  });
+
+  it("verified clear on a later run => prior C6 finding stale-resolves", async () => {
+    const p = payment({ gateway_payment_id: "pay_r" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+
+    const s1 = await run(client, NOW, {
+      gateway: fakeGateway({ payment: () => gwOk({ status: "captured" }) }),
+    });
+
+    expect(s1.status).toBe("success");
+    expect(s1.checkResults.C6.findings).toBe(1);
+    const created = findingsOf(db, "gateway_payment_status_mismatch");
+    expect(created).toHaveLength(1);
+    expect(created[0].status).toBe("open");
+
+    const s2 = await run(client, RUN2_NOW, {
+      gateway: fakeGateway({ payment: () => gwOk() }), // gateway created == DB created
+    });
+
+    expect(s2.status).toBe("success");
+    expect(s2.checkResults.C6.findings).toBe(0);
+    expect(s2.checkResults.C6.meta).toMatchObject({ attempted: 1, succeeded: 1 });
+    expect(s2.findingsResolved).toBeGreaterThanOrEqual(1);
+    expect(created[0].status).toBe("resolved");
+    expect(created[0].resolution_note).toBe("stale: condition cleared in automated scan");
+    expect(created[0].resolved_at).toBe(RUN2_NOW.toISOString());
+  });
+
+  it("same subject on two codes => both findings survive dedupe (key includes checkCode)", async () => {
+    const p = payment({ gateway_payment_id: "pay_d" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway({
+      payment: () => gwOk({ status: "captured", amount: 99999 }),
+    });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.checkResults.C6.findings).toBe(2);
+    expect(findingsOf(db, "gateway_payment_status_mismatch")).toHaveLength(1);
+    expect(findingsOf(db, "gateway_payment_amount_mismatch")).toHaveLength(1);
+    expect(gatewayFindings(db)).toHaveLength(2);
+  });
+
+  it("payment matrix cells (direct): partial/refunded consistency, refunded-vs-captured, currency", () => {
+    const partialConsistent = compareGatewayPayment(
+      { id: "p1", payment_status: "partially_refunded", amount: 100, amount_refunded: 40, currency: "INR", gateway_order_id: null },
+      { id: "pay", status: "captured", refund_status: "partial", amount: 10000, amount_refunded: 4000, currency: "INR", order_id: null }
+    );
+    expect(partialConsistent).toEqual([]);
+
+    const refundedConsistent = compareGatewayPayment(
+      { id: "p2", payment_status: "refunded", amount: 100, amount_refunded: 100, currency: "INR", gateway_order_id: null },
+      { id: "pay", status: "refunded", refund_status: "full", amount: 10000, amount_refunded: 10000, currency: "INR", order_id: null }
+    );
+    expect(refundedConsistent).toEqual([]);
+
+    const refundedVsCaptured = compareGatewayPayment(
+      { id: "p3", payment_status: "refunded", amount: 100, amount_refunded: 100, currency: "INR", gateway_order_id: null },
+      { id: "pay", status: "captured", refund_status: "partial", amount: 10000, amount_refunded: 10000, currency: "INR", order_id: null }
+    );
+    expect(refundedVsCaptured).toHaveLength(1);
+    expect(refundedVsCaptured[0]).toMatchObject({
+      checkCode: "gateway_payment_status_mismatch",
+      severity: "critical",
+    });
+
+    const currency = compareGatewayPayment(
+      { id: "p4", payment_status: "created", amount: 100, amount_refunded: 0, currency: "INR", gateway_order_id: null },
+      { id: "pay", status: "created", refund_status: null, amount: 10000, amount_refunded: 0, currency: "USD", order_id: null }
+    );
+    expect(currency).toHaveLength(1);
+    expect(currency[0].checkCode).toBe("gateway_payment_amount_mismatch");
+    expect(currency[0].severity).toBe("critical");
+    expect(currency[0].details.fields).toEqual(["currency"]);
+
+    const order = compareGatewayPayment(
+      { id: "p5", payment_status: "created", amount: 100, amount_refunded: 0, currency: "INR", gateway_order_id: "order_db" },
+      { id: "pay", status: "created", refund_status: null, amount: 10000, amount_refunded: 0, currency: "INR", order_id: "order_gw" }
+    );
+    expect(order.map((f) => f.checkCode)).toEqual(["gateway_payment_order_mismatch"]);
+    expect(order[0].severity).toBe("critical");
+  });
+
+  it("refund matrix cells (direct): processed/completed ok, pending critical, failed warning, unknown warning", () => {
+    const baseDb = {
+      id: "r1",
+      refund_status: "completed",
+      amount: 100,
+      gateway_refund_amount: 100,
+      payment_transaction_id: null,
+      gateway_refund_id: "rf1",
+      updated_at: NOW.toISOString(),
+    };
+    const ok = compareGatewayRefund(baseDb, null, {
+      id: "rf1", status: "processed", amount: 10000, payment_id: "pay",
+    });
+    expect(ok).toEqual([]);
+
+    const criticalPending = compareGatewayRefund(
+      { ...baseDb, id: "r2" },
+      null,
+      { id: "rf2", status: "pending", amount: 10000, payment_id: "pay" }
+    );
+    expect(criticalPending).toHaveLength(1);
+    expect(criticalPending[0]).toMatchObject({
+      checkCode: "gateway_refund_status_mismatch",
+      severity: "critical",
+    });
+
+    const warnPending = compareGatewayRefund(
+      { ...baseDb, id: "r3", refund_status: "pending" },
+      null,
+      { id: "rf3", status: "failed", amount: 10000, payment_id: "pay" }
+    );
+    expect(warnPending).toHaveLength(1);
+    expect(warnPending[0].severity).toBe("warning");
+
+    const unknown = compareGatewayRefund(
+      { ...baseDb, id: "r4" },
+      null,
+      { id: "rf4", status: "weird", amount: 10000, payment_id: "pay" }
+    );
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0]).toMatchObject({
+      checkCode: "gateway_refund_unknown_status",
+      severity: "warning",
+    });
+
+    const amountMismatch = compareGatewayRefund(
+      { ...baseDb, id: "r5", gateway_refund_amount: 300 },
+      null,
+      { id: "rf5", status: "processed", amount: 10000, payment_id: "pay" }
+    );
+    expect(amountMismatch.map((f) => f.checkCode)).toEqual(["gateway_refund_amount_mismatch"]);
+
+    const linkageMismatch = compareGatewayRefund(
+      { ...baseDb, id: "r6", payment_transaction_id: "txn_1" },
+      { id: "txn_1", gateway_payment_id: "pay_db" },
+      { id: "rf6", status: "processed", amount: 10000, payment_id: "pay_gw" }
+    );
+    expect(linkageMismatch.map((f) => f.checkCode)).toEqual(["gateway_refund_payment_mismatch"]);
+  });
+
+  it("C1 refund candidate vs gateway: reconciliation_required + failed => critical status mismatch", async () => {
+    const linkedId = randomUUID();
+    const linked = payment({
+      id: linkedId,
+      payment_status: "captured",
+      transaction_purpose: "order_payment",
+      gateway_payment_id: "pay_link",
+    });
+    const r = refund({
+      refund_status: "reconciliation_required",
+      gateway_refund_id: "rf_gw",
+      gateway_refund_amount: 500,
+      amount: 500,
+      payment_transaction_id: linkedId,
+    });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_refunds: [r],
+      payment_transactions: [linked],
+    });
+    const gw = fakeGateway({
+      refund: () => ({
+        kind: "ok" as const,
+        data: { id: "rf_gw", status: "failed", amount: 50000, payment_id: "pay_link" },
+      }),
+    });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.status).toBe("success");
+    expect(summary.checkResults.C6).toEqual({
+      status: "success",
+      findings: 1,
+      meta: {
+        candidateCount: 1,
+        attempted: 1,
+        succeeded: 1,
+        skippedNoGatewayId: 0,
+        rateLimited: false,
+        budgetExhausted: false,
+      },
+    });
+    const rows = findingsOf(db, "gateway_refund_status_mismatch");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      severity: "critical",
+      subject_type: "refund",
+      subject_id: r.id,
+      status: "open",
+      occurrence_count: 1,
+    });
+    expect(findingsOf(db, "gateway_refund_amount_mismatch")).toHaveLength(0);
+    expect(findingsOf(db, "gateway_refund_payment_mismatch")).toHaveLength(0);
+    expect(gw.calls).toHaveLength(1);
+    expect(gw.calls[0]).toMatchObject({ kind: "refund", id: "rf_gw" });
+  });
+
+  it("refund 404 => gateway_refund_not_found evidence, check stays success", async () => {
+    const r = refund({
+      refund_status: "reconciliation_required",
+      gateway_refund_id: "rf_404",
+      gateway_refund_amount: 500,
+    });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_refunds: [r],
+    });
+    const gw = fakeGateway({ refund: () => ({ kind: "not_found" as const, status: 404 }) });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.failedChecks).toEqual([]);
+    expect(summary.checkResults.C6.findings).toBe(1);
+    const rows = findingsOf(db, "gateway_refund_not_found");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ severity: "critical", subject_id: r.id });
   });
 });
