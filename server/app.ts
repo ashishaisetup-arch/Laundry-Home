@@ -48,6 +48,7 @@ import customerConfigRouter from "./routes/customer-config";
 import settingsRouter from "./routes/settings";
 import vendorReportsRouter from "./routes/vendor-reports";
 import webhooksRouter from "./routes/webhooks";
+import reconciliationCronRouter from "./routes/reconciliation-cron";
 
 const app = express();
 
@@ -116,5 +117,6 @@ app.use("/api", paymentsRouter);
 app.use("/api/config/customer", customerConfigRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/vendor/reports", vendorReportsRouter);
+app.use("/api/cron", reconciliationCronRouter);
 
 export default app;
