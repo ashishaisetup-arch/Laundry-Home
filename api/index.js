@@ -168,7 +168,8 @@ var PUBLIC_ROUTES = [
   "/api/seed",
   "/api/subscriptions/plans",
   "/api/geocode",
-  "/api/config/customer"
+  "/api/config/customer",
+  "/api/cron"
 ];
 async function authMiddleware(req, res, next) {
   const pathname = req.path;
@@ -6042,9 +6043,9 @@ async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, ra
   if (txn.gateway_order_id !== razorpayOrderId) {
     return { success: false, error: "Order ID mismatch" };
   }
-  const crypto5 = await import("crypto");
-  const expectedSig = crypto5.createHmac("sha256", RAZORPAY_KEY_SECRET2).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
-  if (!crypto5.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
+  const crypto7 = await import("crypto");
+  const expectedSig = crypto7.createHmac("sha256", RAZORPAY_KEY_SECRET2).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
+  if (!crypto7.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
     return { success: false, error: "Invalid payment signature" };
   }
   try {
@@ -7256,14 +7257,14 @@ router46.post("/razorpay", async (req, res) => {
       return;
     }
     const rawBody = req.body;
-    const crypto5 = await import("crypto");
-    const expectedSig = crypto5.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
+    const crypto7 = await import("crypto");
+    const expectedSig = crypto7.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
     if (Buffer.byteLength(expectedSig) !== Buffer.byteLength(signature)) {
       console.warn("[webhook] Invalid signature length");
       res.status(401).json({ error: "Invalid webhook signature" });
       return;
     }
-    if (!crypto5.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
+    if (!crypto7.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
       console.warn("[webhook] Invalid signature");
       res.status(401).json({ error: "Invalid webhook signature" });
       return;
@@ -7440,18 +7441,816 @@ router46.post("/razorpay", async (req, res) => {
 });
 var webhooks_default = router46;
 
+// server/services/reconciliation-service.ts
+var CHECK_CODES = {
+  C1: "refund_reconciliation_required",
+  C2: "refund_stuck_submitting",
+  C3: "refund_stuck_other",
+  C4: "payment_stuck_uncertain",
+  C5: "ledger_payment_mismatch",
+  C7: "webhook_processing_anomaly",
+  C8: "wallet_ledger_inconsistency"
+};
+var DEFAULT_THRESHOLDS = {
+  refundSubmittingWarnMin: 15,
+  refundSubmittingCritMin: 60,
+  refundPendingWarnMin: 30,
+  refundProcessingWarnHours: 24,
+  paymentStuckWarnMin: 30,
+  paymentStuckCritHours: 24,
+  webhookPendingWarnMin: 5,
+  maxFindingsPerCheck: 500
+};
+var CHECK_ORDER = ["C1", "C2", "C3", "C4", "C5", "C7", "C8"];
+var LEDGER_SCAN_LIMIT = 1e4;
+var CORRELATION_KEYS = ["gateway_order_id", "gateway_payment_id", "gateway_refund_id"];
+async function fetchAll(builder, cap) {
+  try {
+    const { data, error } = await builder;
+    if (error) return { rows: [], truncated: false, error: error.message || String(error) };
+    const rows = Array.isArray(data) ? data : [];
+    if (rows.length > cap) return { rows: rows.slice(0, cap), truncated: true };
+    return { rows, truncated: false };
+  } catch (e) {
+    return { rows: [], truncated: false, error: String(e?.message || e) };
+  }
+}
+function minutesSince(iso, now) {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return 0;
+  return (now.getTime() - t) / 6e4;
+}
+function severityRank(s) {
+  return s === "critical" ? 2 : s === "warning" ? 1 : 0;
+}
+function maxSeverity(a, b) {
+  return severityRank(a) >= severityRank(b) ? a : b;
+}
+function baseOutcome(checkId) {
+  return { checkId, checkCode: CHECK_CODES[checkId], completed: true, truncated: false, findings: [] };
+}
+function failedOutcome(checkId, error) {
+  return { checkId, checkCode: CHECK_CODES[checkId], completed: false, truncated: false, findings: [], error };
+}
+function dedupeFindings(findings) {
+  const map = /* @__PURE__ */ new Map();
+  for (const f of findings) {
+    const key = `${f.subjectType}|${f.subjectId}`;
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, { ...f, details: { ...f.details } });
+    } else {
+      prev.severity = maxSeverity(prev.severity, f.severity);
+      prev.summary = `${prev.summary}; ${f.summary}`;
+      prev.details = { ...prev.details, ...f.details };
+    }
+  }
+  return Array.from(map.values());
+}
+async function loadThresholds(client) {
+  try {
+    const { data, error } = await client.from("system_config").select("config").eq("id", 1).single();
+    if (error || !data) return { ...DEFAULT_THRESHOLDS };
+    const t = data.config?.reconciliation || {};
+    const merged = { ...DEFAULT_THRESHOLDS };
+    for (const key of Object.keys(DEFAULT_THRESHOLDS)) {
+      const v = t[key];
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) merged[key] = v;
+    }
+    return merged;
+  } catch {
+    return { ...DEFAULT_THRESHOLDS };
+  }
+}
+async function checkC1(ctx) {
+  const out = baseOutcome("C1");
+  const f = await fetchAll(
+    ctx.client.from("payment_refunds").select("*").eq("refund_status", "reconciliation_required").limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (f.error) return failedOutcome("C1", f.error);
+  out.truncated = f.truncated;
+  out.findings = f.rows.map((r) => ({
+    checkCode: out.checkCode,
+    severity: "critical",
+    subjectType: "refund",
+    subjectId: r.id,
+    summary: `Refund ${r.id} requires manual reconciliation (gateway succeeded, internal settlement incomplete)`,
+    details: {
+      refundStatus: r.refund_status,
+      amount: r.amount,
+      paymentTransactionId: r.payment_transaction_id,
+      gateway_refund_id: r.gateway_refund_id ?? null,
+      failureReason: r.failure_reason ?? null,
+      updatedAt: r.updated_at
+    }
+  }));
+  return out;
+}
+async function checkC2(ctx) {
+  const out = baseOutcome("C2");
+  const f = await fetchAll(
+    ctx.client.from("payment_refunds").select("*").eq("refund_status", "submitting").order("updated_at", { ascending: true }).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (f.error) return failedOutcome("C2", f.error);
+  out.truncated = f.truncated;
+  const warn = ctx.thresholds.refundSubmittingWarnMin;
+  const crit = ctx.thresholds.refundSubmittingCritMin;
+  for (const r of f.rows) {
+    const age = minutesSince(r.updated_at, ctx.now);
+    let severity = null;
+    if (age >= crit) severity = "critical";
+    else if (age >= warn) severity = "warning";
+    if (!severity) continue;
+    out.findings.push({
+      checkCode: out.checkCode,
+      severity,
+      subjectType: "refund",
+      subjectId: r.id,
+      summary: `Refund ${r.id} stuck in submitting for ${Math.round(age)}m (gateway outcome uncertain)`,
+      details: {
+        refundStatus: r.refund_status,
+        ageMinutes: Math.round(age),
+        thresholds: { warnMin: warn, critMin: crit },
+        amount: r.amount,
+        paymentTransactionId: r.payment_transaction_id,
+        gateway_refund_id: r.gateway_refund_id ?? null,
+        updatedAt: r.updated_at
+      }
+    });
+  }
+  return out;
+}
+async function checkC3(ctx) {
+  const out = baseOutcome("C3");
+  const f = await fetchAll(
+    ctx.client.from("payment_refunds").select("*").in("refund_status", ["pending", "processing"]).order("updated_at", { ascending: true }).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (f.error) return failedOutcome("C3", f.error);
+  out.truncated = f.truncated;
+  const pendingWarn = ctx.thresholds.refundPendingWarnMin;
+  const processingWarnH = ctx.thresholds.refundProcessingWarnHours;
+  const processingCritH = processingWarnH * 3;
+  for (const r of f.rows) {
+    const age = minutesSince(r.updated_at, ctx.now);
+    let severity = null;
+    if (r.refund_status === "pending") {
+      if (age >= pendingWarn) severity = "warning";
+    } else if (r.refund_status === "processing") {
+      if (age >= processingCritH * 60) severity = "critical";
+      else if (age >= processingWarnH * 60) severity = "warning";
+    }
+    if (!severity) continue;
+    out.findings.push({
+      checkCode: out.checkCode,
+      severity,
+      subjectType: "refund",
+      subjectId: r.id,
+      summary: `Refund ${r.id} in ${r.refund_status} for ${Math.round(age)}m`,
+      details: {
+        refundStatus: r.refund_status,
+        ageMinutes: Math.round(age),
+        pendingWarnMin: pendingWarn,
+        processingWarnHours: processingWarnH,
+        processingCritHours: processingCritH,
+        amount: r.amount,
+        paymentTransactionId: r.payment_transaction_id,
+        gateway_refund_id: r.gateway_refund_id ?? null,
+        updatedAt: r.updated_at
+      }
+    });
+  }
+  return out;
+}
+var UNCERTAIN_STATUSES = ["creating", "created", "pending", "authorized"];
+async function checkC4(ctx) {
+  const out = baseOutcome("C4");
+  const warn = ctx.thresholds.paymentStuckWarnMin;
+  const critMin = ctx.thresholds.paymentStuckCritHours * 60;
+  const uncertain = await fetchAll(
+    ctx.client.from("payment_transactions").select("*").in("payment_status", UNCERTAIN_STATUSES).order("created_at", { ascending: true }).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (uncertain.error) return failedOutcome("C4", uncertain.error);
+  out.truncated = uncertain.truncated;
+  for (const p of uncertain.rows) {
+    const age = minutesSince(p.updated_at || p.created_at, ctx.now);
+    let severity = null;
+    if (age >= critMin) severity = "critical";
+    else if (age >= warn) severity = "warning";
+    if (!severity) continue;
+    out.findings.push({
+      checkCode: out.checkCode,
+      severity,
+      subjectType: "payment",
+      subjectId: p.id,
+      summary: `Payment ${p.id} stuck in ${p.payment_status} for ${Math.round(age)}m (gateway outcome uncertain)`,
+      details: {
+        paymentStatus: p.payment_status,
+        ageMinutes: Math.round(age),
+        thresholds: { warnMin: warn, critMin },
+        amount: p.amount,
+        currency: p.currency ?? null,
+        gateway: p.gateway ?? null,
+        transactionPurpose: p.transaction_purpose ?? null,
+        gateway_order_id: p.gateway_order_id ?? null,
+        gateway_payment_id: p.gateway_payment_id ?? null,
+        walletTransactionId: p.wallet_transaction_id ?? null,
+        updatedAt: p.updated_at || p.created_at
+      }
+    });
+  }
+  const missing = await fetchAll(
+    ctx.client.from("payment_transactions").select("*").eq("payment_status", "captured").eq("transaction_purpose", "wallet_topup").is("wallet_transaction_id", null).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (missing.error) return failedOutcome("C4", missing.error);
+  if (missing.truncated) out.truncated = true;
+  for (const p of missing.rows) {
+    out.findings.push({
+      checkCode: out.checkCode,
+      severity: "critical",
+      subjectType: "payment",
+      subjectId: p.id,
+      summary: `Captured wallet top-up ${p.id} has no wallet credit row (ledger may under-credit)`,
+      details: {
+        paymentStatus: p.payment_status,
+        transactionPurpose: p.transaction_purpose ?? null,
+        amount: p.amount,
+        currency: p.currency ?? null,
+        gateway_order_id: p.gateway_order_id ?? null,
+        gateway_payment_id: p.gateway_payment_id ?? null,
+        walletTransactionId: null,
+        gatewaySignatureVerified: p.gateway_signature_verified ?? false,
+        gatewayCaptureVerified: p.gateway_capture_verified ?? false,
+        updatedAt: p.updated_at || p.created_at
+      }
+    });
+  }
+  return out;
+}
+async function checkC5(ctx) {
+  const out = baseOutcome("C5");
+  const pt = await fetchAll(
+    ctx.client.from("payment_transactions").select("*").eq("payment_status", "captured").order("created_at", { ascending: true }).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (pt.error) return failedOutcome("C5", pt.error);
+  out.truncated = pt.truncated;
+  const linkedIds = Array.from(new Set(
+    pt.rows.map((p) => p.wallet_transaction_id).filter((v) => typeof v === "string" && v.length > 0)
+  ));
+  const walletById = /* @__PURE__ */ new Map();
+  if (linkedIds.length > 0) {
+    const wt = await fetchAll(
+      ctx.client.from("wallet_transactions").select("*").in("id", linkedIds).limit(ctx.cap + 1),
+      ctx.cap
+    );
+    if (wt.error) return failedOutcome("C5", wt.error);
+    if (wt.truncated) out.truncated = true;
+    for (const w of wt.rows) walletById.set(w.id, w);
+  }
+  for (const p of pt.rows) {
+    const issues = [];
+    if (p.transaction_purpose === "wallet_topup" && !p.wallet_transaction_id) {
+      continue;
+    }
+    if (p.gateway === "wallet" && !p.wallet_transaction_id) {
+      issues.push("wallet-sourced payment is captured but has no ledger debit");
+    }
+    if (p.wallet_transaction_id) {
+      const w = walletById.get(p.wallet_transaction_id);
+      if (!w) {
+        issues.push(`linked wallet ledger row ${p.wallet_transaction_id} is missing`);
+      } else {
+        if (w.status !== "success") issues.push(`ledger row status is ${w.status}`);
+        if (Number(w.amount) !== Number(p.amount)) {
+          issues.push(`ledger amount ${w.amount} != payment amount ${p.amount}`);
+        }
+        if (w.user_id && p.user_id && w.user_id !== p.user_id) {
+          issues.push("ledger row belongs to a different user");
+        }
+        const expectedType = p.transaction_purpose === "wallet_topup" ? "credit" : p.gateway === "wallet" ? "debit" : null;
+        if (expectedType && w.type !== expectedType) {
+          issues.push(`ledger row type is ${w.type}, expected ${expectedType}`);
+        }
+      }
+    }
+    if (issues.length === 0) continue;
+    out.findings.push({
+      checkCode: out.checkCode,
+      severity: "warning",
+      subjectType: "payment",
+      subjectId: p.id,
+      summary: `Payment ${p.id}: ${issues.join("; ")}`,
+      details: {
+        paymentStatus: p.payment_status,
+        transactionPurpose: p.transaction_purpose ?? null,
+        gateway: p.gateway ?? null,
+        amount: p.amount,
+        gateway_order_id: p.gateway_order_id ?? null,
+        gateway_payment_id: p.gateway_payment_id ?? null,
+        walletTransactionId: p.wallet_transaction_id ?? null,
+        issues,
+        updatedAt: p.updated_at || p.created_at
+      }
+    });
+  }
+  return out;
+}
+function extractGatewayIds(payload) {
+  const p = payload?.payment;
+  const r = payload?.refund;
+  const o = payload?.order;
+  return {
+    gateway_order_id: typeof p?.order_id === "string" && p.order_id || typeof o?.id === "string" && o.id || null,
+    gateway_payment_id: typeof p?.id === "string" && p.id || typeof r?.payment_id === "string" && r.payment_id || null,
+    gateway_refund_id: typeof r?.id === "string" && r.id || null
+  };
+}
+function webhookCandidate(out, row, source, ageMinutes, ids) {
+  const summaries = {
+    failed: `Webhook event ${row.event_id} (${row.event_type}) is stuck in failed state`,
+    pending_stale: `Webhook event ${row.event_id} (${row.event_type}) pending for ${ageMinutes}m`,
+    processed_correlated: `Processed webhook event ${row.event_id} (${row.event_type}) references an entity with a critical financial finding`
+  };
+  out.findings.push({
+    checkCode: out.checkCode,
+    severity: "warning",
+    subjectType: "webhook_event",
+    subjectId: row.event_id,
+    summary: summaries[source],
+    details: {
+      source,
+      gateway: row.gateway ?? null,
+      eventType: row.event_type ?? null,
+      status: row.status,
+      ageMinutes,
+      processedAt: row.processed_at ?? null,
+      createdAt: row.created_at ?? null,
+      ...ids
+    }
+  });
+}
+async function checkC7(ctx, criticalFinancialKeys) {
+  const out = baseOutcome("C7");
+  const warnMin = ctx.thresholds.webhookPendingWarnMin;
+  const failed = await fetchAll(
+    ctx.client.from("payment_webhook_events").select("*").eq("status", "failed").order("processed_at", { ascending: true }).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (failed.error) return failedOutcome("C7", failed.error);
+  if (failed.truncated) out.truncated = true;
+  for (const row of failed.rows) {
+    webhookCandidate(out, row, "failed", minutesSince(row.processed_at, ctx.now), extractGatewayIds(row.payload));
+  }
+  const cutoff = new Date(ctx.now.getTime() - warnMin * 6e4).toISOString();
+  const pending = await fetchAll(
+    ctx.client.from("payment_webhook_events").select("*").eq("status", "pending").lt("created_at", cutoff).order("created_at", { ascending: true }).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (pending.error) return failedOutcome("C7", pending.error);
+  if (pending.truncated) out.truncated = true;
+  for (const row of pending.rows) {
+    webhookCandidate(out, row, "pending_stale", minutesSince(row.created_at, ctx.now), extractGatewayIds(row.payload));
+  }
+  if (criticalFinancialKeys.size > 0) {
+    const processed = await fetchAll(
+      ctx.client.from("payment_webhook_events").select("*").eq("status", "processed").order("processed_at", { ascending: false }).limit(ctx.cap + 1),
+      ctx.cap
+    );
+    if (processed.error) return failedOutcome("C7", processed.error);
+    for (const row of processed.rows) {
+      const ids = extractGatewayIds(row.payload);
+      const correlated = [ids.gateway_order_id, ids.gateway_payment_id, ids.gateway_refund_id].some((v) => v !== null && criticalFinancialKeys.has(v));
+      if (correlated) {
+        webhookCandidate(out, row, "processed_correlated", minutesSince(row.processed_at, ctx.now), ids);
+      }
+    }
+  }
+  return out;
+}
+async function checkC8(ctx) {
+  const out = baseOutcome("C8");
+  const lt = await fetchAll(
+    ctx.client.from("wallet_transactions").select("*").order("created_at", { ascending: true }).limit(LEDGER_SCAN_LIMIT + 1),
+    LEDGER_SCAN_LIMIT
+  );
+  if (lt.error) return failedOutcome("C8", lt.error);
+  out.truncated = lt.truncated;
+  const rows = lt.rows;
+  const userIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean)));
+  const profilesById = /* @__PURE__ */ new Map();
+  let profilesTruncated = false;
+  if (userIds.length > 0) {
+    const prof = await fetchAll(
+      ctx.client.from("user_profiles").select("id, wallet_balance").in("id", userIds).limit(ctx.cap + 1),
+      ctx.cap
+    );
+    if (prof.error) return failedOutcome("C8", prof.error);
+    if (prof.truncated) {
+      out.truncated = true;
+      profilesTruncated = true;
+    }
+    for (const u of prof.rows) profilesById.set(u.id, u);
+  }
+  const nonzero = await fetchAll(
+    ctx.client.from("user_profiles").select("id, wallet_balance").neq("wallet_balance", 0).limit(ctx.cap + 1),
+    ctx.cap
+  );
+  if (nonzero.error) return failedOutcome("C8", nonzero.error);
+  if (nonzero.truncated) out.truncated = true;
+  const ledgerUserSet = new Set(userIds);
+  for (const u of nonzero.rows) {
+    if (ledgerUserSet.has(u.id)) continue;
+    out.findings.push({
+      checkCode: out.checkCode,
+      severity: "critical",
+      subjectType: "wallet_user",
+      subjectId: u.id,
+      summary: `Wallet balance ${u.wallet_balance} exists with no ledger history`,
+      details: { issue: "balance_without_ledger", walletBalance: u.wallet_balance }
+    });
+  }
+  const byUser = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    if (!byUser.has(r.user_id)) byUser.set(r.user_id, []);
+    byUser.get(r.user_id).push(r);
+  }
+  for (const [userId, userRows] of byUser) {
+    const issues = [];
+    const last = userRows[userRows.length - 1];
+    const profile = profilesById.get(userId);
+    if (!profile) {
+      if (!profilesTruncated) {
+        issues.push({ issue: "missing_profile", latestBalanceAfter: last.balance_after ?? null });
+      }
+    } else if (last.balance_after !== null && last.balance_after !== void 0 && Number(profile.wallet_balance) !== Number(last.balance_after)) {
+      issues.push({
+        issue: "profile_ledger_mismatch",
+        walletBalance: profile.wallet_balance,
+        latestLedgerBalance: last.balance_after,
+        latestTxnId: last.id
+      });
+    }
+    let chainBreaks = 0;
+    let arithmeticErrors = 0;
+    let firstBadTxn = null;
+    let negativeBalance = null;
+    let earliestStartZero = false;
+    let sumDelta = 0;
+    let sumUsable = false;
+    for (let i = 0; i < userRows.length; i++) {
+      const r = userRows[i];
+      const before = r.balance_before;
+      const after = r.balance_after;
+      const amount = Number(r.amount ?? 0);
+      if (r.status === "success") {
+        sumDelta += r.type === "credit" ? amount : -amount;
+      }
+      if (i === 0 && Number(before) === 0 && before !== null && before !== void 0) earliestStartZero = true;
+      if (after !== null && after !== void 0 && Number(after) < 0 && !negativeBalance) {
+        negativeBalance = r.id;
+      }
+      if (before !== null && before !== void 0 && after !== null && after !== void 0) {
+        const expected = r.type === "credit" ? Number(before) + amount : Number(before) - amount;
+        if (Number(after) !== expected) {
+          arithmeticErrors++;
+          if (!firstBadTxn) firstBadTxn = r.id;
+        }
+      }
+      const next = userRows[i + 1];
+      if (!next) continue;
+      const sameInstant = String(r.created_at) === String(next.created_at);
+      if (sameInstant) continue;
+      if (after !== null && after !== void 0 && next.balance_before !== null && next.balance_before !== void 0 && Number(after) !== Number(next.balance_before)) {
+        chainBreaks++;
+        if (!firstBadTxn) firstBadTxn = next.id;
+      }
+    }
+    sumUsable = earliestStartZero && !out.truncated;
+    const latestBalance = last.balance_after;
+    const sumMismatch = sumUsable && latestBalance !== null && latestBalance !== void 0 && sumDelta !== Number(latestBalance);
+    if (chainBreaks > 0 || arithmeticErrors > 0) {
+      issues.push({
+        issue: "chain_inconsistency",
+        chainBreaks,
+        arithmeticErrors,
+        firstBadTxnId: firstBadTxn,
+        rowsScanned: userRows.length
+      });
+    }
+    if (negativeBalance) {
+      issues.push({ issue: "negative_balance", firstNegativeTxnId: negativeBalance, walletBalance: profile?.wallet_balance ?? null });
+    }
+    if (sumMismatch) {
+      issues.push({
+        issue: "sum_mismatch",
+        sumCreditsMinusDebits: sumDelta,
+        latestLedgerBalance: latestBalance,
+        earliestStartedFromZero: earliestStartZero
+      });
+    }
+    for (const iss of issues) {
+      const isNegative = iss.issue === "negative_balance";
+      out.findings.push({
+        checkCode: out.checkCode,
+        severity: "critical",
+        subjectType: "wallet_user",
+        subjectId: userId,
+        summary: isNegative ? `Wallet for user ${userId} has a negative balance (${iss.issue})` : `Wallet ledger for user ${userId} inconsistent: ${iss.issue}`,
+        details: iss
+      });
+    }
+  }
+  return out;
+}
+function buildCriticalFinancialKeys(candidates) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const c of candidates) {
+    if (c.severity !== "critical") continue;
+    for (const k of CORRELATION_KEYS) {
+      const v = c.details?.[k];
+      if (typeof v === "string" && v.length > 0) keys.add(v);
+    }
+  }
+  return keys;
+}
+function applyCorrelation(c7Candidates, keys) {
+  if (keys.size === 0) return;
+  for (const c of c7Candidates) {
+    const hit = CORRELATION_KEYS.some((k) => {
+      const v = c.details?.[k];
+      return typeof v === "string" && v.length > 0 && keys.has(v);
+    });
+    if (hit) c.severity = "critical";
+  }
+}
+var RESOLVE_NOTE = "stale: condition cleared in automated scan";
+function findingKey(subjectType, subjectId) {
+  return `${subjectType}|${subjectId}`;
+}
+function insertRow(checkCode, c, iso) {
+  return {
+    check_code: checkCode,
+    severity: c.severity,
+    subject_type: c.subjectType,
+    subject_id: c.subjectId,
+    summary: c.summary,
+    details: c.details,
+    status: "open",
+    first_detected_at: iso,
+    last_detected_at: iso,
+    occurrence_count: 1
+  };
+}
+async function insertOrReopen(client, checkCode, cand, iso, counts) {
+  const { error } = await client.from("reconciliation_findings").insert(insertRow(checkCode, cand, iso)).select("id");
+  if (!error) {
+    counts.inserted++;
+    return;
+  }
+  if (error.code !== "23505") {
+    throw new Error(`finding insert failed: ${error.message}`);
+  }
+  const { data, error: qErr } = await client.from("reconciliation_findings").select("*").eq("check_code", checkCode).eq("subject_type", cand.subjectType).eq("subject_id", cand.subjectId).single();
+  if (qErr || !data) {
+    throw new Error(`finding conflict but lookup failed: ${qErr?.message}`);
+  }
+  const { error: upErr } = await client.from("reconciliation_findings").update({
+    status: "open",
+    severity: cand.severity,
+    summary: cand.summary,
+    details: cand.details,
+    last_detected_at: iso,
+    occurrence_count: (data.occurrence_count ?? 1) + 1,
+    resolved_at: null,
+    resolution_note: null
+  }).eq("id", data.id).select("id");
+  if (upErr) throw new Error(`finding reopen failed: ${upErr.message}`);
+  counts.reopened++;
+}
+async function mergeCheck(client, checkCode, candidates, existingForCheck, now) {
+  const counts = { inserted: 0, resolved: 0, reopened: 0 };
+  const iso = now.toISOString();
+  const candMap = /* @__PURE__ */ new Map();
+  for (const c of candidates) candMap.set(findingKey(c.subjectType, c.subjectId), c);
+  const staleIds = [];
+  for (const row of existingForCheck) {
+    const key = findingKey(row.subject_type, row.subject_id);
+    const cand = candMap.get(key);
+    if (!cand) {
+      if (row.status === "open" || row.status === "acknowledged") staleIds.push(row.id);
+      continue;
+    }
+    candMap.delete(key);
+    if (row.status === "resolved") {
+      const { error } = await client.from("reconciliation_findings").update({
+        status: "open",
+        severity: cand.severity,
+        summary: cand.summary,
+        details: cand.details,
+        last_detected_at: iso,
+        occurrence_count: (row.occurrence_count ?? 1) + 1,
+        resolved_at: null,
+        resolution_note: null
+      }).eq("id", row.id).select("id");
+      if (error) throw new Error(`finding reopen failed: ${error.message}`);
+      counts.reopened++;
+    } else {
+      const { error } = await client.from("reconciliation_findings").update({
+        severity: cand.severity,
+        summary: cand.summary,
+        details: cand.details,
+        last_detected_at: iso,
+        occurrence_count: (row.occurrence_count ?? 1) + 1
+      }).eq("id", row.id).select("id");
+      if (error) throw new Error(`finding update failed: ${error.message}`);
+    }
+  }
+  if (staleIds.length > 0) {
+    const { error } = await client.from("reconciliation_findings").update({
+      status: "resolved",
+      resolved_at: iso,
+      resolution_note: RESOLVE_NOTE
+    }).in("id", staleIds).select("id");
+    if (error) throw new Error(`stale resolve failed: ${error.message}`);
+    counts.resolved = staleIds.length;
+  }
+  const remaining = Array.from(candMap.values());
+  if (remaining.length > 0) {
+    const rows = remaining.map((c) => insertRow(checkCode, c, iso));
+    const { error } = await client.from("reconciliation_findings").insert(rows).select("id");
+    if (!error) {
+      counts.inserted += remaining.length;
+    } else if (error.code === "23505") {
+      for (const c of remaining) await insertOrReopen(client, checkCode, c, iso, counts);
+    } else {
+      throw new Error(`finding insert failed: ${error.message}`);
+    }
+  }
+  return counts;
+}
+var CHECK_IDS = ["C1", "C2", "C3", "C4", "C5", "C7", "C8"];
+var FINDING_SCAN_LIMIT = 1e4;
+async function runReconciliation(opts) {
+  const client = opts.client;
+  const now = opts.now ?? /* @__PURE__ */ new Date();
+  const summary = {
+    runId: null,
+    status: "success",
+    trigger: opts.trigger,
+    checkResults: {},
+    findingsOpen: 0,
+    findingsNew: 0,
+    findingsResolved: 0,
+    findingsReopened: 0,
+    failedChecks: [],
+    truncatedChecks: []
+  };
+  const thresholds = await loadThresholds(client);
+  const ctx = { client, thresholds, cap: thresholds.maxFindingsPerCheck, now };
+  const { data: runRow, error: runErr } = await client.from("reconciliation_runs").insert({
+    trigger_source: opts.trigger,
+    started_at: now.toISOString(),
+    status: "running"
+  }).select("id").single();
+  if (runErr || !runRow) {
+    summary.status = "failed";
+    summary.error = `failed to insert run: ${runErr?.message ?? "no row returned"}`;
+    return summary;
+  }
+  summary.runId = runRow.id;
+  try {
+    const outcomes = [];
+    outcomes.push(await checkC1(ctx));
+    outcomes.push(await checkC2(ctx));
+    outcomes.push(await checkC3(ctx));
+    outcomes.push(await checkC4(ctx));
+    outcomes.push(await checkC5(ctx));
+    const c4c5 = [
+      ...dedupeFindings(outcomes[3].findings),
+      ...dedupeFindings(outcomes[4].findings)
+    ];
+    const criticalKeys = buildCriticalFinancialKeys(c4c5);
+    const c7Outcome = await checkC7(ctx, criticalKeys);
+    applyCorrelation(c7Outcome.findings, criticalKeys);
+    outcomes.push(c7Outcome);
+    outcomes.push(await checkC8(ctx));
+    const candidatesByCheck = /* @__PURE__ */ new Map();
+    for (const o of outcomes) candidatesByCheck.set(o.checkCode, dedupeFindings(o.findings));
+    const existingRes = await fetchAll(
+      client.from("reconciliation_findings").select("*").in("check_code", CHECK_IDS.map((id) => CHECK_CODES[id])).limit(FINDING_SCAN_LIMIT + 1),
+      FINDING_SCAN_LIMIT
+    );
+    if (existingRes.error) throw new Error(`failed to load existing findings: ${existingRes.error}`);
+    const existingByCheck = /* @__PURE__ */ new Map();
+    for (const row of existingRes.rows) {
+      if (!existingByCheck.has(row.check_code)) existingByCheck.set(row.check_code, []);
+      existingByCheck.get(row.check_code).push(row);
+    }
+    for (const o of outcomes) {
+      const cands = candidatesByCheck.get(o.checkCode) ?? [];
+      const status = !o.completed ? "failed" : o.truncated ? "truncated" : "success";
+      summary.checkResults[o.checkId] = {
+        status,
+        findings: cands.length,
+        ...o.error ? { error: o.error } : {}
+      };
+      if (status !== "success") continue;
+      const counts = await mergeCheck(client, o.checkCode, cands, existingByCheck.get(o.checkCode) ?? [], now);
+      summary.findingsNew += counts.inserted;
+      summary.findingsResolved += counts.resolved;
+      summary.findingsReopened += counts.reopened;
+    }
+    const openRes = await client.from("reconciliation_findings").select("id", { count: "exact", head: true }).eq("status", "open");
+    if (openRes && !openRes.error && typeof openRes.count === "number") {
+      summary.findingsOpen = openRes.count;
+    }
+    const allFailed = outcomes.every((o) => !o.completed);
+    if (allFailed) {
+      summary.status = "failed";
+      summary.error = summary.error ?? "all checks failed";
+    }
+  } catch (e) {
+    summary.status = "failed";
+    summary.error = String(e?.message ?? e);
+  }
+  summary.failedChecks = CHECK_IDS.filter((id) => summary.checkResults[id]?.status === "failed");
+  summary.truncatedChecks = CHECK_IDS.filter((id) => summary.checkResults[id]?.status === "truncated");
+  const { error: finErr } = await client.from("reconciliation_runs").update({
+    finished_at: (/* @__PURE__ */ new Date()).toISOString(),
+    status: summary.status,
+    checks_run: CHECK_IDS,
+    findings_open: summary.findingsOpen,
+    findings_new: summary.findingsNew,
+    findings_resolved: summary.findingsResolved,
+    check_results: summary.checkResults,
+    error: summary.error ?? null
+  }).eq("id", summary.runId);
+  if (finErr) {
+    summary.status = "failed";
+    summary.error = summary.error ?? `failed to finalize run: ${finErr.message}`;
+  }
+  return summary;
+}
+
+// server/routes/reconciliation-cron.ts
+var import_express48 = require("express");
+var import_crypto4 = __toESM(require("crypto"));
+init_supabase();
+var router47 = (0, import_express48.Router)();
+function timingSafeEqualStr(a, b) {
+  const ba = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ba.length !== bb.length) {
+    import_crypto4.default.timingSafeEqual(ba, ba);
+    return false;
+  }
+  return import_crypto4.default.timingSafeEqual(ba, bb);
+}
+async function handler(req, res) {
+  try {
+    const secret = process.env.CRON_SECRET;
+    if (!secret) {
+      res.status(500).json({ error: "cron secret not configured" });
+      return;
+    }
+    const auth = req.headers.authorization;
+    const token = typeof auth === "string" && auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!token || !timingSafeEqualStr(token, secret)) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    const summary = await runReconciliation({
+      client: createAdminClient(),
+      trigger: "cron"
+    });
+    res.status(summary.status === "failed" ? 500 : 200).json(summary);
+  } catch (e) {
+    console.error("[reconciliation-cron] unexpected error:", e?.message ?? e);
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+}
+router47.post("/reconciliation", handler);
+router47.get("/reconciliation", handler);
+var reconciliation_cron_default = router47;
+
 // server/app.ts
-var import_express48 = __toESM(require("express"));
+var import_express49 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
-var app = (0, import_express48.default)();
+var app = (0, import_express49.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
 app.use(
   "/api/webhooks",
-  import_express48.default.raw({ type: "application/json" }),
+  import_express49.default.raw({ type: "application/json" }),
   webhooks_default
 );
-app.use(import_express48.default.json());
+app.use(import_express49.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -7500,6 +8299,7 @@ app.use("/api", payments_default);
 app.use("/api/config/customer", customer_config_default);
 app.use("/api/settings", settings_default);
 app.use("/api/vendor/reports", vendor_reports_default);
+app.use("/api/cron", reconciliation_cron_default);
 var app_default = app;
 
 // server/api-entry.ts
