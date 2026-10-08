@@ -5165,2282 +5165,6 @@ router33.get("/:id", async (req, res) => {
 });
 var admin_refunds_default = router33;
 
-// server/routes/order-stages.ts
-var import_express35 = require("express");
-init_supabase();
-var router34 = (0, import_express35.Router)();
-router34.get("/", async (_req, res) => {
-  try {
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("order_stage_definitions").select("*").order("sort_order");
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var order_stages_default = router34;
-
-// server/routes/chat.ts
-var import_express36 = require("express");
-init_supabase();
-var router35 = (0, import_express36.Router)();
-router35.get("/", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const admin = createAdminClient();
-    const limit = parseInt(req.query.limit) || 50;
-    const { data, error } = await admin.from("chat_messages").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(limit);
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json((data || []).reverse());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router35.post("/", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("chat_messages").insert({ ...req.body, user_id: user.id }).select().single();
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.status(201).json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router35.post("/ask", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const { content } = req.body;
-    if (!content) {
-      res.status(400).json({ error: "Message content is required" });
-      return;
-    }
-    const admin = createAdminClient();
-    await admin.from("chat_messages").insert({ role: "user", content, user_id: user.id }).select().single();
-    const { data: profiles } = await admin.from("user_profiles").select("name, role").eq("id", user.id).limit(1);
-    const profile = profiles?.[0];
-    const userName = profile?.name || "User";
-    const userRole = profile?.role || "customer";
-    const lower = content.toLowerCase();
-    let reply = "";
-    if (/\border\b/.test(lower) && /(status|track|where|follow|update)/.test(lower)) {
-      const { data: orders } = await admin.from("orders").select("code, status, total, created_at, pickup_area, vendor_name").eq("customer_id", user.id).order("created_at", { ascending: false }).limit(5);
-      if (orders && orders.length > 0) {
-        reply = `Here are your recent orders:
-${orders.map(
-          (o, i) => `${i + 1}. **${o.code}** \u2014 ${o.status.replace(/_/g, " ")} (\u20B9${o.total}) at ${o.pickup_area || "\u2014"}`
-        ).join("\n")}`;
-      } else {
-        reply = "You don't have any orders yet. Head to **Book Pickup** to place your first order!";
-      }
-    } else if (/(vendor|laundromat|shop|store|service)/.test(lower) && /(near|find|list|show|available)/.test(lower)) {
-      const { data: vendors } = await admin.from("vendors").select("name, area, rating, is_open").eq("verified", true).limit(10);
-      if (vendors && vendors.length > 0) {
-        const open = vendors.filter((v) => v.is_open);
-        reply = `We have **${vendors.length} verified vendors**. Currently **${open.length}** are open:
-${vendors.slice(0, 6).map(
-          (v) => `\u2022 **${v.name}** \u2014 ${v.area || "\u2014"} ${v.is_open ? "\u{1F7E2} Open" : "\u{1F534} Closed"} ${v.rating ? "\u2605" + v.rating : ""}`
-        ).join("\n")}${vendors.length > 6 ? `
-\u2026and ${vendors.length - 6} more.` : ""}`;
-      } else {
-        reply = "No vendors are currently available in your area. Check back soon!";
-      }
-    } else if (/(price|cost|rate|how much|pricing|charges)/.test(lower)) {
-      const { data: services } = await admin.from("services").select("name, unit").limit(10);
-      if (services && services.length > 0) {
-        reply = `Our pricing:
-${services.map(
-          (s) => `\u2022 **${s.name}** (${s.unit})`
-        ).join("\n")}
-
-*Prices may vary by vendor. Check the booking page for exact quotes.*`;
-      } else {
-        reply = "Visit the **Book Pickup** page to see service pricing in your area.";
-      }
-    } else if (/(wallet|balance|money|payment|pay)/.test(lower)) {
-      const { data: profiles2 } = await admin.from("user_profiles").select("wallet_balance, loyalty_points").eq("id", user.id).limit(1);
-      const wallet = profiles2?.[0];
-      if (wallet) {
-        reply = `Your wallet balance is **\u20B9${wallet.wallet_balance || 0}** with **${wallet.loyalty_points || 0} loyalty points**.`;
-      } else {
-        reply = "You don't have a wallet yet. It will be created when you make your first payment.";
-      }
-    } else if (/(help|hi|hello|hey)/.test(lower)) {
-      reply = `Hello **${userName}**! \u{1F44B} I can help you with:
-\u2022 **Track orders** \u2014 say "order status"
-\u2022 **Find vendors** \u2014 say "nearby vendors"
-\u2022 **Check pricing** \u2014 say "pricing"
-\u2022 **Wallet balance** \u2014 say "my balance"
-
-What would you like to know?`;
-    } else {
-      const { data: recentOrders } = await admin.from("orders").select("code, status").eq("customer_id", user.id).order("created_at", { ascending: false }).limit(1);
-      const recentOrder = recentOrders?.[0];
-      reply = `Thanks for reaching out, **${userName}**! I can check order status, find vendors, show pricing, or help with your wallet.
-
-${recentOrder ? `Your most recent order **${recentOrder.code}** is **${recentOrder.status.replace(/_/g, " ")}**.` : ""}
-
-How can I assist you today?`;
-    }
-    const { data: saved } = await admin.from("chat_messages").insert({
-      role: "assistant",
-      content: reply,
-      user_id: user.id
-    }).select().single();
-    res.json({ reply: saved?.content || reply });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var chat_default = router35;
-
-// server/routes/favorites.ts
-var import_express37 = require("express");
-init_supabase();
-var router36 = (0, import_express37.Router)();
-router36.get("/", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("favorite_vendors").select("vendor_id, created_at, vendors(*)").eq("user_id", user.id).order("created_at", { ascending: false });
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json(data || []);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router36.post("/", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const { vendor_id } = req.body;
-    if (!vendor_id) {
-      res.status(400).json({ error: "vendor_id required" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("favorite_vendors").insert({ user_id: user.id, vendor_id }).select().single();
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.status(201).json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router36.delete("/:vendor_id", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const { vendor_id } = req.params;
-    const admin = createAdminClient();
-    const { error } = await admin.from("favorite_vendors").delete().eq("user_id", user.id).eq("vendor_id", vendor_id);
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var favorites_default = router36;
-
-// server/routes/geocode.ts
-var import_express38 = require("express");
-var cache2 = /* @__PURE__ */ new Map();
-var CACHE_TTL_MS = 60 * 60 * 1e3;
-function getCached(key) {
-  const entry = cache2.get(key);
-  if (!entry || Date.now() > entry.ttl) {
-    cache2.delete(key);
-    return null;
-  }
-  return entry.data;
-}
-function setCache(key, data) {
-  cache2.set(key, { data, ttl: Date.now() + CACHE_TTL_MS });
-}
-var lastNominatimCall = 0;
-async function nominatimFetch(url) {
-  const now = Date.now();
-  const wait = Math.max(0, 1e3 - (now - lastNominatimCall));
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-  lastNominatimCall = Date.now();
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "LaundryHomeApp/1.0 (demo)",
-      "Accept-Language": "en"
-    }
-  });
-  if (!res.ok) throw new Error(`Nominatim error: ${res.status}`);
-  return res.json();
-}
-var KNOWN_AREAS3 = {
-  "Indiranagar": { lat: 12.9719, lng: 77.6413, displayName: "Indiranagar, Bengaluru", pincode: "560038" },
-  "Koramangala": { lat: 12.9352, lng: 77.6245, displayName: "Koramangala, Bengaluru", pincode: "560034" },
-  "HSR Layout": { lat: 12.9116, lng: 77.6389, displayName: "HSR Layout, Bengaluru", pincode: "560102" },
-  "Jayanagar": { lat: 12.925, lng: 77.5938, displayName: "Jayanagar, Bengaluru", pincode: "560011" },
-  "BTM Layout": { lat: 12.9166, lng: 77.6101, displayName: "BTM Layout, Bengaluru", pincode: "560076" },
-  "Whitefield": { lat: 12.9698, lng: 77.75, displayName: "Whitefield, Bengaluru", pincode: "560066" },
-  "MG Road": { lat: 12.975, lng: 77.6067, displayName: "MG Road, Bengaluru", pincode: "560001" },
-  "Marathahalli": { lat: 12.9591, lng: 77.6974, displayName: "Marathahalli, Bengaluru", pincode: "560037" },
-  "Electronic City": { lat: 12.8399, lng: 77.677, displayName: "Electronic City, Bengaluru", pincode: "560100" },
-  "JP Nagar": { lat: 12.9063, lng: 77.5857, displayName: "JP Nagar, Bengaluru", pincode: "560078" },
-  "Horamavu": { lat: 13.0208, lng: 77.6583, displayName: "Horamavu, Bengaluru", pincode: "560043" },
-  "Hebbal": { lat: 13.0358, lng: 77.597, displayName: "Hebbal, Bengaluru", pincode: "560024" },
-  "Banashankari": { lat: 12.925, lng: 77.5468, displayName: "Banashankari, Bengaluru", pincode: "560050" },
-  "Rajajinagar": { lat: 12.99, lng: 77.5527, displayName: "Rajajinagar, Bengaluru", pincode: "560010" },
-  "Malleshwaram": { lat: 13.0031, lng: 77.571, displayName: "Malleshwaram, Bengaluru", pincode: "560003" },
-  "Basavanagudi": { lat: 12.94, lng: 77.57, displayName: "Basavanagudi, Bengaluru", pincode: "560004" },
-  "Yeshwanthpur": { lat: 13.02, lng: 77.545, displayName: "Yeshwanthpur, Bengaluru", pincode: "560022" },
-  "Vijay Nagar": { lat: 12.97, lng: 77.53, displayName: "Vijay Nagar, Bengaluru", pincode: "560040" },
-  "RT Nagar": { lat: 13.02, lng: 77.595, displayName: "RT Nagar, Bengaluru", pincode: "560032" },
-  "Kengeri": { lat: 12.91, lng: 77.48, displayName: "Kengeri, Bengaluru", pincode: "560060" }
-};
-function findClosestArea2(lat, lng) {
-  let closest = null;
-  for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
-    const d = haversineKm4(lat, lng, info.lat, info.lng);
-    if (!closest || d < closest.distance) {
-      closest = { name, pincode: info.pincode, lat: info.lat, lng: info.lng, distance: d };
-    }
-  }
-  return closest;
-}
-var router37 = (0, import_express38.Router)();
-router37.get("/reverse", async (req, res) => {
-  try {
-    const lat = req.query.lat;
-    const lng = req.query.lng;
-    if (!lat || !lng) {
-      res.status(400).json({ error: "lat and lng required" });
-      return;
-    }
-    const latNum = parseFloat(lat);
-    const lngNum = parseFloat(lng);
-    const cacheKey = `reverse:${latNum.toFixed(5)},${lngNum.toFixed(5)}`;
-    const cached = getCached(cacheKey);
-    if (cached) {
-      res.json(cached);
-      return;
-    }
-    for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
-      const d = haversineKm4(latNum, lngNum, info.lat, info.lng);
-      if (d < 1) {
-        const result2 = { area: name, city: "Bengaluru", pincode: info.pincode, lat: info.lat, lng: info.lng };
-        setCache(cacheKey, result2);
-        res.json(result2);
-        return;
-      }
-    }
-    const data = await nominatimFetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${latNum}&lon=${lngNum}&format=json&addressdetails=1`
-    );
-    if (!data || data.error) {
-      const closest = findClosestArea2(latNum, lngNum);
-      if (closest) {
-        const result2 = { area: closest.name, city: "Bengaluru", pincode: closest.pincode, lat: latNum, lng: lngNum };
-        setCache(cacheKey, result2);
-        res.json(result2);
-        return;
-      }
-      res.json({ area: "Unknown", city: "Bengaluru", pincode: "560001", lat: latNum, lng: lngNum });
-      return;
-    }
-    const addr = data.address || {};
-    const nominatimArea = addr.suburb || addr.neighbourhood || addr.locality || addr.town || addr.city || "";
-    const city = addr.city || addr.town || addr.county || "Bengaluru";
-    const pincode = addr.postcode || "560001";
-    const isKnown = Object.keys(KNOWN_AREAS3).some(
-      (k) => k.toLowerCase() === nominatimArea.toLowerCase()
-    );
-    let area = nominatimArea || "Unknown";
-    if (!isKnown) {
-      const closest = findClosestArea2(latNum, lngNum);
-      if (closest && closest.distance < 3) {
-        area = closest.name;
-      }
-    }
-    const result = { area, city, pincode, lat: latNum, lng: lngNum };
-    setCache(cacheKey, result);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router37.get("/search", async (req, res) => {
-  try {
-    const q = (req.query.q || "").trim();
-    if (!q || q.length < 2) {
-      res.json([]);
-      return;
-    }
-    const cacheKey = `search:${q.toLowerCase()}`;
-    const cached = getCached(cacheKey);
-    if (cached) {
-      res.json(cached);
-      return;
-    }
-    const results = [];
-    const ql = q.toLowerCase();
-    for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
-      if (name.toLowerCase().includes(ql) || info.pincode.startsWith(q)) {
-        results.push({ label: info.displayName, area: name, city: "Bengaluru", pincode: info.pincode, lat: info.lat, lng: info.lng });
-      }
-    }
-    try {
-      const data = await nominatimFetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1&countrycodes=in`
-      );
-      if (Array.isArray(data)) {
-        for (const item of data) {
-          const addr = item.address || {};
-          const name = addr.suburb || addr.neighbourhood || addr.locality || addr.town || addr.city || item.display_name?.split(",")[0] || q;
-          const cityName = addr.city || addr.town || addr.county || "Bengaluru";
-          const pincode2 = addr.postcode || "";
-          const alreadyExists = results.some((r) => r.area.toLowerCase() === name.toLowerCase());
-          if (!alreadyExists) {
-            const fallbackPincode = pincode2 || "560001";
-            results.push({ label: item.display_name || name, area: name, city: cityName, pincode: fallbackPincode, lat: parseFloat(item.lat), lng: parseFloat(item.lon) });
-          }
-        }
-      }
-    } catch {
-    }
-    setCache(cacheKey, results);
-    res.json(results.slice(0, 6));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-function haversineKm4(lat1, lng1, lat2, lng2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-var geocode_default = router37;
-
-// server/routes/routing.ts
-var import_express39 = require("express");
-var ORS_BASE = "https://api.openrouteservice.org/v2";
-var router38 = (0, import_express39.Router)();
-router38.get("/directions", async (req, res) => {
-  try {
-    const apiKey = process.env.OPENROUTESERVICE_API_KEY;
-    if (!apiKey) {
-      res.status(500).json({ error: "OPENROUTESERVICE_API_KEY not configured" });
-      return;
-    }
-    const { start_lat, start_lng, end_lat, end_lng, profile } = req.query;
-    if (!start_lat || !start_lng || !end_lat || !end_lng) {
-      res.status(400).json({ error: "start_lat, start_lng, end_lat, end_lng are required" });
-      return;
-    }
-    const orsProfile = profile || "driving-car";
-    const coords = `${start_lng},${start_lat}|${end_lng},${end_lat}`;
-    const response = await fetch(
-      `${ORS_BASE}/directions/${orsProfile}/json?coordinates=${coords}`,
-      {
-        headers: {
-          Authorization: apiKey,
-          Accept: "application/json, application/geo+json"
-        }
-      }
-    );
-    if (!response.ok) {
-      const text = await response.text();
-      res.status(response.status).json({ error: "OpenRouteService error", detail: text });
-      return;
-    }
-    const data = await response.json();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router38.get("/geocode/search", async (req, res) => {
-  try {
-    const apiKey = process.env.OPENROUTESERVICE_API_KEY;
-    if (!apiKey) {
-      res.status(500).json({ error: "OPENROUTESERVICE_API_KEY not configured" });
-      return;
-    }
-    const { text } = req.query;
-    if (!text) {
-      res.status(400).json({ error: "text query param is required" });
-      return;
-    }
-    const response = await fetch(
-      `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text)}&boundary.country=IND&size=5`,
-      { headers: { Accept: "application/json" } }
-    );
-    if (!response.ok) {
-      const text2 = await response.text();
-      res.status(response.status).json({ error: "Geocode error", detail: text2 });
-      return;
-    }
-    const data = await response.json();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var routing_default = router38;
-
-// server/routes/delivery-location.ts
-var import_express40 = require("express");
-init_supabase();
-var router39 = (0, import_express40.Router)();
-router39.post("/", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const { lat, lng, heading, speed, accuracy } = req.body;
-    if (lat == null || lng == null) {
-      res.status(400).json({ error: "lat and lng are required" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("delivery_live_locations").upsert(
-      {
-        exec_id: user.id,
-        lat,
-        lng,
-        heading: heading || null,
-        speed: speed || null,
-        accuracy: accuracy || null,
-        updated_at: (/* @__PURE__ */ new Date()).toISOString()
-      },
-      { onConflict: "exec_id" }
-    ).select().single();
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router39.get("/:execId", async (req, res) => {
-  try {
-    const { execId } = req.params;
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("delivery_live_locations").select("*").eq("exec_id", execId).single();
-    if (error && error.code !== "PGRST116") {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json(data || null);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var delivery_location_default = router39;
-
-// server/routes/vendor-onboarding.ts
-var import_express41 = require("express");
-init_supabase();
-var router40 = (0, import_express41.Router)();
-router40.post("/approve", async (req, res) => {
-  try {
-    const { vendor_id, owner_id } = req.body;
-    if (!vendor_id) {
-      res.status(400).json({ error: "vendor_id is required" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data: vendor, error: fetchErr } = await admin.from("vendors").select("*").eq("id", vendor_id).single();
-    if (fetchErr || !vendor) {
-      res.status(404).json({ error: "Vendor not found" });
-      return;
-    }
-    const { data, error } = await admin.from("vendors").update({
-      kyc_status: "approved",
-      verified: true,
-      is_open: true
-    }).eq("id", vendor_id).select().single();
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    if (owner_id) {
-      await admin.from("user_profiles").update({ role: "vendor" }).eq("id", owner_id);
-    }
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router40.post("/reject", async (req, res) => {
-  try {
-    const { vendor_id, reason } = req.body;
-    if (!vendor_id) {
-      res.status(400).json({ error: "vendor_id is required" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("vendors").update({
-      kyc_status: "rejected",
-      verified: false,
-      rejection_reason: reason || null
-    }).eq("id", vendor_id).select().single();
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router40.get("/pending", async (_req, res) => {
-  try {
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("vendors").select("*, owner:owner_id(id, name, email, phone)").in("kyc_status", ["pending"]).order("created_at", { ascending: false });
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var vendor_onboarding_default = router40;
-
-// server/routes/vendor-service-prices.ts
-var import_express42 = require("express");
-init_supabase();
-var router41 = (0, import_express42.Router)();
-async function canManageVendor(req, vendorId) {
-  const admin = createAdminClient();
-  const user = req.user;
-  if (!user?.id) return false;
-  const { data: profile } = await admin.from("user_profiles").select("role").eq("id", user.id).maybeSingle();
-  const role = profile?.role || "customer";
-  if (role === "admin" || role === "superadmin") return true;
-  const { data: vendor } = await admin.from("vendors").select("id").eq("id", vendorId).eq("owner_id", user.id).maybeSingle();
-  return !!vendor;
-}
-router41.get("/:vendorId", async (req, res) => {
-  try {
-    const supabase = createAdminClient();
-    const { data, error } = await supabase.from("vendor_service_prices").select("*, services(name, unit), service_items(item_name, unit)").eq("vendor_id", req.params.vendorId).eq("is_active", true);
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    const result = (data || []).map((p) => ({
-      id: p.id,
-      vendorId: p.vendor_id,
-      serviceId: p.service_id,
-      itemId: p.item_id,
-      price: p.price,
-      isActive: p.is_active,
-      service: p.services ? { name: p.services.name, unit: p.services.unit } : void 0,
-      item: p.service_items ? { itemName: p.service_items.item_name, unit: p.service_items.unit } : void 0
-    }));
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router41.post("/", async (req, res) => {
-  try {
-    const { vendor_id, service_id, item_id, price } = req.body;
-    if (!vendor_id || !service_id || !item_id || typeof price !== "number" || price <= 0) {
-      res.status(400).json({ error: "vendor_id, service_id, item_id and a positive price are required" });
-      return;
-    }
-    if (!await canManageVendor(req, vendor_id)) {
-      res.status(403).json({ error: "Forbidden: not your vendor" });
-      return;
-    }
-    const supabase = createAdminClient();
-    const { data, error } = await supabase.from("vendor_service_prices").upsert(
-      { vendor_id, service_id, item_id, price, is_active: true },
-      { onConflict: "vendor_id,service_id,item_id", ignoreDuplicates: false }
-    ).select().single();
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.status(201).json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router41.delete("/:vendorId/:serviceId/:itemId", async (req, res) => {
-  try {
-    const { vendorId, serviceId, itemId } = req.params;
-    if (!await canManageVendor(req, vendorId)) {
-      res.status(403).json({ error: "Forbidden: not your vendor" });
-      return;
-    }
-    const supabase = createAdminClient();
-    const { error } = await supabase.from("vendor_service_prices").delete().eq("vendor_id", vendorId).eq("service_id", serviceId).eq("item_id", itemId);
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var vendor_service_prices_default = router41;
-
-// server/services/payment-service.ts
-var import_crypto2 = __toESM(require("crypto"));
-init_supabase();
-var RAZORPAY_KEY_ID2 = process.env.RAZORPAY_KEY_ID || "";
-var RAZORPAY_KEY_SECRET2 = process.env.RAZORPAY_KEY_SECRET || "";
-var STALE_CREATING_MINUTES = 5;
-function razorpayAuth2() {
-  return Buffer.from(`${RAZORPAY_KEY_ID2}:${RAZORPAY_KEY_SECRET2}`).toString("base64");
-}
-function isConfigured2() {
-  return Boolean(RAZORPAY_KEY_ID2 && RAZORPAY_KEY_SECRET2);
-}
-function deterministicReceipt(idempotencyKey) {
-  const hash = import_crypto2.default.createHash("sha256").update(idempotencyKey).digest("hex");
-  return `lh_${hash.slice(0, 32)}`;
-}
-function isStale(createdAt, minutes) {
-  const created = new Date(createdAt).getTime();
-  const now = Date.now();
-  return now - created > minutes * 60 * 1e3;
-}
-async function createTopupOrder(userId, amountRupees, idempotencyKey) {
-  if (!isConfigured2()) {
-    return { success: false, error: "Payment gateway not configured" };
-  }
-  if (!amountRupees || amountRupees < 10 || amountRupees > 25e3) {
-    return { success: false, error: "Amount must be between \u20B910 and \u20B925,000" };
-  }
-  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.length < 8) {
-    return { success: false, error: "Invalid idempotency key" };
-  }
-  const admin = createAdminClient();
-  const { data: inserted, error: insertError } = await admin.from("payment_transactions").insert({
-    user_id: userId,
-    transaction_purpose: "wallet_topup",
-    amount: amountRupees,
-    currency: "INR",
-    gateway: "razorpay",
-    gateway_order_id: null,
-    payment_status: "creating",
-    idempotency_key: idempotencyKey
-  }).select("id, gateway_order_id, payment_status, updated_at").single();
-  let txnId;
-  if (insertError) {
-    const { data: existing } = await admin.from("payment_transactions").select("id, gateway_order_id, payment_status, updated_at").eq("idempotency_key", idempotencyKey).single();
-    if (!existing) {
-      return { success: false, error: "Failed to retrieve existing payment record" };
-    }
-    if (existing.gateway_order_id) {
-      return {
-        success: true,
-        transactionId: existing.id,
-        razorpayOrderId: existing.gateway_order_id,
-        amount: amountRupees,
-        currency: "INR",
-        publicKeyId: RAZORPAY_KEY_ID2
-      };
-    }
-    if (existing.payment_status === "creating" && isStale(existing.updated_at, STALE_CREATING_MINUTES)) {
-      return {
-        success: false,
-        error: "Payment order status uncertain. Please try again later."
-      };
-    }
-    if (existing.payment_status === "creating") {
-      return {
-        success: false,
-        error: "Payment processing in progress. Please wait."
-      };
-    }
-    if (existing.payment_status === "created" && !existing.gateway_order_id) {
-      const { data: claimed, error: claimError } = await admin.from("payment_transactions").update({
-        payment_status: "creating",
-        updated_at: (/* @__PURE__ */ new Date()).toISOString()
-      }).eq("id", existing.id).eq("payment_status", "created").select("id").single();
-      if (claimError || !claimed) {
-        return {
-          success: false,
-          error: "Payment processing in progress. Please wait."
-        };
-      }
-      txnId = existing.id;
-    } else {
-      return {
-        success: false,
-        error: `Unexpected payment status: ${existing.payment_status}`
-      };
-    }
-  } else {
-    txnId = inserted.id;
-  }
-  const receipt = deterministicReceipt(idempotencyKey);
-  const amountPaise = Math.round(amountRupees * 100);
-  let response;
-  try {
-    response = await fetch("https://api.razorpay.com/v1/orders", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${razorpayAuth2()}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        amount: amountPaise,
-        currency: "INR",
-        receipt,
-        payment_capture: 1
-      })
-    });
-  } catch (err) {
-    await admin.from("payment_transactions").update({
-      failure_reason: `Network error: ${err.message}`,
-      updated_at: (/* @__PURE__ */ new Date()).toISOString()
-    }).eq("id", txnId).eq("payment_status", "creating");
-    return {
-      success: false,
-      error: "Payment order status uncertain. Please try again later."
-    };
-  }
-  if (response.ok) {
-    let razorpayOrder;
-    try {
-      razorpayOrder = await response.json();
-    } catch {
-      return {
-        success: false,
-        error: "Payment order status uncertain. Please try again later."
-      };
-    }
-    const { error: dbUpdateError } = await admin.from("payment_transactions").update({
-      gateway_order_id: razorpayOrder.id,
-      payment_status: "created",
-      updated_at: (/* @__PURE__ */ new Date()).toISOString()
-    }).eq("id", txnId).eq("payment_status", "creating");
-    if (!dbUpdateError) {
-      return {
-        success: true,
-        transactionId: txnId,
-        razorpayOrderId: razorpayOrder.id,
-        amount: amountRupees,
-        currency: "INR",
-        publicKeyId: RAZORPAY_KEY_ID2
-      };
-    }
-    const { error: retryError } = await admin.from("payment_transactions").update({
-      gateway_order_id: razorpayOrder.id,
-      payment_status: "created",
-      updated_at: (/* @__PURE__ */ new Date()).toISOString()
-    }).eq("id", txnId).eq("payment_status", "creating");
-    if (!retryError) {
-      return {
-        success: true,
-        transactionId: txnId,
-        razorpayOrderId: razorpayOrder.id,
-        amount: amountRupees,
-        currency: "INR",
-        publicKeyId: RAZORPAY_KEY_ID2
-      };
-    }
-    console.error(
-      `[payments] CRITICAL: Razorpay order created but gateway_order_id could not be persisted. transactionId=${txnId}, razorpayOrderId=${razorpayOrder.id}, error=${retryError.message}`
-    );
-    return {
-      success: false,
-      error: "Payment order created but could not be recorded. Reconciliation required."
-    };
-  }
-  const errorBody = await response.json().catch(() => ({}));
-  const errorMsg = errorBody.error?.description || "Razorpay order creation failed";
-  if (response.status >= 500) {
-    await admin.from("payment_transactions").update({
-      failure_reason: `Razorpay 5xx: ${errorMsg}`,
-      updated_at: (/* @__PURE__ */ new Date()).toISOString()
-    }).eq("id", txnId).eq("payment_status", "creating");
-    return {
-      success: false,
-      error: "Payment order status uncertain. Please try again later."
-    };
-  }
-  await admin.from("payment_transactions").update({
-    payment_status: "created",
-    failure_reason: `Razorpay ${response.status}: ${errorMsg}`,
-    updated_at: (/* @__PURE__ */ new Date()).toISOString()
-  }).eq("id", txnId).eq("payment_status", "creating");
-  return {
-    success: false,
-    error: errorMsg
-  };
-}
-async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, razorpaySignature, transactionId) {
-  if (!isConfigured2()) {
-    return { success: false, error: "Payment gateway not configured" };
-  }
-  const admin = createAdminClient();
-  const { data: txn, error: loadError } = await admin.from("payment_transactions").select("*").eq("id", transactionId).single();
-  if (loadError || !txn) {
-    return { success: false, error: "Payment transaction not found" };
-  }
-  if (txn.user_id !== userId) {
-    return { success: false, error: "Unauthorized" };
-  }
-  if (txn.gateway_order_id !== razorpayOrderId) {
-    return { success: false, error: "Order ID mismatch" };
-  }
-  const crypto8 = await import("crypto");
-  const expectedSig = crypto8.createHmac("sha256", RAZORPAY_KEY_SECRET2).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
-  if (!crypto8.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
-    return { success: false, error: "Invalid payment signature" };
-  }
-  try {
-    const response = await fetch(`https://api.razorpay.com/v1/payments/${razorpayPaymentId}`, {
-      headers: { Authorization: `Basic ${razorpayAuth2()}` }
-    });
-    if (response.ok) {
-      const payment = await response.json();
-      if (payment.order_id !== razorpayOrderId) {
-        return { success: false, error: "Payment does not belong to expected order" };
-      }
-    }
-  } catch {
-  }
-  if (txn.gateway_payment_id && txn.gateway_payment_id !== razorpayPaymentId) {
-    return {
-      success: false,
-      error: "gateway_payment_id_conflict"
-    };
-  }
-  const { error: flagError } = await admin.from("payment_transactions").update({
-    gateway_signature_verified: true,
-    gateway_payment_id: txn.gateway_payment_id ?? razorpayPaymentId,
-    updated_at: (/* @__PURE__ */ new Date()).toISOString()
-  }).eq("id", transactionId);
-  if (flagError) {
-    return {
-      success: false,
-      error: "signature_verification_persist_failed"
-    };
-  }
-  const { error: statusError } = await admin.from("payment_transactions").update({
-    payment_status: "pending",
-    updated_at: (/* @__PURE__ */ new Date()).toISOString()
-  }).eq("id", transactionId).eq("payment_status", "created");
-  if (statusError) {
-    return {
-      success: false,
-      error: "payment_status_transition_failed"
-    };
-  }
-  const result = await finalizeWalletTopup(transactionId);
-  return result;
-}
-async function finalizeWalletTopup(paymentTransactionId) {
-  const admin = createAdminClient();
-  const { data, error } = await admin.rpc("finalize_wallet_topup", {
-    p_payment_transaction_id: paymentTransactionId
-  });
-  if (error) {
-    return { success: false, error: `RPC error: ${error.message}` };
-  }
-  if (!data) {
-    return { success: false, error: "No response from finalization" };
-  }
-  const result = data;
-  return {
-    success: result.success,
-    alreadyCredited: result.already_credited || false,
-    walletTransactionId: result.wallet_transaction_id || null,
-    newBalance: result.new_balance,
-    error: result.error
-  };
-}
-async function markPaymentCaptureVerified(gatewayOrderId, gatewayPaymentId) {
-  const admin = createAdminClient();
-  const { data: txn } = await admin.from("payment_transactions").select("id").eq("gateway_order_id", gatewayOrderId).eq("transaction_purpose", "wallet_topup").single();
-  if (!txn) {
-    return { transactionId: null, finalized: false };
-  }
-  await admin.from("payment_transactions").update({
-    gateway_capture_verified: true,
-    gateway_payment_id: gatewayPaymentId,
-    updated_at: (/* @__PURE__ */ new Date()).toISOString()
-  }).eq("id", txn.id).in("payment_status", ["created", "pending", "authorized"]);
-  const result = await finalizeWalletTopup(txn.id);
-  return {
-    transactionId: txn.id,
-    finalized: result.success
-  };
-}
-async function getPaymentSummary(userId) {
-  const admin = createAdminClient();
-  const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", userId).single();
-  const walletBalance = profile?.wallet_balance || 0;
-  const sixMonthsAgo = /* @__PURE__ */ new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-  const { data: spendData } = await admin.from("payment_transactions").select("amount").eq("user_id", userId).eq("transaction_purpose", "order_payment").eq("payment_status", "captured").gte("created_at", sixMonthsAgo.toISOString());
-  const totalSpentSixMonths = (spendData || []).reduce(
-    (sum, row) => sum + (row.amount || 0),
-    0
-  );
-  const moneySaved = 0;
-  const { count: transactionCount } = await admin.from("wallet_transactions").select("id", { count: "exact", head: true }).eq("user_id", userId);
-  const { count: invoiceCount } = await admin.from("customer_invoices").select("id", { count: "exact", head: true }).eq("user_id", userId);
-  return {
-    walletBalance,
-    totalSpentSixMonths,
-    moneySaved,
-    transactionCount: transactionCount || 0,
-    invoiceCount: invoiceCount || 0
-  };
-}
-async function getTransactions(userId, options = {}) {
-  const admin = createAdminClient();
-  const page = Math.max(1, options.page || 1);
-  const limit = Math.min(50, Math.max(1, options.limit || 20));
-  const offset = (page - 1) * limit;
-  let query = admin.from("wallet_transactions").select("*", { count: "exact" }).eq("user_id", userId);
-  if (options.type === "credit" || options.type === "debit") {
-    query = query.eq("type", options.type);
-  }
-  if (options.status) {
-    query = query.eq("status", options.status);
-  }
-  query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
-  const { data, count, error } = await query;
-  if (error) {
-    return { transactions: [], total: 0, page, limit };
-  }
-  return {
-    transactions: data || [],
-    total: count || 0,
-    page,
-    limit
-  };
-}
-async function getInvoices(userId, options = {}) {
-  const admin = createAdminClient();
-  const page = Math.max(1, options.page || 1);
-  const limit = Math.min(50, Math.max(1, options.limit || 20));
-  const offset = (page - 1) * limit;
-  const { data, count, error } = await admin.from("customer_invoices").select("*", { count: "exact" }).eq("user_id", userId).order("invoice_date", { ascending: false }).range(offset, offset + limit - 1);
-  if (error) {
-    return { invoices: [], total: 0, page, limit };
-  }
-  return {
-    invoices: data || [],
-    total: count || 0,
-    page,
-    limit
-  };
-}
-
-// server/routes/payments.ts
-var import_express43 = require("express");
-init_supabase();
-var crypto4 = __toESM(require("crypto"));
-var router42 = (0, import_express43.Router)();
-async function getAuthenticatedUser(req) {
-  try {
-    const supabase = createServerClientWithCookies(
-      (name) => req.cookies?.[name]
-    );
-    const { data: { user } } = await supabase.auth.getUser();
-    return user ? { id: user.id } : null;
-  } catch {
-    return null;
-  }
-}
-router42.post("/payments/wallet/topup/create-order", async (req, res) => {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const { amount, idempotencyKey } = req.body;
-    if (!amount || typeof amount !== "number") {
-      res.status(400).json({ error: "Valid amount is required" });
-      return;
-    }
-    if (!idempotencyKey || typeof idempotencyKey !== "string") {
-      res.status(400).json({ error: "idempotencyKey is required" });
-      return;
-    }
-    const result = await createTopupOrder(user.id, amount, idempotencyKey);
-    if (!result.success) {
-      res.status(400).json({ error: result.error });
-      return;
-    }
-    res.json({
-      success: true,
-      transactionId: result.transactionId,
-      razorpayOrderId: result.razorpayOrderId,
-      amount: result.amount,
-      currency: result.currency,
-      publicKeyId: result.publicKeyId
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router42.post("/payments/wallet/topup/verify", async (req, res) => {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      transaction_id
-    } = req.body;
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !transaction_id) {
-      res.status(400).json({ error: "Missing required fields" });
-      return;
-    }
-    const result = await verifyTopupPayment(
-      user.id,
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      transaction_id
-    );
-    if (!result.success) {
-      res.status(400).json({ error: result.error });
-      return;
-    }
-    res.json({
-      success: true,
-      alreadyCredited: result.alreadyCredited,
-      walletTransactionId: result.walletTransactionId,
-      newBalance: result.newBalance
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router42.post("/payments/wallet/add", async (_req, res) => {
-  res.status(405).json({
-    error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead."
-  });
-});
-router42.post("/payments/create-order", async (req, res) => {
-  try {
-    const { amount, currency, order_id } = req.body;
-    if (!amount || !order_id) {
-      res.status(400).json({ error: "amount and order_id are required" });
-      return;
-    }
-    const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
-    const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
-    if (!razorpayKeyId || !razorpayKeySecret) {
-      res.status(503).json({ error: "Payment gateway not configured", fallback: true });
-      return;
-    }
-    const auth = Buffer.from(`${razorpayKeyId}:${razorpayKeySecret}`).toString("base64");
-    const response = await fetch("https://api.razorpay.com/v1/orders", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        amount: Math.round(amount * 100),
-        currency: currency || "INR",
-        receipt: order_id,
-        payment_capture: 1
-      })
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      res.status(response.status).json({ error: data.error?.description || "Razorpay error" });
-      return;
-    }
-    if (order_id && data.id) {
-      const admin = createAdminClient();
-      const { data: orderRow } = await admin.from("orders").select("payment_details").eq("id", order_id).single();
-      if (orderRow) {
-        const existingDetails = orderRow.payment_details || {};
-        await admin.from("orders").update({
-          payment_details: {
-            ...existingDetails,
-            razorpay_order_id: data.id
-          }
-        }).eq("id", order_id);
-      }
-    }
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router42.post("/payments/verify", async (req, res) => {
-  try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !order_id) {
-      res.status(400).json({ error: "Missing payment verification fields" });
-      return;
-    }
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data: orderRow } = await admin.from("orders").select("id, customer_id, total, wallet_paid_amount, payment_status, payment_details").eq("id", order_id).single();
-    if (!orderRow) {
-      res.status(404).json({ error: "Order not found" });
-      return;
-    }
-    if (orderRow.customer_id !== user.id) {
-      res.status(403).json({ error: "Not your order" });
-      return;
-    }
-    const storedRazorpayOrderId = orderRow.payment_details?.razorpay_order_id;
-    if (!storedRazorpayOrderId) {
-      res.status(400).json({ error: "No Razorpay order linked to this order" });
-      return;
-    }
-    if (storedRazorpayOrderId !== razorpay_order_id) {
-      res.status(400).json({ error: "Razorpay order mismatch" });
-      return;
-    }
-    const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
-    const expectedSig = crypto4.createHmac("sha256", razorpayKeySecret).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
-    const sigBuf = Buffer.from(expectedSig, "hex");
-    const providedBuf = Buffer.from(razorpay_signature, "hex");
-    if (sigBuf.length !== providedBuf.length || !crypto4.timingSafeEqual(sigBuf, providedBuf)) {
-      res.status(400).json({ error: "Invalid payment signature" });
-      return;
-    }
-    if (orderRow.payment_status === "paid" && orderRow.payment_details?.razorpay_payment_id === razorpay_payment_id) {
-      res.json({ success: true, already_verified: true, payment_id: razorpay_payment_id });
-      return;
-    }
-    const gatewayAmount = orderRow.total - (orderRow.wallet_paid_amount || 0);
-    if (gatewayAmount <= 0) {
-      res.json({ success: true, payment_id: razorpay_payment_id, note: "fully_covered_by_wallet" });
-      return;
-    }
-    const { data: rpcResult, error: rpcError } = await admin.rpc(
-      "finalize_order_gateway_payment",
-      {
-        p_order_id: order_id,
-        p_gateway_order_id: razorpay_order_id,
-        p_gateway_payment_id: razorpay_payment_id,
-        p_amount: gatewayAmount
-      }
-    );
-    if (rpcError) {
-      res.status(500).json({ error: `Finalization RPC failed: ${rpcError.message}` });
-      return;
-    }
-    if (!rpcResult?.success) {
-      res.status(400).json({ error: rpcResult?.error || "Finalization failed" });
-      return;
-    }
-    res.json({
-      success: true,
-      already_finalized: rpcResult.already_finalized || false,
-      payment_id: razorpay_payment_id
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router42.get("/customer/payments/summary", async (req, res) => {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const summary = await getPaymentSummary(user.id);
-    res.json(summary);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router42.get("/customer/payments/transactions", async (req, res) => {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const type = req.query.type;
-    const status = req.query.status;
-    const result = await getTransactions(user.id, { page, limit, type, status });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router42.get("/customer/invoices", async (req, res) => {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const result = await getInvoices(user.id, { page, limit });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var payments_default = router42;
-
-// server/routes/customer-config.ts
-var import_express44 = require("express");
-init_supabase();
-var router43 = (0, import_express44.Router)();
-var CUSTOMER_FEATURE_DEFAULTS = {
-  enableSubscriptions: true,
-  enableCoupons: true,
-  enableWallet: true,
-  enableLoyalty: true,
-  enableFavorites: true,
-  enableReviews: true,
-  enableDiscover: true,
-  enableOrders: true,
-  enableCountItems: true,
-  enableLaundryBag: true,
-  enableMixedBooking: true
-};
-router43.get("/", async (_req, res) => {
-  try {
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
-    if (error) {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    const customer = data?.config?.customer || {};
-    const merged = {};
-    for (const [key, enabled] of Object.entries(CUSTOMER_FEATURE_DEFAULTS)) {
-      merged[key] = typeof customer[key] === "boolean" ? customer[key] : enabled;
-    }
-    res.json(merged);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var customer_config_default = router43;
-
-// server/routes/settings.ts
-var import_express45 = require("express");
-init_supabase();
-var router44 = (0, import_express45.Router)();
-var DEFAULTS = { pushEnabled: true, orderUpdates: true, promotions: false };
-router44.get("/", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { data, error } = await admin.from("user_settings").select("push_enabled, order_updates, promotions").eq("user_id", user.id).single();
-    if (error && error.code !== "PGRST116") {
-      res.status(500).json({ error: error.message });
-      return;
-    }
-    res.json({
-      notifications: {
-        pushEnabled: data?.push_enabled ?? DEFAULTS.pushEnabled,
-        orderUpdates: data?.order_updates ?? DEFAULTS.orderUpdates,
-        promotions: data?.promotions ?? DEFAULTS.promotions
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router44.patch("/notifications", async (req, res) => {
-  try {
-    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
-    }
-    const { pushEnabled, orderUpdates, promotions } = req.body;
-    const updates = { updated_at: (/* @__PURE__ */ new Date()).toISOString() };
-    if (typeof pushEnabled === "boolean") updates.push_enabled = pushEnabled;
-    if (typeof orderUpdates === "boolean") updates.order_updates = orderUpdates;
-    if (typeof promotions === "boolean") updates.promotions = promotions;
-    const admin = createAdminClient();
-    const { error } = await admin.from("user_settings").upsert({ user_id: user.id, ...updates }, { onConflict: "user_id" });
-    if (error) {
-      res.status(400).json({ error: error.message });
-      return;
-    }
-    const { data } = await admin.from("user_settings").select("push_enabled, order_updates, promotions").eq("user_id", user.id).single();
-    res.json({
-      notifications: {
-        pushEnabled: data?.push_enabled ?? DEFAULTS.pushEnabled,
-        orderUpdates: data?.order_updates ?? DEFAULTS.orderUpdates,
-        promotions: data?.promotions ?? DEFAULTS.promotions
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router44.patch("/password", async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword) {
-      res.status(400).json({ error: "Current and new password are required" });
-      return;
-    }
-    if (newPassword.length < 6) {
-      res.status(400).json({ error: "New password must be at least 6 characters" });
-      return;
-    }
-    const supabase = createServerClientWithCookies(
-      (name) => req.cookies?.[name],
-      (name, value, options) => res.cookie(name, value, { ...options, httpOnly: true, secure: false, sameSite: "lax", path: "/" }),
-      (name) => res.clearCookie(name, { path: "/" })
-    );
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user || !user.email) {
-      res.status(401).json({ error: "Unauthorized: email account required to change password" });
-      return;
-    }
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: user.email,
-      password: currentPassword
-    });
-    if (signInError) {
-      res.status(400).json({ error: "Current password is incorrect" });
-      return;
-    }
-    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
-    if (updateError) {
-      res.status(400).json({ error: updateError.message });
-      return;
-    }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var settings_default = router44;
-
-// server/routes/vendor-reports.ts
-var import_express46 = require("express");
-init_supabase();
-var router45 = (0, import_express46.Router)();
-router45.get("/overview", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const { startStr, endStr, service, status } = parseDateRange(req);
-    const supabase = createAdminClient();
-    const timezone = await resolveBusinessTimezone(supabase, vendorId);
-    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
-    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
-    const allOrders = orders || [];
-    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
-    const cancelledOrders = allOrders.filter((o) => o.status === "cancelled");
-    const totalRevenue = completedOrders.reduce((s, o) => s + (o.total || 0), 0);
-    const aov = completedOrders.length > 0 ? Math.round(totalRevenue / completedOrders.length) : 0;
-    const orderIds = allOrders.map((o) => o.id);
-    const stageEvents = await loadStageEvents(supabase, orderIds);
-    const { repeatRate, repeatCount, uniqueCustomers } = computeRepeatRate(allOrders);
-    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
-    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
-    const cancellationRate = allOrders.length > 0 ? Math.round(cancelledOrders.length / allOrders.length * 100) : 0;
-    const { data: reviews } = await supabase.from("reviews").select("overall").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate);
-    const allReviews = reviews || [];
-    const avgRating = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
-    const periodMs = new Date(endDate).getTime() - new Date(startDate).getTime();
-    const prevStart = new Date(new Date(startDate).getTime() - periodMs).toISOString();
-    const { data: prevOrders } = await buildOrderQuery(supabase, vendorId, prevStart, startDate, service, status);
-    const prevAll = prevOrders || [];
-    const prevCompleted = prevAll.filter((o) => ["completed", "delivered"].includes(o.status));
-    const prevRevenue = prevCompleted.reduce((s, o) => s + (o.total || 0), 0);
-    const revenueChange = prevRevenue > 0 ? Math.round((totalRevenue - prevRevenue) / prevRevenue * 100) : 0;
-    const ordersChange = prevAll.length > 0 ? Math.round((allOrders.length - prevAll.length) / prevAll.length * 100) : 0;
-    const delayed = allOrders.filter(
-      (o) => !["completed", "cancelled", "delivered"].includes(o.status) && o.estimated_delivery_at && new Date(o.estimated_delivery_at) < /* @__PURE__ */ new Date()
-    );
-    const serviceMap = {};
-    completedOrders.forEach((o) => {
-      const items = o.items_v2 || o.items || [];
-      if (Array.isArray(items)) {
-        items.forEach((item) => {
-          const name = item.serviceName || item.serviceKey || "Unknown";
-          serviceMap[name] = (serviceMap[name] || 0) + (item.unitPrice || 0) * (item.qty || 1);
-        });
-      }
-    });
-    const topServiceEntry = Object.entries(serviceMap).sort((a, b) => b[1] - a[1])[0];
-    const dayMap = {};
-    completedOrders.forEach((o) => {
-      const day = o.created_at?.slice(0, 10) || "unknown";
-      dayMap[day] = (dayMap[day] || 0) + (o.total || 0);
-    });
-    const bestDayEntry = Object.entries(dayMap).sort((a, b) => b[1] - a[1])[0];
-    const customerCounts = {};
-    allOrders.forEach((o) => {
-      if (o.customer_id) customerCounts[o.customer_id] = (customerCounts[o.customer_id] || 0) + 1;
-    });
-    const topCustomerEntry = Object.entries(customerCounts).sort((a, b) => b[1] - a[1])[0];
-    const revenueTrend = Object.entries(dayMap).map(([day, revenue]) => ({ day, revenue })).sort((a, b) => a.day.localeCompare(b.day));
-    const ordersTrendMap = {};
-    allOrders.forEach((o) => {
-      const day = o.created_at?.slice(0, 10) || "unknown";
-      ordersTrendMap[day] = (ordersTrendMap[day] || 0) + 1;
-    });
-    const ordersTrend = Object.entries(ordersTrendMap).map(([day, count]) => ({ day, count })).sort((a, b) => a.day.localeCompare(b.day));
-    res.json({
-      totalOrders: allOrders.length,
-      totalRevenue,
-      aov,
-      avgTurnaroundHrs,
-      repeatRate,
-      onTimeRate,
-      cancellationRate,
-      avgRating,
-      totalReviews: allReviews.length,
-      revenueChange,
-      ordersChange,
-      delayedCount: delayed.length,
-      topService: topServiceEntry ? { name: topServiceEntry[0], revenue: topServiceEntry[1] } : null,
-      bestDay: bestDayEntry ? { day: bestDayEntry[0], revenue: bestDayEntry[1] } : null,
-      mostActiveCustomer: topCustomerEntry ? { name: topCustomerEntry[0], orderCount: topCustomerEntry[1] } : null,
-      revenueTrend,
-      ordersTrend
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router45.get("/sales-revenue", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const { startStr, endStr, service, status } = parseDateRange(req);
-    const supabase = createAdminClient();
-    const timezone = await resolveBusinessTimezone(supabase, vendorId);
-    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
-    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
-    const allOrders = (orders || []).filter((o) => o.status !== "cancelled");
-    const subtotal = allOrders.reduce((s, o) => s + (o.amount || 0), 0);
-    const couponDiscount = allOrders.reduce((s, o) => s + (o.coupon_discount || 0), 0);
-    const subscriptionDiscount = allOrders.reduce((s, o) => s + (o.subscription_discount || 0), 0);
-    const refunds = allOrders.filter((o) => o.payment_status === "refunded").reduce((s, o) => s + (o.total || 0), 0);
-    const platformFees = allOrders.reduce((s, o) => s + (o.platform_fee || 0), 0);
-    const deliveryFees = allOrders.reduce((s, o) => s + (o.delivery_fee || 0), 0);
-    const expressSurcharges = allOrders.reduce((s, o) => s + (o.express_surcharge || 0), 0);
-    const surgeCharges = allOrders.reduce((s, o) => s + (o.surge_charge || 0), 0);
-    const taxes = allOrders.reduce((s, o) => s + (o.taxes || 0), 0);
-    const netOrderValue = subtotal - couponDiscount - subscriptionDiscount;
-    const grossRevenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
-    const estimatedCommission = Math.round(grossRevenue * 0.1);
-    const estimatedVendorEarnings = grossRevenue - refunds - estimatedCommission;
-    const expectedCustomerAmount = netOrderValue + platformFees + deliveryFees + expressSurcharges + surgeCharges + taxes;
-    if (expectedCustomerAmount !== grossRevenue && allOrders.length > 0) {
-      console.warn(`[reports] Reconciliation mismatch: expected ${expectedCustomerAmount}, got ${grossRevenue}`);
-    }
-    const dailyMap = {};
-    allOrders.forEach((o) => {
-      const day = o.created_at?.slice(0, 10) || "unknown";
-      if (!dailyMap[day]) dailyMap[day] = { revenue: 0, orders: 0 };
-      dailyMap[day].revenue += o.total || 0;
-      dailyMap[day].orders += 1;
-    });
-    const dailyRevenue = Object.entries(dailyMap).map(([day, v]) => ({ day, ...v })).sort((a, b) => a.day.localeCompare(b.day));
-    const serviceMap = {};
-    allOrders.forEach((o) => {
-      const items = o.items_v2 || o.items || [];
-      if (Array.isArray(items)) {
-        items.forEach((item) => {
-          const name = item.serviceName || item.serviceKey || "Unknown";
-          serviceMap[name] = (serviceMap[name] || 0) + (item.unitPrice || 0) * (item.qty || 1);
-        });
-      }
-    });
-    const totalServiceRevenue = Object.values(serviceMap).reduce((s, v) => s + v, 0);
-    const revenueByService = Object.entries(serviceMap).map(([name, revenue], i) => ({
-      name,
-      revenue,
-      percentage: totalServiceRevenue > 0 ? Math.round(revenue / totalServiceRevenue * 100) : 0,
-      color: COLORS[i % COLORS.length]
-    })).sort((a, b) => b.revenue - a.revenue);
-    const paymentMap = {};
-    allOrders.forEach((o) => {
-      const method = o.payment_method || "unknown";
-      paymentMap[method] = (paymentMap[method] || 0) + (o.total || 0);
-    });
-    const totalPaymentRevenue = Object.values(paymentMap).reduce((s, v) => s + v, 0);
-    const revenueByPaymentMethod = Object.entries(paymentMap).map(([method, revenue]) => ({
-      method,
-      revenue,
-      percentage: totalPaymentRevenue > 0 ? Math.round(revenue / totalPaymentRevenue * 100) : 0
-    }));
-    const dayOfWeekMap = {};
-    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    allOrders.forEach((o) => {
-      const d = new Date(o.created_at);
-      const dayName = dayNames[d.getDay()];
-      if (!dayOfWeekMap[dayName]) dayOfWeekMap[dayName] = { revenue: 0, orders: 0 };
-      dayOfWeekMap[dayName].revenue += o.total || 0;
-      dayOfWeekMap[dayName].orders += 1;
-    });
-    const revenueByDayOfWeek = dayNames.map((day) => ({
-      day,
-      revenue: dayOfWeekMap[day]?.revenue || 0,
-      orders: dayOfWeekMap[day]?.orders || 0
-    }));
-    const sorted = [...dailyRevenue].sort((a, b) => b.revenue - a.revenue);
-    const topDay = sorted[0] || null;
-    const worstDay = sorted[sorted.length - 1] || null;
-    const periodMs = new Date(endDate).getTime() - new Date(startDate).getTime();
-    const prevStart = new Date(new Date(startDate).getTime() - periodMs).toISOString();
-    const { data: prevOrders } = await buildOrderQuery(supabase, vendorId, prevStart, startDate, service, status);
-    const prevAll = (prevOrders || []).filter((o) => o.status !== "cancelled");
-    const prevRevenue = prevAll.reduce((s, o) => s + (o.total || 0), 0);
-    const revenueGrowth = prevRevenue > 0 ? Math.round((grossRevenue - prevRevenue) / prevRevenue * 100) : 0;
-    res.json({
-      subtotal,
-      couponDiscount,
-      subscriptionDiscount,
-      netOrderValue,
-      refunds,
-      platformFees,
-      deliveryFees,
-      expressSurcharges,
-      surgeCharges,
-      taxes,
-      grossRevenue,
-      estimatedCommission,
-      estimatedVendorEarnings,
-      dailyRevenue,
-      revenueByService,
-      revenueByPaymentMethod,
-      revenueByDayOfWeek,
-      topDay,
-      worstDay,
-      revenueGrowth
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router45.get("/orders-operations", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const { startStr, endStr, service, status } = parseDateRange(req);
-    const supabase = createAdminClient();
-    const timezone = await resolveBusinessTimezone(supabase, vendorId);
-    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
-    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
-    const allOrders = orders || [];
-    const orderIds = allOrders.map((o) => o.id);
-    const stageEvents = await loadStageEvents(supabase, orderIds);
-    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
-    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
-    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
-    const delayed = allOrders.filter(
-      (o) => !["completed", "cancelled", "delivered"].includes(o.status) && o.estimated_delivery_at && new Date(o.estimated_delivery_at) < /* @__PURE__ */ new Date()
-    );
-    const express2 = allOrders.filter((o) => o.express);
-    const statusCounts = {};
-    allOrders.forEach((o) => {
-      statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
-    });
-    const ORDER_STAGE_FLOW = [
-      "placed",
-      "vendor_assigned",
-      "vendor_accepted",
-      "pickup_scheduled",
-      "pickup_completed",
-      "laundry_received",
-      "sorting",
-      "tagging",
-      "washing",
-      "drying",
-      "ironing",
-      "dry_cleaning",
-      "quality_inspection",
-      "packing",
-      "ready_for_dispatch",
-      "out_for_delivery",
-      "delivered",
-      "completed"
-    ];
-    const stageIndexMap = {};
-    ORDER_STAGE_FLOW.forEach((s, i) => {
-      stageIndexMap[s] = i;
-    });
-    const funnelMilestones = [
-      { key: "received", label: "Received", stage: "vendor_assigned" },
-      { key: "accepted", label: "Accepted", stage: "vendor_accepted" },
-      { key: "picked_up", label: "Picked Up", stage: "pickup_completed" },
-      { key: "processing", label: "Processing", stage: "laundry_received" },
-      { key: "ready", label: "Ready", stage: "ready_for_dispatch" },
-      { key: "delivered", label: "Delivered", stage: "delivered" }
-    ].map((m) => {
-      const minIndex = stageIndexMap[m.stage];
-      if (minIndex === void 0) {
-        throw new Error(`[reports] Unknown funnel milestone stage: "${m.stage}". Check ORDER_STAGE_FLOW.`);
-      }
-      return { ...m, minIndex };
-    });
-    const funnelStages = funnelMilestones.map((m, i) => {
-      const count = allOrders.filter((o) => {
-        const idx = stageIndexMap[o.status];
-        return idx !== void 0 && idx >= m.minIndex;
-      }).length;
-      const prevCount = i > 0 ? allOrders.filter((o) => {
-        const idx = stageIndexMap[o.status];
-        return idx !== void 0 && idx >= funnelMilestones[i - 1].minIndex;
-      }).length : allOrders.length;
-      return {
-        stage: m.label,
-        count,
-        conversionRate: prevCount > 0 ? Math.round(count / prevCount * 100) : null,
-        avgTimeHours: null
-      };
-    });
-    const dayMap = {};
-    allOrders.forEach((o) => {
-      const day = o.created_at?.slice(0, 10) || "unknown";
-      dayMap[day] = (dayMap[day] || 0) + 1;
-    });
-    const ordersByDay = Object.entries(dayMap).map(([day, count]) => ({ day, count })).sort((a, b) => a.day.localeCompare(b.day));
-    const turnaroundDiffs = [];
-    for (const o of completedOrders) {
-      const stages = stageEvents[o.id];
-      if (!stages) continue;
-      const pickup = stages["pickup_completed"];
-      const completion = stages["delivered"] ?? stages["completed"];
-      if (pickup && completion) {
-        const hours = (new Date(completion).getTime() - new Date(pickup).getTime()) / (1e3 * 60 * 60);
-        if (hours >= 0) turnaroundDiffs.push(hours);
-      }
-    }
-    let turnaroundHistogram = [];
-    if (turnaroundDiffs.length > 0) {
-      const buckets = ["< 24h", "24-48h", "48-72h", "72-96h", "96h+"];
-      const map = {};
-      buckets.forEach((b) => map[b] = 0);
-      for (const h of turnaroundDiffs) {
-        if (h < 24) map["< 24h"]++;
-        else if (h < 48) map["24-48h"]++;
-        else if (h < 72) map["48-72h"]++;
-        else if (h < 96) map["72-96h"]++;
-        else map["96h+"]++;
-      }
-      turnaroundHistogram = buckets.map((bucket) => ({ bucket, count: map[bucket] }));
-    }
-    const attentionCategories = {
-      pendingPickup: statusCounts["placed"] || 0,
-      delayedInProgress: delayed.length,
-      qualityIssues: 0,
-      failedCancelled: statusCounts["cancelled"] || 0
-    };
-    const topDelayedOrders = delayed.slice(0, 10).map((o) => ({
-      id: o.id,
-      code: o.code,
-      customerName: o.customer_name,
-      total: o.total,
-      createdAt: o.created_at
-    }));
-    res.json({
-      totalOrders: allOrders.length,
-      completedOrders: completedOrders.length,
-      avgTurnaroundHrs,
-      onTimeRate,
-      delayedCount: delayed.length,
-      expressOrders: express2.length,
-      funnelStages,
-      statusDistribution: Object.entries(statusCounts).map(([status2, count]) => ({ status: status2, count })),
-      ordersByDay,
-      turnaroundHistogram,
-      expressVsRegular: {
-        express: { count: express2.length, revenue: express2.reduce((s, o) => s + (o.total || 0), 0) },
-        regular: { count: allOrders.length - express2.length, revenue: allOrders.filter((o) => !o.express).reduce((s, o) => s + (o.total || 0), 0) }
-      },
-      attentionCategories,
-      delayedDrillDown: { status: "processing", delayed: true, startDate: startStr, endDate: endStr, service, orderStatus: status },
-      topDelayedOrders
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router45.get("/services", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const { startStr, endStr, service, status } = parseDateRange(req);
-    const supabase = createAdminClient();
-    const timezone = await resolveBusinessTimezone(supabase, vendorId);
-    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
-    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
-    const allOrders = (orders || []).filter((o) => o.status !== "cancelled");
-    const serviceMap = {};
-    allOrders.forEach((o) => {
-      const items = o.items_v2 || o.items || [];
-      if (Array.isArray(items)) {
-        items.forEach((item) => {
-          const name = item.serviceName || item.serviceKey || "Unknown";
-          if (!serviceMap[name]) serviceMap[name] = { orderCount: 0, revenue: 0 };
-          serviceMap[name].orderCount += 1;
-          serviceMap[name].revenue += (item.unitPrice || 0) * (item.qty || 1);
-        });
-      }
-    });
-    const { data: reviews } = await supabase.from("reviews").select("overall").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate);
-    const allReviews = reviews || [];
-    const avgRating = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
-    const totalRevenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
-    const services = Object.entries(serviceMap).map(([name, data]) => ({
-      name,
-      orderCount: data.orderCount,
-      revenue: data.revenue,
-      aov: data.orderCount > 0 ? Math.round(data.revenue / data.orderCount) : 0,
-      avgTurnaroundHrs: null,
-      avgRating,
-      revenueShare: totalRevenue > 0 ? Math.round(data.revenue / totalRevenue * 100) : 0,
-      cancellationRate: 0,
-      repeatRate: 0
-    })).sort((a, b) => b.revenue - a.revenue);
-    const revenueByService = services.map((s, i) => ({
-      name: s.name,
-      revenue: s.revenue,
-      color: COLORS[i % COLORS.length]
-    }));
-    const orderVolumeByService = services.map((s, i) => ({
-      name: s.name,
-      count: s.orderCount,
-      color: COLORS[i % COLORS.length]
-    }));
-    res.json({
-      topRevenueService: services[0] ? { name: services[0].name, revenue: services[0].revenue } : null,
-      mostOrderedService: [...services].sort((a, b) => b.orderCount - a.orderCount)[0] ? { name: [...services].sort((a, b) => b.orderCount - a.orderCount)[0].name, orderCount: [...services].sort((a, b) => b.orderCount - a.orderCount)[0].orderCount } : null,
-      highestRatedService: services[0] ? { name: services[0].name, avgRating: services[0].avgRating } : null,
-      fastestService: null,
-      revenueByService,
-      orderVolumeByService,
-      services
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router45.get("/customers", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const { startStr, endStr, service, status } = parseDateRange(req);
-    const supabase = createAdminClient();
-    const timezone = await resolveBusinessTimezone(supabase, vendorId);
-    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
-    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
-    const allOrders = orders || [];
-    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
-    const customerMap = {};
-    allOrders.forEach((o) => {
-      const id = o.customer_id;
-      if (!id) return;
-      if (!customerMap[id]) customerMap[id] = { name: o.customer_name || "Unknown", orderCount: 0, totalSpend: 0, lastOrder: o.created_at };
-      customerMap[id].orderCount += 1;
-      customerMap[id].totalSpend += o.total || 0;
-      if (o.created_at > customerMap[id].lastOrder) customerMap[id].lastOrder = o.created_at;
-    });
-    const totalCustomers = Object.keys(customerMap).length;
-    const repeatCount = Object.values(customerMap).filter((c) => c.orderCount >= 2).length;
-    const newCount = totalCustomers - repeatCount;
-    const { repeatRate } = computeRepeatRate(allOrders);
-    const avgSpendPerCustomer = totalCustomers > 0 ? Math.round(completedOrders.reduce((s, o) => s + (o.total || 0), 0) / totalCustomers) : 0;
-    const segmentCounts = {};
-    CUSTOMER_SEGMENTS.forEach((s) => segmentCounts[s.label] = 0);
-    Object.values(customerMap).forEach((c) => {
-      for (const seg of CUSTOMER_SEGMENTS) {
-        if (c.orderCount >= seg.min && c.orderCount <= seg.max) {
-          segmentCounts[seg.label]++;
-          break;
-        }
-      }
-    });
-    const customerSegments = CUSTOMER_SEGMENTS.map((seg) => ({
-      label: seg.label,
-      count: segmentCounts[seg.label],
-      percentage: totalCustomers > 0 ? Math.round(segmentCounts[seg.label] / totalCustomers * 100) : 0
-    }));
-    const freqMap = {};
-    Object.values(customerMap).forEach((c) => {
-      freqMap[c.orderCount] = (freqMap[c.orderCount] || 0) + 1;
-    });
-    const orderFrequencyDistribution = Object.entries(freqMap).map(([count, customers]) => ({ orderCount: Number(count), customerCount: customers })).sort((a, b) => a.orderCount - b.orderCount);
-    const repeatTrend = [{ period: startStr + " to " + endStr, repeatRate }];
-    const topCustomers = Object.entries(customerMap).map(([id, data]) => ({ id, ...data, avgOrder: data.orderCount > 0 ? Math.round(data.totalSpend / data.orderCount) : 0 })).sort((a, b) => b.totalSpend - a.totalSpend).slice(0, 10);
-    res.json({
-      totalCustomers,
-      newCustomers: newCount,
-      repeatCustomers: repeatCount,
-      repeatRate,
-      avgSpendPerCustomer,
-      historicalCustomerValue: avgSpendPerCustomer,
-      repeatVsNew: { repeat: repeatCount, new: newCount },
-      repeatTrend,
-      orderFrequencyDistribution,
-      customerSegments,
-      topCustomers
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router45.get("/settlements", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const supabase = createAdminClient();
-    const { data: settlements } = await supabase.from("vendor_settlements").select("*").eq("vendor_id", vendorId).order("period_start", { ascending: false });
-    const allSettlements = settlements || [];
-    const pendingPayout = allSettlements.filter((s) => s.status === "pending" || s.status === "processing").reduce((sum, s) => sum + (s.net_payout || 0), 0);
-    const settledTotal = allSettlements.filter((s) => s.status === "settled").reduce((sum, s) => sum + (s.net_payout || 0), 0);
-    const totalGross = allSettlements.reduce((sum, s) => sum + (s.gross_order_value || 0), 0);
-    const totalCommission = allSettlements.reduce((sum, s) => sum + (s.commission_amount || 0), 0);
-    const totalRefunds = allSettlements.reduce((sum, s) => sum + (s.refunds_amount || 0), 0);
-    const totalAdjustments = allSettlements.reduce((sum, s) => sum + (s.adjustments_amount || 0), 0);
-    const settlementIds = allSettlements.map((s) => s.id);
-    let items = [];
-    if (settlementIds.length > 0) {
-      const { data } = await supabase.from("vendor_settlement_items").select("*, orders(code, customer_name)").in("settlement_id", settlementIds);
-      items = data || [];
-    }
-    const itemsBySettlement = {};
-    items.forEach((item) => {
-      if (!itemsBySettlement[item.settlement_id]) itemsBySettlement[item.settlement_id] = [];
-      itemsBySettlement[item.settlement_id].push(item);
-    });
-    res.json({
-      pendingPayout,
-      settledTotal,
-      totalGross,
-      totalCommission,
-      totalRefunds,
-      totalAdjustments,
-      settlements: allSettlements.map((s) => ({
-        ...s,
-        items: itemsBySettlement[s.id] || []
-      })),
-      commissionRateBps: allSettlements.length > 0 ? allSettlements[0].commission_rate_bps : 1e3
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router45.get("/ratings-issues", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const { startStr, endStr } = parseDateRange(req);
-    const supabase = createAdminClient();
-    const timezone = await resolveBusinessTimezone(supabase, vendorId);
-    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
-    const { data: reviews } = await supabase.from("reviews").select("*, orders(id, code)").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate).order("created_at", { ascending: false });
-    const allReviews = reviews || [];
-    const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-    allReviews.forEach((r) => {
-      const star = Math.round(r.overall || 0);
-      if (star >= 1 && star <= 5) distribution[star] += 1;
-    });
-    const avgOverall = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
-    const avgVendor = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.vendor_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
-    const avgPickup = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.pickup_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
-    const avgLaundry = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.laundry_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
-    const avgDelivery = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.delivery_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
-    const openIssues = (() => {
-      try {
-        const ticketIds = allReviews.filter((r) => (r.overall || 0) <= 3).map((r) => r.order_id).filter(Boolean);
-        if (ticketIds.length === 0) return 0;
-        return null;
-      } catch {
-        return null;
-      }
-    })();
-    const recentNegative = allReviews.filter((r) => (r.overall || 0) <= 3).slice(0, 10).map((r) => ({
-      id: r.id,
-      customerName: r.customer_name,
-      overall: r.overall,
-      comment: r.comment,
-      createdAt: r.created_at,
-      orderCode: r.orders?.code || null,
-      status: null
-    }));
-    const issueCategories = [];
-    const weekMap = {};
-    allReviews.forEach((r) => {
-      const d = new Date(r.created_at);
-      const weekStart = new Date(d);
-      weekStart.setDate(d.getDate() - d.getDay());
-      const key = weekStart.toISOString().slice(0, 10);
-      if (!weekMap[key]) weekMap[key] = { total: 0, count: 0 };
-      weekMap[key].total += r.overall || 0;
-      weekMap[key].count += 1;
-    });
-    const ratingTrend = Object.entries(weekMap).map(([week, v]) => ({ week, avg: Math.round(v.total / v.count * 10) / 10, count: v.count })).sort((a, b) => a.week.localeCompare(b.week));
-    res.json({
-      avgOverall,
-      avgVendor,
-      avgPickup,
-      avgLaundry,
-      avgDelivery,
-      openIssues,
-      distribution,
-      ratingTrend,
-      issueCategories,
-      recentNegative,
-      totalReviews: allReviews.length
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-router45.get("/cancellations", async (req, res) => {
-  try {
-    const vendorId = await resolveVendorId(req, res);
-    if (!vendorId) return;
-    const { startStr, endStr, service } = parseDateRange(req);
-    const supabase = createAdminClient();
-    const timezone = await resolveBusinessTimezone(supabase, vendorId);
-    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
-    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service);
-    const allOrders = orders || [];
-    const cancelled = allOrders.filter((o) => o.status === "cancelled");
-    const cancelRate = allOrders.length > 0 ? Math.round(cancelled.length / allOrders.length * 100) : 0;
-    const refundTotal = cancelled.reduce((s, o) => s + (o.total || 0), 0);
-    const vendorRejections = cancelled.filter((o) => o.cancelled_by === "vendor").length;
-    const customerCancellations = cancelled.filter((o) => o.cancelled_by === "customer").length;
-    const reasonMap = {};
-    cancelled.forEach((o) => {
-      const note = o.notes || "No reason specified";
-      reasonMap[note] = (reasonMap[note] || 0) + 1;
-    });
-    const reasonsBreakdown = Object.entries(reasonMap).map(([reason, count]) => ({
-      reason,
-      count,
-      percentage: cancelled.length > 0 ? Math.round(count / cancelled.length * 100) : 0,
-      lostRevenue: Math.round(refundTotal * count / (cancelled.length || 1))
-    })).sort((a, b) => b.count - a.count).slice(0, 5);
-    const weekMap = {};
-    cancelled.forEach((o) => {
-      const d = new Date(o.created_at);
-      const weekStart = new Date(d);
-      weekStart.setDate(d.getDate() - d.getDay());
-      const key = weekStart.toISOString().slice(0, 10);
-      weekMap[key] = (weekMap[key] || 0) + 1;
-    });
-    const cancellationTrend = Object.entries(weekMap).map(([week, count]) => ({ week, count })).sort((a, b) => a.week.localeCompare(b.week));
-    const typeMap = {};
-    cancelled.forEach((o) => {
-      const type = o.cancelled_by || "unknown";
-      typeMap[type] = (typeMap[type] || 0) + 1;
-    });
-    const cancellationByType = Object.entries(typeMap).map(([type, count]) => ({ type, count }));
-    const cancelDrillDown = { status: "cancelled", startDate, endDate };
-    res.json({
-      cancelledOrders: cancelled.length,
-      vendorRejections,
-      customerCancellations,
-      cancelRate,
-      refundTotal,
-      estimatedLostRevenue: refundTotal,
-      cancellationTrend,
-      cancellationByType,
-      reasonsBreakdown,
-      cancelDrillDown,
-      topCancelledOrders: cancelled.slice(0, 10).map((o) => ({
-        id: o.id,
-        code: o.code,
-        customerName: o.customer_name,
-        total: o.total,
-        createdAt: o.created_at,
-        notes: o.notes,
-        cancelledBy: o.cancelled_by || null
-      }))
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-var vendor_reports_default = router45;
-
-// server/routes/webhooks.ts
-var import_express47 = require("express");
-init_supabase();
-var router46 = (0, import_express47.Router)();
-var RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
-router46.post("/razorpay", async (req, res) => {
-  try {
-    if (!RAZORPAY_WEBHOOK_SECRET) {
-      console.warn("[webhook] RAZORPAY_WEBHOOK_SECRET not configured, rejecting webhook");
-      res.status(500).json({ error: "Webhook secret not configured" });
-      return;
-    }
-    const signature = req.headers["x-razorpay-signature"];
-    if (!signature) {
-      res.status(400).json({ error: "Missing webhook signature" });
-      return;
-    }
-    const rawBody = req.body;
-    const crypto8 = await import("crypto");
-    const expectedSig = crypto8.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
-    if (Buffer.byteLength(expectedSig) !== Buffer.byteLength(signature)) {
-      console.warn("[webhook] Invalid signature length");
-      res.status(401).json({ error: "Invalid webhook signature" });
-      return;
-    }
-    if (!crypto8.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
-      console.warn("[webhook] Invalid signature");
-      res.status(401).json({ error: "Invalid webhook signature" });
-      return;
-    }
-    const eventId = req.headers["x-razorpay-event-id"];
-    if (!eventId) {
-      res.status(400).json({ error: "Missing event ID" });
-      return;
-    }
-    const admin = createAdminClient();
-    const { error: insertError } = await admin.from("payment_webhook_events").insert({
-      gateway: "razorpay",
-      event_id: eventId,
-      event_type: "unknown",
-      payload: null,
-      status: "pending"
-    });
-    if (insertError && insertError.code === "23505") {
-      const { data: existingEvent } = await admin.from("payment_webhook_events").select("status").eq("event_id", eventId).single();
-      const existingStatus = existingEvent?.status;
-      if (existingStatus === "processed") {
-        res.json({ status: "already_processed" });
-        return;
-      }
-      if (existingStatus === "pending") {
-        res.status(202).json({ status: "already_in_progress" });
-        return;
-      }
-      if (existingStatus === "failed") {
-        let parsedEvent = null;
-        try {
-          parsedEvent = JSON.parse(rawBody.toString());
-        } catch {
-        }
-        const { data: reclaimed, error: reclaimError } = await admin.from("payment_webhook_events").update({
-          status: "pending",
-          processed_at: null,
-          event_type: parsedEvent?.event || "unknown",
-          payload: parsedEvent?.payload || null
-        }).eq("event_id", eventId).eq("status", "failed").select("status").single();
-        if (reclaimError || !reclaimed) {
-          res.status(202).json({ status: "already_in_progress" });
-          return;
-        }
-      }
-    }
-    if (insertError && insertError.code !== "23505") {
-      console.error("[webhook] Failed to record event:", insertError.message);
-      res.status(500).json({ error: "Failed to record event" });
-      return;
-    }
-    let event;
-    try {
-      event = JSON.parse(rawBody.toString());
-    } catch {
-      await admin.from("payment_webhook_events").update({ status: "failed", processed_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("event_id", eventId);
-      res.status(400).json({ error: "Invalid JSON payload" });
-      return;
-    }
-    await admin.from("payment_webhook_events").update({
-      event_type: event.event,
-      payload: event.payload
-    }).eq("event_id", eventId);
-    switch (event.event) {
-      case "payment.captured": {
-        const paymentEntity = event.payload?.payment?.entity;
-        if (paymentEntity) {
-          const razorpayOrderId = paymentEntity.order_id;
-          const razorpayPaymentId = paymentEntity.id;
-          if (razorpayOrderId && razorpayPaymentId) {
-            const result = await markPaymentCaptureVerified(
-              razorpayOrderId,
-              razorpayPaymentId
-            );
-            console.log(
-              `[webhook] payment.captured processed: eventId=${eventId}, orderId=${razorpayOrderId}, transactionId=${result.transactionId}, finalized=${result.finalized}`
-            );
-          }
-        }
-        break;
-      }
-      case "payment.failed": {
-        const paymentEntity = event.payload?.payment?.entity;
-        if (paymentEntity) {
-          const razorpayOrderId = paymentEntity.order_id;
-          const failureReason = paymentEntity.error_description || "Payment failed";
-          if (razorpayOrderId) {
-            await admin.from("payment_transactions").update({
-              payment_status: "failed",
-              failure_reason: failureReason,
-              updated_at: (/* @__PURE__ */ new Date()).toISOString()
-            }).eq("gateway_order_id", razorpayOrderId).in("payment_status", ["created", "pending", "authorized"]);
-            console.log(
-              `[webhook] payment.failed processed: eventId=${eventId}, orderId=${razorpayOrderId}`
-            );
-          }
-        }
-        break;
-      }
-      case "refund.created":
-      case "refund.processed":
-      case "refund.failed": {
-        const refundEntity = event.payload?.refund?.entity;
-        if (refundEntity?.id) {
-          const resolved = await resolveLocalRefund(refundEntity);
-          if (!resolved.success) {
-            if (resolved.critical) {
-              await admin.from("payment_webhook_events").update({
-                status: "processed",
-                processed_at: (/* @__PURE__ */ new Date()).toISOString(),
-                payload: { ...event.payload, critical_error: resolved.error }
-              }).eq("event_id", eventId);
-              res.json({ status: "critical_conflict" });
-              return;
-            }
-            console.warn(
-              `[webhook] ${event.event}: resolve failed \u2014 ${resolved.error} (eventId=${eventId}, gatewayRefundId=${refundEntity.id})`
-            );
-            break;
-          }
-          switch (event.event) {
-            case "refund.created": {
-              const result = await handleRefundCreatedWebhook(resolved.refund, refundEntity);
-              console.log(
-                `[webhook] refund.created: gatewayRefundId=${refundEntity.id}, success=${result.success}, refundStatus=${result.refundStatus}`
-              );
-              break;
-            }
-            case "refund.processed": {
-              const result = await handleRefundProcessedWebhook(resolved.refund, refundEntity);
-              if (result.error === "reconciliation_required") {
-                console.warn(
-                  `[webhook] refund.processed: reconciliation_required, gatewayRefundId=${refundEntity.id}`
-                );
-              } else {
-                console.log(
-                  `[webhook] refund.processed: success=${result.success}, walletMoved=${result.walletMoved || false}, gatewayRefundId=${refundEntity.id}`
-                );
-              }
-              break;
-            }
-            case "refund.failed": {
-              const result = await handleRefundFailedWebhook(resolved.refund, refundEntity);
-              console.log(
-                `[webhook] refund.failed: success=${result.success}, gatewayRefundId=${refundEntity.id}`
-              );
-              break;
-            }
-          }
-        }
-        break;
-      }
-      default:
-        console.log(`[webhook] Unhandled event type: ${event.event} (eventId=${eventId})`);
-    }
-    await admin.from("payment_webhook_events").update({
-      status: "processed",
-      processed_at: (/* @__PURE__ */ new Date()).toISOString()
-    }).eq("event_id", eventId);
-    res.json({ status: "ok" });
-  } catch (err) {
-    console.error("[webhook] Error:", err.message);
-    try {
-      const admin = createAdminClient();
-      const eventId = req.headers["x-razorpay-event-id"];
-      if (eventId) {
-        await admin.from("payment_webhook_events").update({ status: "failed", processed_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("event_id", eventId);
-      }
-    } catch (markErr) {
-      console.error("[webhook] Failed to mark event as failed:", markErr.message);
-    }
-    res.status(500).json({ error: "Webhook processing failed" });
-  }
-});
-var webhooks_default = router46;
-
 // server/services/reconciliation-service.ts
 var CHECK_CODES = {
   C1: "refund_reconciliation_required",
@@ -8631,6 +6355,7 @@ async function runReconciliation(opts) {
   if (runErr || !runRow) {
     summary.status = "failed";
     summary.error = `failed to insert run: ${runErr?.message ?? "no row returned"}`;
+    if (runErr?.code === "23505") summary.failureCode = "active_run_conflict";
     return summary;
   }
   summary.runId = runRow.id;
@@ -8732,7 +6457,7 @@ async function runReconciliation(opts) {
 }
 
 // server/services/reconciliation-alerts.ts
-var import_crypto4 = __toESM(require("crypto"));
+var import_crypto3 = __toESM(require("crypto"));
 function emptyStats() {
   return {
     candidates: 0,
@@ -8862,7 +6587,7 @@ async function dispatchReconciliationAlerts(opts) {
         });
         const headers = { "content-type": "application/json" };
         if (webhookSecret) {
-          headers["x-recon-alert-signature"] = import_crypto4.default.createHmac("sha256", webhookSecret).update(body).digest("hex");
+          headers["x-recon-alert-signature"] = import_crypto3.default.createHmac("sha256", webhookSecret).update(body).digest("hex");
         }
         wh = await postWebhook(webhookUrl, body, headers, fetchImpl);
         evWebhook = wh.state;
@@ -8952,11 +6677,2517 @@ async function runReconciliationWithAlerts(opts) {
   return { summary, alerts };
 }
 
-// server/routes/reconciliation-cron.ts
+// server/services/reconciliation-run-controller.ts
+var RUN_STALE_MS = 15 * 60 * 1e3;
+var COOLDOWN_MS = 60 * 1e3;
+var STALE_ABANDON_PREFIX = "abandoned:";
+var STALE_ABANDON_ERROR = `${STALE_ABANDON_PREFIX} not finalized within ${Math.round(
+  RUN_STALE_MS / 6e4
+)}min`;
+async function evaluateRunGate(client, opts) {
+  const now = opts.now ?? /* @__PURE__ */ new Date();
+  const nowIso = now.toISOString();
+  const nowMs = now.getTime();
+  let activeRows = [];
+  try {
+    const activeRes = await client.from("reconciliation_runs").select("id, started_at").eq("status", "running");
+    if (activeRes?.error) {
+      console.error(
+        "[reconciliation-run] active-run query failed (fail-open):",
+        activeRes.error.message
+      );
+    } else {
+      activeRows = activeRes?.data ?? [];
+    }
+  } catch (e) {
+    console.error(
+      "[reconciliation-run] active-run query failed (fail-open):",
+      String(e?.message ?? e)
+    );
+  }
+  const fresh = activeRows.filter((r) => r?.started_at && nowMs - Date.parse(r.started_at) < RUN_STALE_MS).sort((a, b) => String(a.started_at).localeCompare(String(b.started_at)));
+  if (fresh.length > 0) {
+    return {
+      allowed: false,
+      status: 409,
+      body: {
+        error: "reconciliation_already_running",
+        activeRunId: fresh[0].id,
+        startedAt: fresh[0].started_at
+      }
+    };
+  }
+  const stale = activeRows.filter(
+    (r) => r?.started_at && nowMs - Date.parse(r.started_at) >= RUN_STALE_MS
+  );
+  const abandonedIds = [];
+  for (const row of stale) {
+    try {
+      const upd = await client.from("reconciliation_runs").update({
+        status: "failed",
+        error: STALE_ABANDON_ERROR,
+        finished_at: nowIso
+      }).eq("id", row.id).eq("status", "running").select("id");
+      if (upd?.error) {
+        console.error(
+          "[reconciliation-run] stale abandon update failed:",
+          upd.error.message
+        );
+      } else if (Array.isArray(upd?.data) && upd.data.length > 0) {
+        abandonedIds.push(row.id);
+      }
+    } catch (e) {
+      console.error(
+        "[reconciliation-run] stale abandon update failed:",
+        String(e?.message ?? e)
+      );
+    }
+  }
+  if (abandonedIds.length > 0) {
+    try {
+      const aRes = await client.from("audit_logs").insert({
+        user_id: null,
+        action: "reconciliation.run_abandoned",
+        resource: "reconciliation_runs",
+        details: {
+          run_ids: abandonedIds,
+          threshold_ms: RUN_STALE_MS,
+          abandoned_at: nowIso
+        }
+      });
+      if (aRes?.error) {
+        console.error(
+          "[reconciliation-run] abandon audit failed:",
+          aRes.error.message
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[reconciliation-run] abandon audit failed:",
+        String(e?.message ?? e)
+      );
+    }
+  }
+  if (opts.trigger === "manual") {
+    try {
+      const lastRes = await client.from("reconciliation_runs").select("finished_at, error").eq("trigger_source", "manual").not("finished_at", "is", null).order("finished_at", { ascending: false }).limit(10);
+      if (lastRes?.error) {
+        console.error(
+          "[reconciliation-run] cooldown query failed (fail-open):",
+          lastRes.error.message
+        );
+      } else {
+        const rows = lastRes?.data ?? [];
+        const last = rows.find(
+          (r) => r?.finished_at && !(typeof r.error === "string" && r.error.startsWith(STALE_ABANDON_PREFIX))
+        );
+        if (last?.finished_at) {
+          const age = nowMs - Date.parse(last.finished_at);
+          if (age >= 0 && age < COOLDOWN_MS) {
+            const retryAfterSeconds = Math.max(
+              1,
+              Math.ceil((COOLDOWN_MS - age) / 1e3)
+            );
+            return {
+              allowed: false,
+              status: 429,
+              body: {
+                error: "reconciliation_rate_limited",
+                retryAfterSeconds
+              },
+              retryAfterSeconds
+            };
+          }
+        }
+      }
+    } catch (e) {
+      console.error(
+        "[reconciliation-run] cooldown query failed (fail-open):",
+        String(e?.message ?? e)
+      );
+    }
+  }
+  return { allowed: true };
+}
+function toRunResponse(summary, alerts) {
+  if (summary.failureCode === "active_run_conflict") {
+    return {
+      status: 409,
+      body: { error: "reconciliation_already_running" }
+    };
+  }
+  const {
+    alertCandidates: _candidates,
+    failureCode: _failureCode,
+    ...rest
+  } = summary;
+  return {
+    status: summary.status === "failed" ? 500 : 200,
+    body: { ...rest, alerts }
+  };
+}
+async function executeGuardedRun(opts) {
+  const gate = await evaluateRunGate(opts.client, {
+    trigger: opts.trigger,
+    now: opts.now
+  });
+  if (!gate.allowed) {
+    return {
+      status: gate.status,
+      body: gate.body,
+      ...gate.retryAfterSeconds !== void 0 ? { retryAfterSeconds: gate.retryAfterSeconds } : {}
+    };
+  }
+  const { summary, alerts } = await runReconciliationWithAlerts({
+    client: opts.client,
+    trigger: opts.trigger,
+    ...opts.now ? { now: opts.now } : {}
+  });
+  const resp = toRunResponse(summary, alerts);
+  if (opts.trigger === "manual" && summary.failureCode !== "active_run_conflict") {
+    try {
+      const aRes = await opts.client.from("audit_logs").insert({
+        user_id: opts.initiatorId ?? null,
+        action: "reconciliation.manual_run",
+        resource: "reconciliation_runs",
+        details: {
+          run_id: summary.runId,
+          status: summary.status,
+          trigger: "manual",
+          failed_checks: summary.failedChecks
+        }
+      });
+      if (aRes?.error) {
+        console.error(
+          "[reconciliation-run] manual-run audit failed:",
+          aRes.error.message
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[reconciliation-run] manual-run audit failed:",
+        String(e?.message ?? e)
+      );
+    }
+  }
+  return resp;
+}
+async function executeManualRun(opts) {
+  return executeGuardedRun({ ...opts, trigger: "manual" });
+}
+
+// server/routes/admin-reconciliation.ts
+var import_express35 = require("express");
+init_supabase();
+var router34 = (0, import_express35.Router)();
+function requireAdmin2(req, res, next) {
+  const role = req.userRole;
+  if (!role || !["admin", "superadmin"].includes(role)) {
+    res.status(403).json({ error: "Forbidden: insufficient role" });
+    return;
+  }
+  next();
+}
+router34.use(requireAdmin2);
+router34.post("/run", async (req, res) => {
+  try {
+    const initiatorId = req.user?.id ?? null;
+    const result = await executeManualRun({
+      client: createAdminClient(),
+      initiatorId
+    });
+    if (result.retryAfterSeconds !== void 0) {
+      res.set("Retry-After", String(result.retryAfterSeconds));
+    }
+    res.status(result.status).json(result.body);
+  } catch (e) {
+    console.error("[admin-reconciliation] unexpected error:", e?.message ?? e);
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+var admin_reconciliation_default = router34;
+
+// server/routes/order-stages.ts
+var import_express36 = require("express");
+init_supabase();
+var router35 = (0, import_express36.Router)();
+router35.get("/", async (_req, res) => {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("order_stage_definitions").select("*").order("sort_order");
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var order_stages_default = router35;
+
+// server/routes/chat.ts
+var import_express37 = require("express");
+init_supabase();
+var router36 = (0, import_express37.Router)();
+router36.get("/", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const limit = parseInt(req.query.limit) || 50;
+    const { data, error } = await admin.from("chat_messages").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(limit);
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json((data || []).reverse());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router36.post("/", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("chat_messages").insert({ ...req.body, user_id: user.id }).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router36.post("/ask", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { content } = req.body;
+    if (!content) {
+      res.status(400).json({ error: "Message content is required" });
+      return;
+    }
+    const admin = createAdminClient();
+    await admin.from("chat_messages").insert({ role: "user", content, user_id: user.id }).select().single();
+    const { data: profiles } = await admin.from("user_profiles").select("name, role").eq("id", user.id).limit(1);
+    const profile = profiles?.[0];
+    const userName = profile?.name || "User";
+    const userRole = profile?.role || "customer";
+    const lower = content.toLowerCase();
+    let reply = "";
+    if (/\border\b/.test(lower) && /(status|track|where|follow|update)/.test(lower)) {
+      const { data: orders } = await admin.from("orders").select("code, status, total, created_at, pickup_area, vendor_name").eq("customer_id", user.id).order("created_at", { ascending: false }).limit(5);
+      if (orders && orders.length > 0) {
+        reply = `Here are your recent orders:
+${orders.map(
+          (o, i) => `${i + 1}. **${o.code}** \u2014 ${o.status.replace(/_/g, " ")} (\u20B9${o.total}) at ${o.pickup_area || "\u2014"}`
+        ).join("\n")}`;
+      } else {
+        reply = "You don't have any orders yet. Head to **Book Pickup** to place your first order!";
+      }
+    } else if (/(vendor|laundromat|shop|store|service)/.test(lower) && /(near|find|list|show|available)/.test(lower)) {
+      const { data: vendors } = await admin.from("vendors").select("name, area, rating, is_open").eq("verified", true).limit(10);
+      if (vendors && vendors.length > 0) {
+        const open = vendors.filter((v) => v.is_open);
+        reply = `We have **${vendors.length} verified vendors**. Currently **${open.length}** are open:
+${vendors.slice(0, 6).map(
+          (v) => `\u2022 **${v.name}** \u2014 ${v.area || "\u2014"} ${v.is_open ? "\u{1F7E2} Open" : "\u{1F534} Closed"} ${v.rating ? "\u2605" + v.rating : ""}`
+        ).join("\n")}${vendors.length > 6 ? `
+\u2026and ${vendors.length - 6} more.` : ""}`;
+      } else {
+        reply = "No vendors are currently available in your area. Check back soon!";
+      }
+    } else if (/(price|cost|rate|how much|pricing|charges)/.test(lower)) {
+      const { data: services } = await admin.from("services").select("name, unit").limit(10);
+      if (services && services.length > 0) {
+        reply = `Our pricing:
+${services.map(
+          (s) => `\u2022 **${s.name}** (${s.unit})`
+        ).join("\n")}
+
+*Prices may vary by vendor. Check the booking page for exact quotes.*`;
+      } else {
+        reply = "Visit the **Book Pickup** page to see service pricing in your area.";
+      }
+    } else if (/(wallet|balance|money|payment|pay)/.test(lower)) {
+      const { data: profiles2 } = await admin.from("user_profiles").select("wallet_balance, loyalty_points").eq("id", user.id).limit(1);
+      const wallet = profiles2?.[0];
+      if (wallet) {
+        reply = `Your wallet balance is **\u20B9${wallet.wallet_balance || 0}** with **${wallet.loyalty_points || 0} loyalty points**.`;
+      } else {
+        reply = "You don't have a wallet yet. It will be created when you make your first payment.";
+      }
+    } else if (/(help|hi|hello|hey)/.test(lower)) {
+      reply = `Hello **${userName}**! \u{1F44B} I can help you with:
+\u2022 **Track orders** \u2014 say "order status"
+\u2022 **Find vendors** \u2014 say "nearby vendors"
+\u2022 **Check pricing** \u2014 say "pricing"
+\u2022 **Wallet balance** \u2014 say "my balance"
+
+What would you like to know?`;
+    } else {
+      const { data: recentOrders } = await admin.from("orders").select("code, status").eq("customer_id", user.id).order("created_at", { ascending: false }).limit(1);
+      const recentOrder = recentOrders?.[0];
+      reply = `Thanks for reaching out, **${userName}**! I can check order status, find vendors, show pricing, or help with your wallet.
+
+${recentOrder ? `Your most recent order **${recentOrder.code}** is **${recentOrder.status.replace(/_/g, " ")}**.` : ""}
+
+How can I assist you today?`;
+    }
+    const { data: saved } = await admin.from("chat_messages").insert({
+      role: "assistant",
+      content: reply,
+      user_id: user.id
+    }).select().single();
+    res.json({ reply: saved?.content || reply });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var chat_default = router36;
+
+// server/routes/favorites.ts
+var import_express38 = require("express");
+init_supabase();
+var router37 = (0, import_express38.Router)();
+router37.get("/", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("favorite_vendors").select("vendor_id, created_at, vendors(*)").eq("user_id", user.id).order("created_at", { ascending: false });
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router37.post("/", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { vendor_id } = req.body;
+    if (!vendor_id) {
+      res.status(400).json({ error: "vendor_id required" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("favorite_vendors").insert({ user_id: user.id, vendor_id }).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router37.delete("/:vendor_id", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { vendor_id } = req.params;
+    const admin = createAdminClient();
+    const { error } = await admin.from("favorite_vendors").delete().eq("user_id", user.id).eq("vendor_id", vendor_id);
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var favorites_default = router37;
+
+// server/routes/geocode.ts
+var import_express39 = require("express");
+var cache2 = /* @__PURE__ */ new Map();
+var CACHE_TTL_MS = 60 * 60 * 1e3;
+function getCached(key) {
+  const entry = cache2.get(key);
+  if (!entry || Date.now() > entry.ttl) {
+    cache2.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+function setCache(key, data) {
+  cache2.set(key, { data, ttl: Date.now() + CACHE_TTL_MS });
+}
+var lastNominatimCall = 0;
+async function nominatimFetch(url) {
+  const now = Date.now();
+  const wait = Math.max(0, 1e3 - (now - lastNominatimCall));
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastNominatimCall = Date.now();
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "LaundryHomeApp/1.0 (demo)",
+      "Accept-Language": "en"
+    }
+  });
+  if (!res.ok) throw new Error(`Nominatim error: ${res.status}`);
+  return res.json();
+}
+var KNOWN_AREAS3 = {
+  "Indiranagar": { lat: 12.9719, lng: 77.6413, displayName: "Indiranagar, Bengaluru", pincode: "560038" },
+  "Koramangala": { lat: 12.9352, lng: 77.6245, displayName: "Koramangala, Bengaluru", pincode: "560034" },
+  "HSR Layout": { lat: 12.9116, lng: 77.6389, displayName: "HSR Layout, Bengaluru", pincode: "560102" },
+  "Jayanagar": { lat: 12.925, lng: 77.5938, displayName: "Jayanagar, Bengaluru", pincode: "560011" },
+  "BTM Layout": { lat: 12.9166, lng: 77.6101, displayName: "BTM Layout, Bengaluru", pincode: "560076" },
+  "Whitefield": { lat: 12.9698, lng: 77.75, displayName: "Whitefield, Bengaluru", pincode: "560066" },
+  "MG Road": { lat: 12.975, lng: 77.6067, displayName: "MG Road, Bengaluru", pincode: "560001" },
+  "Marathahalli": { lat: 12.9591, lng: 77.6974, displayName: "Marathahalli, Bengaluru", pincode: "560037" },
+  "Electronic City": { lat: 12.8399, lng: 77.677, displayName: "Electronic City, Bengaluru", pincode: "560100" },
+  "JP Nagar": { lat: 12.9063, lng: 77.5857, displayName: "JP Nagar, Bengaluru", pincode: "560078" },
+  "Horamavu": { lat: 13.0208, lng: 77.6583, displayName: "Horamavu, Bengaluru", pincode: "560043" },
+  "Hebbal": { lat: 13.0358, lng: 77.597, displayName: "Hebbal, Bengaluru", pincode: "560024" },
+  "Banashankari": { lat: 12.925, lng: 77.5468, displayName: "Banashankari, Bengaluru", pincode: "560050" },
+  "Rajajinagar": { lat: 12.99, lng: 77.5527, displayName: "Rajajinagar, Bengaluru", pincode: "560010" },
+  "Malleshwaram": { lat: 13.0031, lng: 77.571, displayName: "Malleshwaram, Bengaluru", pincode: "560003" },
+  "Basavanagudi": { lat: 12.94, lng: 77.57, displayName: "Basavanagudi, Bengaluru", pincode: "560004" },
+  "Yeshwanthpur": { lat: 13.02, lng: 77.545, displayName: "Yeshwanthpur, Bengaluru", pincode: "560022" },
+  "Vijay Nagar": { lat: 12.97, lng: 77.53, displayName: "Vijay Nagar, Bengaluru", pincode: "560040" },
+  "RT Nagar": { lat: 13.02, lng: 77.595, displayName: "RT Nagar, Bengaluru", pincode: "560032" },
+  "Kengeri": { lat: 12.91, lng: 77.48, displayName: "Kengeri, Bengaluru", pincode: "560060" }
+};
+function findClosestArea2(lat, lng) {
+  let closest = null;
+  for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
+    const d = haversineKm4(lat, lng, info.lat, info.lng);
+    if (!closest || d < closest.distance) {
+      closest = { name, pincode: info.pincode, lat: info.lat, lng: info.lng, distance: d };
+    }
+  }
+  return closest;
+}
+var router38 = (0, import_express39.Router)();
+router38.get("/reverse", async (req, res) => {
+  try {
+    const lat = req.query.lat;
+    const lng = req.query.lng;
+    if (!lat || !lng) {
+      res.status(400).json({ error: "lat and lng required" });
+      return;
+    }
+    const latNum = parseFloat(lat);
+    const lngNum = parseFloat(lng);
+    const cacheKey = `reverse:${latNum.toFixed(5)},${lngNum.toFixed(5)}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+    for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
+      const d = haversineKm4(latNum, lngNum, info.lat, info.lng);
+      if (d < 1) {
+        const result2 = { area: name, city: "Bengaluru", pincode: info.pincode, lat: info.lat, lng: info.lng };
+        setCache(cacheKey, result2);
+        res.json(result2);
+        return;
+      }
+    }
+    const data = await nominatimFetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${latNum}&lon=${lngNum}&format=json&addressdetails=1`
+    );
+    if (!data || data.error) {
+      const closest = findClosestArea2(latNum, lngNum);
+      if (closest) {
+        const result2 = { area: closest.name, city: "Bengaluru", pincode: closest.pincode, lat: latNum, lng: lngNum };
+        setCache(cacheKey, result2);
+        res.json(result2);
+        return;
+      }
+      res.json({ area: "Unknown", city: "Bengaluru", pincode: "560001", lat: latNum, lng: lngNum });
+      return;
+    }
+    const addr = data.address || {};
+    const nominatimArea = addr.suburb || addr.neighbourhood || addr.locality || addr.town || addr.city || "";
+    const city = addr.city || addr.town || addr.county || "Bengaluru";
+    const pincode = addr.postcode || "560001";
+    const isKnown = Object.keys(KNOWN_AREAS3).some(
+      (k) => k.toLowerCase() === nominatimArea.toLowerCase()
+    );
+    let area = nominatimArea || "Unknown";
+    if (!isKnown) {
+      const closest = findClosestArea2(latNum, lngNum);
+      if (closest && closest.distance < 3) {
+        area = closest.name;
+      }
+    }
+    const result = { area, city, pincode, lat: latNum, lng: lngNum };
+    setCache(cacheKey, result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router38.get("/search", async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim();
+    if (!q || q.length < 2) {
+      res.json([]);
+      return;
+    }
+    const cacheKey = `search:${q.toLowerCase()}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+    const results = [];
+    const ql = q.toLowerCase();
+    for (const [name, info] of Object.entries(KNOWN_AREAS3)) {
+      if (name.toLowerCase().includes(ql) || info.pincode.startsWith(q)) {
+        results.push({ label: info.displayName, area: name, city: "Bengaluru", pincode: info.pincode, lat: info.lat, lng: info.lng });
+      }
+    }
+    try {
+      const data = await nominatimFetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1&countrycodes=in`
+      );
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          const addr = item.address || {};
+          const name = addr.suburb || addr.neighbourhood || addr.locality || addr.town || addr.city || item.display_name?.split(",")[0] || q;
+          const cityName = addr.city || addr.town || addr.county || "Bengaluru";
+          const pincode2 = addr.postcode || "";
+          const alreadyExists = results.some((r) => r.area.toLowerCase() === name.toLowerCase());
+          if (!alreadyExists) {
+            const fallbackPincode = pincode2 || "560001";
+            results.push({ label: item.display_name || name, area: name, city: cityName, pincode: fallbackPincode, lat: parseFloat(item.lat), lng: parseFloat(item.lon) });
+          }
+        }
+      }
+    } catch {
+    }
+    setCache(cacheKey, results);
+    res.json(results.slice(0, 6));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+function haversineKm4(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+var geocode_default = router38;
+
+// server/routes/routing.ts
+var import_express40 = require("express");
+var ORS_BASE = "https://api.openrouteservice.org/v2";
+var router39 = (0, import_express40.Router)();
+router39.get("/directions", async (req, res) => {
+  try {
+    const apiKey = process.env.OPENROUTESERVICE_API_KEY;
+    if (!apiKey) {
+      res.status(500).json({ error: "OPENROUTESERVICE_API_KEY not configured" });
+      return;
+    }
+    const { start_lat, start_lng, end_lat, end_lng, profile } = req.query;
+    if (!start_lat || !start_lng || !end_lat || !end_lng) {
+      res.status(400).json({ error: "start_lat, start_lng, end_lat, end_lng are required" });
+      return;
+    }
+    const orsProfile = profile || "driving-car";
+    const coords = `${start_lng},${start_lat}|${end_lng},${end_lat}`;
+    const response = await fetch(
+      `${ORS_BASE}/directions/${orsProfile}/json?coordinates=${coords}`,
+      {
+        headers: {
+          Authorization: apiKey,
+          Accept: "application/json, application/geo+json"
+        }
+      }
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      res.status(response.status).json({ error: "OpenRouteService error", detail: text });
+      return;
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router39.get("/geocode/search", async (req, res) => {
+  try {
+    const apiKey = process.env.OPENROUTESERVICE_API_KEY;
+    if (!apiKey) {
+      res.status(500).json({ error: "OPENROUTESERVICE_API_KEY not configured" });
+      return;
+    }
+    const { text } = req.query;
+    if (!text) {
+      res.status(400).json({ error: "text query param is required" });
+      return;
+    }
+    const response = await fetch(
+      `https://api.openrouteservice.org/geocode/search?api_key=${apiKey}&text=${encodeURIComponent(text)}&boundary.country=IND&size=5`,
+      { headers: { Accept: "application/json" } }
+    );
+    if (!response.ok) {
+      const text2 = await response.text();
+      res.status(response.status).json({ error: "Geocode error", detail: text2 });
+      return;
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var routing_default = router39;
+
+// server/routes/delivery-location.ts
+var import_express41 = require("express");
+init_supabase();
+var router40 = (0, import_express41.Router)();
+router40.post("/", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { lat, lng, heading, speed, accuracy } = req.body;
+    if (lat == null || lng == null) {
+      res.status(400).json({ error: "lat and lng are required" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("delivery_live_locations").upsert(
+      {
+        exec_id: user.id,
+        lat,
+        lng,
+        heading: heading || null,
+        speed: speed || null,
+        accuracy: accuracy || null,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      },
+      { onConflict: "exec_id" }
+    ).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router40.get("/:execId", async (req, res) => {
+  try {
+    const { execId } = req.params;
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("delivery_live_locations").select("*").eq("exec_id", execId).single();
+    if (error && error.code !== "PGRST116") {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data || null);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var delivery_location_default = router40;
+
+// server/routes/vendor-onboarding.ts
+var import_express42 = require("express");
+init_supabase();
+var router41 = (0, import_express42.Router)();
+router41.post("/approve", async (req, res) => {
+  try {
+    const { vendor_id, owner_id } = req.body;
+    if (!vendor_id) {
+      res.status(400).json({ error: "vendor_id is required" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data: vendor, error: fetchErr } = await admin.from("vendors").select("*").eq("id", vendor_id).single();
+    if (fetchErr || !vendor) {
+      res.status(404).json({ error: "Vendor not found" });
+      return;
+    }
+    const { data, error } = await admin.from("vendors").update({
+      kyc_status: "approved",
+      verified: true,
+      is_open: true
+    }).eq("id", vendor_id).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    if (owner_id) {
+      await admin.from("user_profiles").update({ role: "vendor" }).eq("id", owner_id);
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.post("/reject", async (req, res) => {
+  try {
+    const { vendor_id, reason } = req.body;
+    if (!vendor_id) {
+      res.status(400).json({ error: "vendor_id is required" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("vendors").update({
+      kyc_status: "rejected",
+      verified: false,
+      rejection_reason: reason || null
+    }).eq("id", vendor_id).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router41.get("/pending", async (_req, res) => {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("vendors").select("*, owner:owner_id(id, name, email, phone)").in("kyc_status", ["pending"]).order("created_at", { ascending: false });
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var vendor_onboarding_default = router41;
+
+// server/routes/vendor-service-prices.ts
+var import_express43 = require("express");
+init_supabase();
+var router42 = (0, import_express43.Router)();
+async function canManageVendor(req, vendorId) {
+  const admin = createAdminClient();
+  const user = req.user;
+  if (!user?.id) return false;
+  const { data: profile } = await admin.from("user_profiles").select("role").eq("id", user.id).maybeSingle();
+  const role = profile?.role || "customer";
+  if (role === "admin" || role === "superadmin") return true;
+  const { data: vendor } = await admin.from("vendors").select("id").eq("id", vendorId).eq("owner_id", user.id).maybeSingle();
+  return !!vendor;
+}
+router42.get("/:vendorId", async (req, res) => {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("vendor_service_prices").select("*, services(name, unit), service_items(item_name, unit)").eq("vendor_id", req.params.vendorId).eq("is_active", true);
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    const result = (data || []).map((p) => ({
+      id: p.id,
+      vendorId: p.vendor_id,
+      serviceId: p.service_id,
+      itemId: p.item_id,
+      price: p.price,
+      isActive: p.is_active,
+      service: p.services ? { name: p.services.name, unit: p.services.unit } : void 0,
+      item: p.service_items ? { itemName: p.service_items.item_name, unit: p.service_items.unit } : void 0
+    }));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router42.post("/", async (req, res) => {
+  try {
+    const { vendor_id, service_id, item_id, price } = req.body;
+    if (!vendor_id || !service_id || !item_id || typeof price !== "number" || price <= 0) {
+      res.status(400).json({ error: "vendor_id, service_id, item_id and a positive price are required" });
+      return;
+    }
+    if (!await canManageVendor(req, vendor_id)) {
+      res.status(403).json({ error: "Forbidden: not your vendor" });
+      return;
+    }
+    const supabase = createAdminClient();
+    const { data, error } = await supabase.from("vendor_service_prices").upsert(
+      { vendor_id, service_id, item_id, price, is_active: true },
+      { onConflict: "vendor_id,service_id,item_id", ignoreDuplicates: false }
+    ).select().single();
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router42.delete("/:vendorId/:serviceId/:itemId", async (req, res) => {
+  try {
+    const { vendorId, serviceId, itemId } = req.params;
+    if (!await canManageVendor(req, vendorId)) {
+      res.status(403).json({ error: "Forbidden: not your vendor" });
+      return;
+    }
+    const supabase = createAdminClient();
+    const { error } = await supabase.from("vendor_service_prices").delete().eq("vendor_id", vendorId).eq("service_id", serviceId).eq("item_id", itemId);
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var vendor_service_prices_default = router42;
+
+// server/services/payment-service.ts
+var import_crypto4 = __toESM(require("crypto"));
+init_supabase();
+var RAZORPAY_KEY_ID2 = process.env.RAZORPAY_KEY_ID || "";
+var RAZORPAY_KEY_SECRET2 = process.env.RAZORPAY_KEY_SECRET || "";
+var STALE_CREATING_MINUTES = 5;
+function razorpayAuth2() {
+  return Buffer.from(`${RAZORPAY_KEY_ID2}:${RAZORPAY_KEY_SECRET2}`).toString("base64");
+}
+function isConfigured2() {
+  return Boolean(RAZORPAY_KEY_ID2 && RAZORPAY_KEY_SECRET2);
+}
+function deterministicReceipt(idempotencyKey) {
+  const hash = import_crypto4.default.createHash("sha256").update(idempotencyKey).digest("hex");
+  return `lh_${hash.slice(0, 32)}`;
+}
+function isStale(createdAt, minutes) {
+  const created = new Date(createdAt).getTime();
+  const now = Date.now();
+  return now - created > minutes * 60 * 1e3;
+}
+async function createTopupOrder(userId, amountRupees, idempotencyKey) {
+  if (!isConfigured2()) {
+    return { success: false, error: "Payment gateway not configured" };
+  }
+  if (!amountRupees || amountRupees < 10 || amountRupees > 25e3) {
+    return { success: false, error: "Amount must be between \u20B910 and \u20B925,000" };
+  }
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.length < 8) {
+    return { success: false, error: "Invalid idempotency key" };
+  }
+  const admin = createAdminClient();
+  const { data: inserted, error: insertError } = await admin.from("payment_transactions").insert({
+    user_id: userId,
+    transaction_purpose: "wallet_topup",
+    amount: amountRupees,
+    currency: "INR",
+    gateway: "razorpay",
+    gateway_order_id: null,
+    payment_status: "creating",
+    idempotency_key: idempotencyKey
+  }).select("id, gateway_order_id, payment_status, updated_at").single();
+  let txnId;
+  if (insertError) {
+    const { data: existing } = await admin.from("payment_transactions").select("id, gateway_order_id, payment_status, updated_at").eq("idempotency_key", idempotencyKey).single();
+    if (!existing) {
+      return { success: false, error: "Failed to retrieve existing payment record" };
+    }
+    if (existing.gateway_order_id) {
+      return {
+        success: true,
+        transactionId: existing.id,
+        razorpayOrderId: existing.gateway_order_id,
+        amount: amountRupees,
+        currency: "INR",
+        publicKeyId: RAZORPAY_KEY_ID2
+      };
+    }
+    if (existing.payment_status === "creating" && isStale(existing.updated_at, STALE_CREATING_MINUTES)) {
+      return {
+        success: false,
+        error: "Payment order status uncertain. Please try again later."
+      };
+    }
+    if (existing.payment_status === "creating") {
+      return {
+        success: false,
+        error: "Payment processing in progress. Please wait."
+      };
+    }
+    if (existing.payment_status === "created" && !existing.gateway_order_id) {
+      const { data: claimed, error: claimError } = await admin.from("payment_transactions").update({
+        payment_status: "creating",
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).eq("id", existing.id).eq("payment_status", "created").select("id").single();
+      if (claimError || !claimed) {
+        return {
+          success: false,
+          error: "Payment processing in progress. Please wait."
+        };
+      }
+      txnId = existing.id;
+    } else {
+      return {
+        success: false,
+        error: `Unexpected payment status: ${existing.payment_status}`
+      };
+    }
+  } else {
+    txnId = inserted.id;
+  }
+  const receipt = deterministicReceipt(idempotencyKey);
+  const amountPaise = Math.round(amountRupees * 100);
+  let response;
+  try {
+    response = await fetch("https://api.razorpay.com/v1/orders", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${razorpayAuth2()}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        amount: amountPaise,
+        currency: "INR",
+        receipt,
+        payment_capture: 1
+      })
+    });
+  } catch (err) {
+    await admin.from("payment_transactions").update({
+      failure_reason: `Network error: ${err.message}`,
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    return {
+      success: false,
+      error: "Payment order status uncertain. Please try again later."
+    };
+  }
+  if (response.ok) {
+    let razorpayOrder;
+    try {
+      razorpayOrder = await response.json();
+    } catch {
+      return {
+        success: false,
+        error: "Payment order status uncertain. Please try again later."
+      };
+    }
+    const { error: dbUpdateError } = await admin.from("payment_transactions").update({
+      gateway_order_id: razorpayOrder.id,
+      payment_status: "created",
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    if (!dbUpdateError) {
+      return {
+        success: true,
+        transactionId: txnId,
+        razorpayOrderId: razorpayOrder.id,
+        amount: amountRupees,
+        currency: "INR",
+        publicKeyId: RAZORPAY_KEY_ID2
+      };
+    }
+    const { error: retryError } = await admin.from("payment_transactions").update({
+      gateway_order_id: razorpayOrder.id,
+      payment_status: "created",
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    if (!retryError) {
+      return {
+        success: true,
+        transactionId: txnId,
+        razorpayOrderId: razorpayOrder.id,
+        amount: amountRupees,
+        currency: "INR",
+        publicKeyId: RAZORPAY_KEY_ID2
+      };
+    }
+    console.error(
+      `[payments] CRITICAL: Razorpay order created but gateway_order_id could not be persisted. transactionId=${txnId}, razorpayOrderId=${razorpayOrder.id}, error=${retryError.message}`
+    );
+    return {
+      success: false,
+      error: "Payment order created but could not be recorded. Reconciliation required."
+    };
+  }
+  const errorBody = await response.json().catch(() => ({}));
+  const errorMsg = errorBody.error?.description || "Razorpay order creation failed";
+  if (response.status >= 500) {
+    await admin.from("payment_transactions").update({
+      failure_reason: `Razorpay 5xx: ${errorMsg}`,
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("id", txnId).eq("payment_status", "creating");
+    return {
+      success: false,
+      error: "Payment order status uncertain. Please try again later."
+    };
+  }
+  await admin.from("payment_transactions").update({
+    payment_status: "created",
+    failure_reason: `Razorpay ${response.status}: ${errorMsg}`,
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", txnId).eq("payment_status", "creating");
+  return {
+    success: false,
+    error: errorMsg
+  };
+}
+async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, razorpaySignature, transactionId) {
+  if (!isConfigured2()) {
+    return { success: false, error: "Payment gateway not configured" };
+  }
+  const admin = createAdminClient();
+  const { data: txn, error: loadError } = await admin.from("payment_transactions").select("*").eq("id", transactionId).single();
+  if (loadError || !txn) {
+    return { success: false, error: "Payment transaction not found" };
+  }
+  if (txn.user_id !== userId) {
+    return { success: false, error: "Unauthorized" };
+  }
+  if (txn.gateway_order_id !== razorpayOrderId) {
+    return { success: false, error: "Order ID mismatch" };
+  }
+  const crypto8 = await import("crypto");
+  const expectedSig = crypto8.createHmac("sha256", RAZORPAY_KEY_SECRET2).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
+  if (!crypto8.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
+    return { success: false, error: "Invalid payment signature" };
+  }
+  try {
+    const response = await fetch(`https://api.razorpay.com/v1/payments/${razorpayPaymentId}`, {
+      headers: { Authorization: `Basic ${razorpayAuth2()}` }
+    });
+    if (response.ok) {
+      const payment = await response.json();
+      if (payment.order_id !== razorpayOrderId) {
+        return { success: false, error: "Payment does not belong to expected order" };
+      }
+    }
+  } catch {
+  }
+  if (txn.gateway_payment_id && txn.gateway_payment_id !== razorpayPaymentId) {
+    return {
+      success: false,
+      error: "gateway_payment_id_conflict"
+    };
+  }
+  const { error: flagError } = await admin.from("payment_transactions").update({
+    gateway_signature_verified: true,
+    gateway_payment_id: txn.gateway_payment_id ?? razorpayPaymentId,
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", transactionId);
+  if (flagError) {
+    return {
+      success: false,
+      error: "signature_verification_persist_failed"
+    };
+  }
+  const { error: statusError } = await admin.from("payment_transactions").update({
+    payment_status: "pending",
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", transactionId).eq("payment_status", "created");
+  if (statusError) {
+    return {
+      success: false,
+      error: "payment_status_transition_failed"
+    };
+  }
+  const result = await finalizeWalletTopup(transactionId);
+  return result;
+}
+async function finalizeWalletTopup(paymentTransactionId) {
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("finalize_wallet_topup", {
+    p_payment_transaction_id: paymentTransactionId
+  });
+  if (error) {
+    return { success: false, error: `RPC error: ${error.message}` };
+  }
+  if (!data) {
+    return { success: false, error: "No response from finalization" };
+  }
+  const result = data;
+  return {
+    success: result.success,
+    alreadyCredited: result.already_credited || false,
+    walletTransactionId: result.wallet_transaction_id || null,
+    newBalance: result.new_balance,
+    error: result.error
+  };
+}
+async function markPaymentCaptureVerified(gatewayOrderId, gatewayPaymentId) {
+  const admin = createAdminClient();
+  const { data: txn } = await admin.from("payment_transactions").select("id").eq("gateway_order_id", gatewayOrderId).eq("transaction_purpose", "wallet_topup").single();
+  if (!txn) {
+    return { transactionId: null, finalized: false };
+  }
+  await admin.from("payment_transactions").update({
+    gateway_capture_verified: true,
+    gateway_payment_id: gatewayPaymentId,
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("id", txn.id).in("payment_status", ["created", "pending", "authorized"]);
+  const result = await finalizeWalletTopup(txn.id);
+  return {
+    transactionId: txn.id,
+    finalized: result.success
+  };
+}
+async function getPaymentSummary(userId) {
+  const admin = createAdminClient();
+  const { data: profile } = await admin.from("user_profiles").select("wallet_balance").eq("id", userId).single();
+  const walletBalance = profile?.wallet_balance || 0;
+  const sixMonthsAgo = /* @__PURE__ */ new Date();
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const { data: spendData } = await admin.from("payment_transactions").select("amount").eq("user_id", userId).eq("transaction_purpose", "order_payment").eq("payment_status", "captured").gte("created_at", sixMonthsAgo.toISOString());
+  const totalSpentSixMonths = (spendData || []).reduce(
+    (sum, row) => sum + (row.amount || 0),
+    0
+  );
+  const moneySaved = 0;
+  const { count: transactionCount } = await admin.from("wallet_transactions").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  const { count: invoiceCount } = await admin.from("customer_invoices").select("id", { count: "exact", head: true }).eq("user_id", userId);
+  return {
+    walletBalance,
+    totalSpentSixMonths,
+    moneySaved,
+    transactionCount: transactionCount || 0,
+    invoiceCount: invoiceCount || 0
+  };
+}
+async function getTransactions(userId, options = {}) {
+  const admin = createAdminClient();
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(50, Math.max(1, options.limit || 20));
+  const offset = (page - 1) * limit;
+  let query = admin.from("wallet_transactions").select("*", { count: "exact" }).eq("user_id", userId);
+  if (options.type === "credit" || options.type === "debit") {
+    query = query.eq("type", options.type);
+  }
+  if (options.status) {
+    query = query.eq("status", options.status);
+  }
+  query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+  const { data, count, error } = await query;
+  if (error) {
+    return { transactions: [], total: 0, page, limit };
+  }
+  return {
+    transactions: data || [],
+    total: count || 0,
+    page,
+    limit
+  };
+}
+async function getInvoices(userId, options = {}) {
+  const admin = createAdminClient();
+  const page = Math.max(1, options.page || 1);
+  const limit = Math.min(50, Math.max(1, options.limit || 20));
+  const offset = (page - 1) * limit;
+  const { data, count, error } = await admin.from("customer_invoices").select("*", { count: "exact" }).eq("user_id", userId).order("invoice_date", { ascending: false }).range(offset, offset + limit - 1);
+  if (error) {
+    return { invoices: [], total: 0, page, limit };
+  }
+  return {
+    invoices: data || [],
+    total: count || 0,
+    page,
+    limit
+  };
+}
+
+// server/routes/payments.ts
+var import_express44 = require("express");
+init_supabase();
+var crypto6 = __toESM(require("crypto"));
+var router43 = (0, import_express44.Router)();
+async function getAuthenticatedUser(req) {
+  try {
+    const supabase = createServerClientWithCookies(
+      (name) => req.cookies?.[name]
+    );
+    const { data: { user } } = await supabase.auth.getUser();
+    return user ? { id: user.id } : null;
+  } catch {
+    return null;
+  }
+}
+router43.post("/payments/wallet/topup/create-order", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { amount, idempotencyKey } = req.body;
+    if (!amount || typeof amount !== "number") {
+      res.status(400).json({ error: "Valid amount is required" });
+      return;
+    }
+    if (!idempotencyKey || typeof idempotencyKey !== "string") {
+      res.status(400).json({ error: "idempotencyKey is required" });
+      return;
+    }
+    const result = await createTopupOrder(user.id, amount, idempotencyKey);
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({
+      success: true,
+      transactionId: result.transactionId,
+      razorpayOrderId: result.razorpayOrderId,
+      amount: result.amount,
+      currency: result.currency,
+      publicKeyId: result.publicKeyId
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router43.post("/payments/wallet/topup/verify", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      transaction_id
+    } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !transaction_id) {
+      res.status(400).json({ error: "Missing required fields" });
+      return;
+    }
+    const result = await verifyTopupPayment(
+      user.id,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      transaction_id
+    );
+    if (!result.success) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    res.json({
+      success: true,
+      alreadyCredited: result.alreadyCredited,
+      walletTransactionId: result.walletTransactionId,
+      newBalance: result.newBalance
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router43.post("/payments/wallet/add", async (_req, res) => {
+  res.status(405).json({
+    error: "Direct wallet top-up is disabled. Use /api/payments/wallet/topup/create-order instead."
+  });
+});
+router43.post("/payments/create-order", async (req, res) => {
+  try {
+    const { amount, currency, order_id } = req.body;
+    if (!amount || !order_id) {
+      res.status(400).json({ error: "amount and order_id are required" });
+      return;
+    }
+    const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
+    const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
+    if (!razorpayKeyId || !razorpayKeySecret) {
+      res.status(503).json({ error: "Payment gateway not configured", fallback: true });
+      return;
+    }
+    const auth = Buffer.from(`${razorpayKeyId}:${razorpayKeySecret}`).toString("base64");
+    const response = await fetch("https://api.razorpay.com/v1/orders", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        amount: Math.round(amount * 100),
+        currency: currency || "INR",
+        receipt: order_id,
+        payment_capture: 1
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      res.status(response.status).json({ error: data.error?.description || "Razorpay error" });
+      return;
+    }
+    if (order_id && data.id) {
+      const admin = createAdminClient();
+      const { data: orderRow } = await admin.from("orders").select("payment_details").eq("id", order_id).single();
+      if (orderRow) {
+        const existingDetails = orderRow.payment_details || {};
+        await admin.from("orders").update({
+          payment_details: {
+            ...existingDetails,
+            razorpay_order_id: data.id
+          }
+        }).eq("id", order_id);
+      }
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router43.post("/payments/verify", async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, order_id } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !order_id) {
+      res.status(400).json({ error: "Missing payment verification fields" });
+      return;
+    }
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data: orderRow } = await admin.from("orders").select("id, customer_id, total, wallet_paid_amount, payment_status, payment_details").eq("id", order_id).single();
+    if (!orderRow) {
+      res.status(404).json({ error: "Order not found" });
+      return;
+    }
+    if (orderRow.customer_id !== user.id) {
+      res.status(403).json({ error: "Not your order" });
+      return;
+    }
+    const storedRazorpayOrderId = orderRow.payment_details?.razorpay_order_id;
+    if (!storedRazorpayOrderId) {
+      res.status(400).json({ error: "No Razorpay order linked to this order" });
+      return;
+    }
+    if (storedRazorpayOrderId !== razorpay_order_id) {
+      res.status(400).json({ error: "Razorpay order mismatch" });
+      return;
+    }
+    const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET || "";
+    const expectedSig = crypto6.createHmac("sha256", razorpayKeySecret).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest("hex");
+    const sigBuf = Buffer.from(expectedSig, "hex");
+    const providedBuf = Buffer.from(razorpay_signature, "hex");
+    if (sigBuf.length !== providedBuf.length || !crypto6.timingSafeEqual(sigBuf, providedBuf)) {
+      res.status(400).json({ error: "Invalid payment signature" });
+      return;
+    }
+    if (orderRow.payment_status === "paid" && orderRow.payment_details?.razorpay_payment_id === razorpay_payment_id) {
+      res.json({ success: true, already_verified: true, payment_id: razorpay_payment_id });
+      return;
+    }
+    const gatewayAmount = orderRow.total - (orderRow.wallet_paid_amount || 0);
+    if (gatewayAmount <= 0) {
+      res.json({ success: true, payment_id: razorpay_payment_id, note: "fully_covered_by_wallet" });
+      return;
+    }
+    const { data: rpcResult, error: rpcError } = await admin.rpc(
+      "finalize_order_gateway_payment",
+      {
+        p_order_id: order_id,
+        p_gateway_order_id: razorpay_order_id,
+        p_gateway_payment_id: razorpay_payment_id,
+        p_amount: gatewayAmount
+      }
+    );
+    if (rpcError) {
+      res.status(500).json({ error: `Finalization RPC failed: ${rpcError.message}` });
+      return;
+    }
+    if (!rpcResult?.success) {
+      res.status(400).json({ error: rpcResult?.error || "Finalization failed" });
+      return;
+    }
+    res.json({
+      success: true,
+      already_finalized: rpcResult.already_finalized || false,
+      payment_id: razorpay_payment_id
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router43.get("/customer/payments/summary", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const summary = await getPaymentSummary(user.id);
+    res.json(summary);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router43.get("/customer/payments/transactions", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const type = req.query.type;
+    const status = req.query.status;
+    const result = await getTransactions(user.id, { page, limit, type, status });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router43.get("/customer/invoices", async (req, res) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const result = await getInvoices(user.id, { page, limit });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var payments_default = router43;
+
+// server/routes/customer-config.ts
+var import_express45 = require("express");
+init_supabase();
+var router44 = (0, import_express45.Router)();
+var CUSTOMER_FEATURE_DEFAULTS = {
+  enableSubscriptions: true,
+  enableCoupons: true,
+  enableWallet: true,
+  enableLoyalty: true,
+  enableFavorites: true,
+  enableReviews: true,
+  enableDiscover: true,
+  enableOrders: true,
+  enableCountItems: true,
+  enableLaundryBag: true,
+  enableMixedBooking: true
+};
+router44.get("/", async (_req, res) => {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("system_config").select("config").eq("id", 1).single();
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    const customer = data?.config?.customer || {};
+    const merged = {};
+    for (const [key, enabled] of Object.entries(CUSTOMER_FEATURE_DEFAULTS)) {
+      merged[key] = typeof customer[key] === "boolean" ? customer[key] : enabled;
+    }
+    res.json(merged);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var customer_config_default = router44;
+
+// server/routes/settings.ts
+var import_express46 = require("express");
+init_supabase();
+var router45 = (0, import_express46.Router)();
+var DEFAULTS = { pushEnabled: true, orderUpdates: true, promotions: false };
+router45.get("/", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("user_settings").select("push_enabled, order_updates, promotions").eq("user_id", user.id).single();
+    if (error && error.code !== "PGRST116") {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+    res.json({
+      notifications: {
+        pushEnabled: data?.push_enabled ?? DEFAULTS.pushEnabled,
+        orderUpdates: data?.order_updates ?? DEFAULTS.orderUpdates,
+        promotions: data?.promotions ?? DEFAULTS.promotions
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router45.patch("/notifications", async (req, res) => {
+  try {
+    const supabase = createServerClientWithCookies((name) => req.cookies?.[name]);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const { pushEnabled, orderUpdates, promotions } = req.body;
+    const updates = { updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+    if (typeof pushEnabled === "boolean") updates.push_enabled = pushEnabled;
+    if (typeof orderUpdates === "boolean") updates.order_updates = orderUpdates;
+    if (typeof promotions === "boolean") updates.promotions = promotions;
+    const admin = createAdminClient();
+    const { error } = await admin.from("user_settings").upsert({ user_id: user.id, ...updates }, { onConflict: "user_id" });
+    if (error) {
+      res.status(400).json({ error: error.message });
+      return;
+    }
+    const { data } = await admin.from("user_settings").select("push_enabled, order_updates, promotions").eq("user_id", user.id).single();
+    res.json({
+      notifications: {
+        pushEnabled: data?.push_enabled ?? DEFAULTS.pushEnabled,
+        orderUpdates: data?.order_updates ?? DEFAULTS.orderUpdates,
+        promotions: data?.promotions ?? DEFAULTS.promotions
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router45.patch("/password", async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      res.status(400).json({ error: "Current and new password are required" });
+      return;
+    }
+    if (newPassword.length < 6) {
+      res.status(400).json({ error: "New password must be at least 6 characters" });
+      return;
+    }
+    const supabase = createServerClientWithCookies(
+      (name) => req.cookies?.[name],
+      (name, value, options) => res.cookie(name, value, { ...options, httpOnly: true, secure: false, sameSite: "lax", path: "/" }),
+      (name) => res.clearCookie(name, { path: "/" })
+    );
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || !user.email) {
+      res.status(401).json({ error: "Unauthorized: email account required to change password" });
+      return;
+    }
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: currentPassword
+    });
+    if (signInError) {
+      res.status(400).json({ error: "Current password is incorrect" });
+      return;
+    }
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+    if (updateError) {
+      res.status(400).json({ error: updateError.message });
+      return;
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var settings_default = router45;
+
+// server/routes/vendor-reports.ts
+var import_express47 = require("express");
+init_supabase();
+var router46 = (0, import_express47.Router)();
+router46.get("/overview", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = orders || [];
+    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
+    const cancelledOrders = allOrders.filter((o) => o.status === "cancelled");
+    const totalRevenue = completedOrders.reduce((s, o) => s + (o.total || 0), 0);
+    const aov = completedOrders.length > 0 ? Math.round(totalRevenue / completedOrders.length) : 0;
+    const orderIds = allOrders.map((o) => o.id);
+    const stageEvents = await loadStageEvents(supabase, orderIds);
+    const { repeatRate, repeatCount, uniqueCustomers } = computeRepeatRate(allOrders);
+    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
+    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
+    const cancellationRate = allOrders.length > 0 ? Math.round(cancelledOrders.length / allOrders.length * 100) : 0;
+    const { data: reviews } = await supabase.from("reviews").select("overall").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate);
+    const allReviews = reviews || [];
+    const avgRating = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const periodMs = new Date(endDate).getTime() - new Date(startDate).getTime();
+    const prevStart = new Date(new Date(startDate).getTime() - periodMs).toISOString();
+    const { data: prevOrders } = await buildOrderQuery(supabase, vendorId, prevStart, startDate, service, status);
+    const prevAll = prevOrders || [];
+    const prevCompleted = prevAll.filter((o) => ["completed", "delivered"].includes(o.status));
+    const prevRevenue = prevCompleted.reduce((s, o) => s + (o.total || 0), 0);
+    const revenueChange = prevRevenue > 0 ? Math.round((totalRevenue - prevRevenue) / prevRevenue * 100) : 0;
+    const ordersChange = prevAll.length > 0 ? Math.round((allOrders.length - prevAll.length) / prevAll.length * 100) : 0;
+    const delayed = allOrders.filter(
+      (o) => !["completed", "cancelled", "delivered"].includes(o.status) && o.estimated_delivery_at && new Date(o.estimated_delivery_at) < /* @__PURE__ */ new Date()
+    );
+    const serviceMap = {};
+    completedOrders.forEach((o) => {
+      const items = o.items_v2 || o.items || [];
+      if (Array.isArray(items)) {
+        items.forEach((item) => {
+          const name = item.serviceName || item.serviceKey || "Unknown";
+          serviceMap[name] = (serviceMap[name] || 0) + (item.unitPrice || 0) * (item.qty || 1);
+        });
+      }
+    });
+    const topServiceEntry = Object.entries(serviceMap).sort((a, b) => b[1] - a[1])[0];
+    const dayMap = {};
+    completedOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      dayMap[day] = (dayMap[day] || 0) + (o.total || 0);
+    });
+    const bestDayEntry = Object.entries(dayMap).sort((a, b) => b[1] - a[1])[0];
+    const customerCounts = {};
+    allOrders.forEach((o) => {
+      if (o.customer_id) customerCounts[o.customer_id] = (customerCounts[o.customer_id] || 0) + 1;
+    });
+    const topCustomerEntry = Object.entries(customerCounts).sort((a, b) => b[1] - a[1])[0];
+    const revenueTrend = Object.entries(dayMap).map(([day, revenue]) => ({ day, revenue })).sort((a, b) => a.day.localeCompare(b.day));
+    const ordersTrendMap = {};
+    allOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      ordersTrendMap[day] = (ordersTrendMap[day] || 0) + 1;
+    });
+    const ordersTrend = Object.entries(ordersTrendMap).map(([day, count]) => ({ day, count })).sort((a, b) => a.day.localeCompare(b.day));
+    res.json({
+      totalOrders: allOrders.length,
+      totalRevenue,
+      aov,
+      avgTurnaroundHrs,
+      repeatRate,
+      onTimeRate,
+      cancellationRate,
+      avgRating,
+      totalReviews: allReviews.length,
+      revenueChange,
+      ordersChange,
+      delayedCount: delayed.length,
+      topService: topServiceEntry ? { name: topServiceEntry[0], revenue: topServiceEntry[1] } : null,
+      bestDay: bestDayEntry ? { day: bestDayEntry[0], revenue: bestDayEntry[1] } : null,
+      mostActiveCustomer: topCustomerEntry ? { name: topCustomerEntry[0], orderCount: topCustomerEntry[1] } : null,
+      revenueTrend,
+      ordersTrend
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router46.get("/sales-revenue", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = (orders || []).filter((o) => o.status !== "cancelled");
+    const subtotal = allOrders.reduce((s, o) => s + (o.amount || 0), 0);
+    const couponDiscount = allOrders.reduce((s, o) => s + (o.coupon_discount || 0), 0);
+    const subscriptionDiscount = allOrders.reduce((s, o) => s + (o.subscription_discount || 0), 0);
+    const refunds = allOrders.filter((o) => o.payment_status === "refunded").reduce((s, o) => s + (o.total || 0), 0);
+    const platformFees = allOrders.reduce((s, o) => s + (o.platform_fee || 0), 0);
+    const deliveryFees = allOrders.reduce((s, o) => s + (o.delivery_fee || 0), 0);
+    const expressSurcharges = allOrders.reduce((s, o) => s + (o.express_surcharge || 0), 0);
+    const surgeCharges = allOrders.reduce((s, o) => s + (o.surge_charge || 0), 0);
+    const taxes = allOrders.reduce((s, o) => s + (o.taxes || 0), 0);
+    const netOrderValue = subtotal - couponDiscount - subscriptionDiscount;
+    const grossRevenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
+    const estimatedCommission = Math.round(grossRevenue * 0.1);
+    const estimatedVendorEarnings = grossRevenue - refunds - estimatedCommission;
+    const expectedCustomerAmount = netOrderValue + platformFees + deliveryFees + expressSurcharges + surgeCharges + taxes;
+    if (expectedCustomerAmount !== grossRevenue && allOrders.length > 0) {
+      console.warn(`[reports] Reconciliation mismatch: expected ${expectedCustomerAmount}, got ${grossRevenue}`);
+    }
+    const dailyMap = {};
+    allOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      if (!dailyMap[day]) dailyMap[day] = { revenue: 0, orders: 0 };
+      dailyMap[day].revenue += o.total || 0;
+      dailyMap[day].orders += 1;
+    });
+    const dailyRevenue = Object.entries(dailyMap).map(([day, v]) => ({ day, ...v })).sort((a, b) => a.day.localeCompare(b.day));
+    const serviceMap = {};
+    allOrders.forEach((o) => {
+      const items = o.items_v2 || o.items || [];
+      if (Array.isArray(items)) {
+        items.forEach((item) => {
+          const name = item.serviceName || item.serviceKey || "Unknown";
+          serviceMap[name] = (serviceMap[name] || 0) + (item.unitPrice || 0) * (item.qty || 1);
+        });
+      }
+    });
+    const totalServiceRevenue = Object.values(serviceMap).reduce((s, v) => s + v, 0);
+    const revenueByService = Object.entries(serviceMap).map(([name, revenue], i) => ({
+      name,
+      revenue,
+      percentage: totalServiceRevenue > 0 ? Math.round(revenue / totalServiceRevenue * 100) : 0,
+      color: COLORS[i % COLORS.length]
+    })).sort((a, b) => b.revenue - a.revenue);
+    const paymentMap = {};
+    allOrders.forEach((o) => {
+      const method = o.payment_method || "unknown";
+      paymentMap[method] = (paymentMap[method] || 0) + (o.total || 0);
+    });
+    const totalPaymentRevenue = Object.values(paymentMap).reduce((s, v) => s + v, 0);
+    const revenueByPaymentMethod = Object.entries(paymentMap).map(([method, revenue]) => ({
+      method,
+      revenue,
+      percentage: totalPaymentRevenue > 0 ? Math.round(revenue / totalPaymentRevenue * 100) : 0
+    }));
+    const dayOfWeekMap = {};
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    allOrders.forEach((o) => {
+      const d = new Date(o.created_at);
+      const dayName = dayNames[d.getDay()];
+      if (!dayOfWeekMap[dayName]) dayOfWeekMap[dayName] = { revenue: 0, orders: 0 };
+      dayOfWeekMap[dayName].revenue += o.total || 0;
+      dayOfWeekMap[dayName].orders += 1;
+    });
+    const revenueByDayOfWeek = dayNames.map((day) => ({
+      day,
+      revenue: dayOfWeekMap[day]?.revenue || 0,
+      orders: dayOfWeekMap[day]?.orders || 0
+    }));
+    const sorted = [...dailyRevenue].sort((a, b) => b.revenue - a.revenue);
+    const topDay = sorted[0] || null;
+    const worstDay = sorted[sorted.length - 1] || null;
+    const periodMs = new Date(endDate).getTime() - new Date(startDate).getTime();
+    const prevStart = new Date(new Date(startDate).getTime() - periodMs).toISOString();
+    const { data: prevOrders } = await buildOrderQuery(supabase, vendorId, prevStart, startDate, service, status);
+    const prevAll = (prevOrders || []).filter((o) => o.status !== "cancelled");
+    const prevRevenue = prevAll.reduce((s, o) => s + (o.total || 0), 0);
+    const revenueGrowth = prevRevenue > 0 ? Math.round((grossRevenue - prevRevenue) / prevRevenue * 100) : 0;
+    res.json({
+      subtotal,
+      couponDiscount,
+      subscriptionDiscount,
+      netOrderValue,
+      refunds,
+      platformFees,
+      deliveryFees,
+      expressSurcharges,
+      surgeCharges,
+      taxes,
+      grossRevenue,
+      estimatedCommission,
+      estimatedVendorEarnings,
+      dailyRevenue,
+      revenueByService,
+      revenueByPaymentMethod,
+      revenueByDayOfWeek,
+      topDay,
+      worstDay,
+      revenueGrowth
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router46.get("/orders-operations", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = orders || [];
+    const orderIds = allOrders.map((o) => o.id);
+    const stageEvents = await loadStageEvents(supabase, orderIds);
+    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
+    const avgTurnaroundHrs = computeTurnaroundFromEvents(stageEvents);
+    const onTimeRate = computeOnTimeRateFromEvents(stageEvents, allOrders);
+    const delayed = allOrders.filter(
+      (o) => !["completed", "cancelled", "delivered"].includes(o.status) && o.estimated_delivery_at && new Date(o.estimated_delivery_at) < /* @__PURE__ */ new Date()
+    );
+    const express2 = allOrders.filter((o) => o.express);
+    const statusCounts = {};
+    allOrders.forEach((o) => {
+      statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
+    });
+    const ORDER_STAGE_FLOW = [
+      "placed",
+      "vendor_assigned",
+      "vendor_accepted",
+      "pickup_scheduled",
+      "pickup_completed",
+      "laundry_received",
+      "sorting",
+      "tagging",
+      "washing",
+      "drying",
+      "ironing",
+      "dry_cleaning",
+      "quality_inspection",
+      "packing",
+      "ready_for_dispatch",
+      "out_for_delivery",
+      "delivered",
+      "completed"
+    ];
+    const stageIndexMap = {};
+    ORDER_STAGE_FLOW.forEach((s, i) => {
+      stageIndexMap[s] = i;
+    });
+    const funnelMilestones = [
+      { key: "received", label: "Received", stage: "vendor_assigned" },
+      { key: "accepted", label: "Accepted", stage: "vendor_accepted" },
+      { key: "picked_up", label: "Picked Up", stage: "pickup_completed" },
+      { key: "processing", label: "Processing", stage: "laundry_received" },
+      { key: "ready", label: "Ready", stage: "ready_for_dispatch" },
+      { key: "delivered", label: "Delivered", stage: "delivered" }
+    ].map((m) => {
+      const minIndex = stageIndexMap[m.stage];
+      if (minIndex === void 0) {
+        throw new Error(`[reports] Unknown funnel milestone stage: "${m.stage}". Check ORDER_STAGE_FLOW.`);
+      }
+      return { ...m, minIndex };
+    });
+    const funnelStages = funnelMilestones.map((m, i) => {
+      const count = allOrders.filter((o) => {
+        const idx = stageIndexMap[o.status];
+        return idx !== void 0 && idx >= m.minIndex;
+      }).length;
+      const prevCount = i > 0 ? allOrders.filter((o) => {
+        const idx = stageIndexMap[o.status];
+        return idx !== void 0 && idx >= funnelMilestones[i - 1].minIndex;
+      }).length : allOrders.length;
+      return {
+        stage: m.label,
+        count,
+        conversionRate: prevCount > 0 ? Math.round(count / prevCount * 100) : null,
+        avgTimeHours: null
+      };
+    });
+    const dayMap = {};
+    allOrders.forEach((o) => {
+      const day = o.created_at?.slice(0, 10) || "unknown";
+      dayMap[day] = (dayMap[day] || 0) + 1;
+    });
+    const ordersByDay = Object.entries(dayMap).map(([day, count]) => ({ day, count })).sort((a, b) => a.day.localeCompare(b.day));
+    const turnaroundDiffs = [];
+    for (const o of completedOrders) {
+      const stages = stageEvents[o.id];
+      if (!stages) continue;
+      const pickup = stages["pickup_completed"];
+      const completion = stages["delivered"] ?? stages["completed"];
+      if (pickup && completion) {
+        const hours = (new Date(completion).getTime() - new Date(pickup).getTime()) / (1e3 * 60 * 60);
+        if (hours >= 0) turnaroundDiffs.push(hours);
+      }
+    }
+    let turnaroundHistogram = [];
+    if (turnaroundDiffs.length > 0) {
+      const buckets = ["< 24h", "24-48h", "48-72h", "72-96h", "96h+"];
+      const map = {};
+      buckets.forEach((b) => map[b] = 0);
+      for (const h of turnaroundDiffs) {
+        if (h < 24) map["< 24h"]++;
+        else if (h < 48) map["24-48h"]++;
+        else if (h < 72) map["48-72h"]++;
+        else if (h < 96) map["72-96h"]++;
+        else map["96h+"]++;
+      }
+      turnaroundHistogram = buckets.map((bucket) => ({ bucket, count: map[bucket] }));
+    }
+    const attentionCategories = {
+      pendingPickup: statusCounts["placed"] || 0,
+      delayedInProgress: delayed.length,
+      qualityIssues: 0,
+      failedCancelled: statusCounts["cancelled"] || 0
+    };
+    const topDelayedOrders = delayed.slice(0, 10).map((o) => ({
+      id: o.id,
+      code: o.code,
+      customerName: o.customer_name,
+      total: o.total,
+      createdAt: o.created_at
+    }));
+    res.json({
+      totalOrders: allOrders.length,
+      completedOrders: completedOrders.length,
+      avgTurnaroundHrs,
+      onTimeRate,
+      delayedCount: delayed.length,
+      expressOrders: express2.length,
+      funnelStages,
+      statusDistribution: Object.entries(statusCounts).map(([status2, count]) => ({ status: status2, count })),
+      ordersByDay,
+      turnaroundHistogram,
+      expressVsRegular: {
+        express: { count: express2.length, revenue: express2.reduce((s, o) => s + (o.total || 0), 0) },
+        regular: { count: allOrders.length - express2.length, revenue: allOrders.filter((o) => !o.express).reduce((s, o) => s + (o.total || 0), 0) }
+      },
+      attentionCategories,
+      delayedDrillDown: { status: "processing", delayed: true, startDate: startStr, endDate: endStr, service, orderStatus: status },
+      topDelayedOrders
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router46.get("/services", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = (orders || []).filter((o) => o.status !== "cancelled");
+    const serviceMap = {};
+    allOrders.forEach((o) => {
+      const items = o.items_v2 || o.items || [];
+      if (Array.isArray(items)) {
+        items.forEach((item) => {
+          const name = item.serviceName || item.serviceKey || "Unknown";
+          if (!serviceMap[name]) serviceMap[name] = { orderCount: 0, revenue: 0 };
+          serviceMap[name].orderCount += 1;
+          serviceMap[name].revenue += (item.unitPrice || 0) * (item.qty || 1);
+        });
+      }
+    });
+    const { data: reviews } = await supabase.from("reviews").select("overall").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate);
+    const allReviews = reviews || [];
+    const avgRating = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const totalRevenue = allOrders.reduce((s, o) => s + (o.total || 0), 0);
+    const services = Object.entries(serviceMap).map(([name, data]) => ({
+      name,
+      orderCount: data.orderCount,
+      revenue: data.revenue,
+      aov: data.orderCount > 0 ? Math.round(data.revenue / data.orderCount) : 0,
+      avgTurnaroundHrs: null,
+      avgRating,
+      revenueShare: totalRevenue > 0 ? Math.round(data.revenue / totalRevenue * 100) : 0,
+      cancellationRate: 0,
+      repeatRate: 0
+    })).sort((a, b) => b.revenue - a.revenue);
+    const revenueByService = services.map((s, i) => ({
+      name: s.name,
+      revenue: s.revenue,
+      color: COLORS[i % COLORS.length]
+    }));
+    const orderVolumeByService = services.map((s, i) => ({
+      name: s.name,
+      count: s.orderCount,
+      color: COLORS[i % COLORS.length]
+    }));
+    res.json({
+      topRevenueService: services[0] ? { name: services[0].name, revenue: services[0].revenue } : null,
+      mostOrderedService: [...services].sort((a, b) => b.orderCount - a.orderCount)[0] ? { name: [...services].sort((a, b) => b.orderCount - a.orderCount)[0].name, orderCount: [...services].sort((a, b) => b.orderCount - a.orderCount)[0].orderCount } : null,
+      highestRatedService: services[0] ? { name: services[0].name, avgRating: services[0].avgRating } : null,
+      fastestService: null,
+      revenueByService,
+      orderVolumeByService,
+      services
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router46.get("/customers", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service, status } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service, status);
+    const allOrders = orders || [];
+    const completedOrders = allOrders.filter((o) => ["completed", "delivered"].includes(o.status));
+    const customerMap = {};
+    allOrders.forEach((o) => {
+      const id = o.customer_id;
+      if (!id) return;
+      if (!customerMap[id]) customerMap[id] = { name: o.customer_name || "Unknown", orderCount: 0, totalSpend: 0, lastOrder: o.created_at };
+      customerMap[id].orderCount += 1;
+      customerMap[id].totalSpend += o.total || 0;
+      if (o.created_at > customerMap[id].lastOrder) customerMap[id].lastOrder = o.created_at;
+    });
+    const totalCustomers = Object.keys(customerMap).length;
+    const repeatCount = Object.values(customerMap).filter((c) => c.orderCount >= 2).length;
+    const newCount = totalCustomers - repeatCount;
+    const { repeatRate } = computeRepeatRate(allOrders);
+    const avgSpendPerCustomer = totalCustomers > 0 ? Math.round(completedOrders.reduce((s, o) => s + (o.total || 0), 0) / totalCustomers) : 0;
+    const segmentCounts = {};
+    CUSTOMER_SEGMENTS.forEach((s) => segmentCounts[s.label] = 0);
+    Object.values(customerMap).forEach((c) => {
+      for (const seg of CUSTOMER_SEGMENTS) {
+        if (c.orderCount >= seg.min && c.orderCount <= seg.max) {
+          segmentCounts[seg.label]++;
+          break;
+        }
+      }
+    });
+    const customerSegments = CUSTOMER_SEGMENTS.map((seg) => ({
+      label: seg.label,
+      count: segmentCounts[seg.label],
+      percentage: totalCustomers > 0 ? Math.round(segmentCounts[seg.label] / totalCustomers * 100) : 0
+    }));
+    const freqMap = {};
+    Object.values(customerMap).forEach((c) => {
+      freqMap[c.orderCount] = (freqMap[c.orderCount] || 0) + 1;
+    });
+    const orderFrequencyDistribution = Object.entries(freqMap).map(([count, customers]) => ({ orderCount: Number(count), customerCount: customers })).sort((a, b) => a.orderCount - b.orderCount);
+    const repeatTrend = [{ period: startStr + " to " + endStr, repeatRate }];
+    const topCustomers = Object.entries(customerMap).map(([id, data]) => ({ id, ...data, avgOrder: data.orderCount > 0 ? Math.round(data.totalSpend / data.orderCount) : 0 })).sort((a, b) => b.totalSpend - a.totalSpend).slice(0, 10);
+    res.json({
+      totalCustomers,
+      newCustomers: newCount,
+      repeatCustomers: repeatCount,
+      repeatRate,
+      avgSpendPerCustomer,
+      historicalCustomerValue: avgSpendPerCustomer,
+      repeatVsNew: { repeat: repeatCount, new: newCount },
+      repeatTrend,
+      orderFrequencyDistribution,
+      customerSegments,
+      topCustomers
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router46.get("/settlements", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const supabase = createAdminClient();
+    const { data: settlements } = await supabase.from("vendor_settlements").select("*").eq("vendor_id", vendorId).order("period_start", { ascending: false });
+    const allSettlements = settlements || [];
+    const pendingPayout = allSettlements.filter((s) => s.status === "pending" || s.status === "processing").reduce((sum, s) => sum + (s.net_payout || 0), 0);
+    const settledTotal = allSettlements.filter((s) => s.status === "settled").reduce((sum, s) => sum + (s.net_payout || 0), 0);
+    const totalGross = allSettlements.reduce((sum, s) => sum + (s.gross_order_value || 0), 0);
+    const totalCommission = allSettlements.reduce((sum, s) => sum + (s.commission_amount || 0), 0);
+    const totalRefunds = allSettlements.reduce((sum, s) => sum + (s.refunds_amount || 0), 0);
+    const totalAdjustments = allSettlements.reduce((sum, s) => sum + (s.adjustments_amount || 0), 0);
+    const settlementIds = allSettlements.map((s) => s.id);
+    let items = [];
+    if (settlementIds.length > 0) {
+      const { data } = await supabase.from("vendor_settlement_items").select("*, orders(code, customer_name)").in("settlement_id", settlementIds);
+      items = data || [];
+    }
+    const itemsBySettlement = {};
+    items.forEach((item) => {
+      if (!itemsBySettlement[item.settlement_id]) itemsBySettlement[item.settlement_id] = [];
+      itemsBySettlement[item.settlement_id].push(item);
+    });
+    res.json({
+      pendingPayout,
+      settledTotal,
+      totalGross,
+      totalCommission,
+      totalRefunds,
+      totalAdjustments,
+      settlements: allSettlements.map((s) => ({
+        ...s,
+        items: itemsBySettlement[s.id] || []
+      })),
+      commissionRateBps: allSettlements.length > 0 ? allSettlements[0].commission_rate_bps : 1e3
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router46.get("/ratings-issues", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: reviews } = await supabase.from("reviews").select("*, orders(id, code)").eq("vendor_id", vendorId).gte("created_at", startDate).lte("created_at", endDate).order("created_at", { ascending: false });
+    const allReviews = reviews || [];
+    const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    allReviews.forEach((r) => {
+      const star = Math.round(r.overall || 0);
+      if (star >= 1 && star <= 5) distribution[star] += 1;
+    });
+    const avgOverall = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.overall || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgVendor = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.vendor_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgPickup = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.pickup_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgLaundry = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.laundry_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const avgDelivery = allReviews.length > 0 ? Math.round(allReviews.reduce((s, r) => s + (r.delivery_rating || 0), 0) / allReviews.length * 10) / 10 : 0;
+    const openIssues = (() => {
+      try {
+        const ticketIds = allReviews.filter((r) => (r.overall || 0) <= 3).map((r) => r.order_id).filter(Boolean);
+        if (ticketIds.length === 0) return 0;
+        return null;
+      } catch {
+        return null;
+      }
+    })();
+    const recentNegative = allReviews.filter((r) => (r.overall || 0) <= 3).slice(0, 10).map((r) => ({
+      id: r.id,
+      customerName: r.customer_name,
+      overall: r.overall,
+      comment: r.comment,
+      createdAt: r.created_at,
+      orderCode: r.orders?.code || null,
+      status: null
+    }));
+    const issueCategories = [];
+    const weekMap = {};
+    allReviews.forEach((r) => {
+      const d = new Date(r.created_at);
+      const weekStart = new Date(d);
+      weekStart.setDate(d.getDate() - d.getDay());
+      const key = weekStart.toISOString().slice(0, 10);
+      if (!weekMap[key]) weekMap[key] = { total: 0, count: 0 };
+      weekMap[key].total += r.overall || 0;
+      weekMap[key].count += 1;
+    });
+    const ratingTrend = Object.entries(weekMap).map(([week, v]) => ({ week, avg: Math.round(v.total / v.count * 10) / 10, count: v.count })).sort((a, b) => a.week.localeCompare(b.week));
+    res.json({
+      avgOverall,
+      avgVendor,
+      avgPickup,
+      avgLaundry,
+      avgDelivery,
+      openIssues,
+      distribution,
+      ratingTrend,
+      issueCategories,
+      recentNegative,
+      totalReviews: allReviews.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router46.get("/cancellations", async (req, res) => {
+  try {
+    const vendorId = await resolveVendorId(req, res);
+    if (!vendorId) return;
+    const { startStr, endStr, service } = parseDateRange(req);
+    const supabase = createAdminClient();
+    const timezone = await resolveBusinessTimezone(supabase, vendorId);
+    const { startDate, endDate } = resolveDateBoundaries(startStr, endStr, timezone);
+    const { data: orders } = await buildOrderQuery(supabase, vendorId, startDate, endDate, service);
+    const allOrders = orders || [];
+    const cancelled = allOrders.filter((o) => o.status === "cancelled");
+    const cancelRate = allOrders.length > 0 ? Math.round(cancelled.length / allOrders.length * 100) : 0;
+    const refundTotal = cancelled.reduce((s, o) => s + (o.total || 0), 0);
+    const vendorRejections = cancelled.filter((o) => o.cancelled_by === "vendor").length;
+    const customerCancellations = cancelled.filter((o) => o.cancelled_by === "customer").length;
+    const reasonMap = {};
+    cancelled.forEach((o) => {
+      const note = o.notes || "No reason specified";
+      reasonMap[note] = (reasonMap[note] || 0) + 1;
+    });
+    const reasonsBreakdown = Object.entries(reasonMap).map(([reason, count]) => ({
+      reason,
+      count,
+      percentage: cancelled.length > 0 ? Math.round(count / cancelled.length * 100) : 0,
+      lostRevenue: Math.round(refundTotal * count / (cancelled.length || 1))
+    })).sort((a, b) => b.count - a.count).slice(0, 5);
+    const weekMap = {};
+    cancelled.forEach((o) => {
+      const d = new Date(o.created_at);
+      const weekStart = new Date(d);
+      weekStart.setDate(d.getDate() - d.getDay());
+      const key = weekStart.toISOString().slice(0, 10);
+      weekMap[key] = (weekMap[key] || 0) + 1;
+    });
+    const cancellationTrend = Object.entries(weekMap).map(([week, count]) => ({ week, count })).sort((a, b) => a.week.localeCompare(b.week));
+    const typeMap = {};
+    cancelled.forEach((o) => {
+      const type = o.cancelled_by || "unknown";
+      typeMap[type] = (typeMap[type] || 0) + 1;
+    });
+    const cancellationByType = Object.entries(typeMap).map(([type, count]) => ({ type, count }));
+    const cancelDrillDown = { status: "cancelled", startDate, endDate };
+    res.json({
+      cancelledOrders: cancelled.length,
+      vendorRejections,
+      customerCancellations,
+      cancelRate,
+      refundTotal,
+      estimatedLostRevenue: refundTotal,
+      cancellationTrend,
+      cancellationByType,
+      reasonsBreakdown,
+      cancelDrillDown,
+      topCancelledOrders: cancelled.slice(0, 10).map((o) => ({
+        id: o.id,
+        code: o.code,
+        customerName: o.customer_name,
+        total: o.total,
+        createdAt: o.created_at,
+        notes: o.notes,
+        cancelledBy: o.cancelled_by || null
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var vendor_reports_default = router46;
+
+// server/routes/webhooks.ts
 var import_express48 = require("express");
-var import_crypto5 = __toESM(require("crypto"));
 init_supabase();
 var router47 = (0, import_express48.Router)();
+var RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
+router47.post("/razorpay", async (req, res) => {
+  try {
+    if (!RAZORPAY_WEBHOOK_SECRET) {
+      console.warn("[webhook] RAZORPAY_WEBHOOK_SECRET not configured, rejecting webhook");
+      res.status(500).json({ error: "Webhook secret not configured" });
+      return;
+    }
+    const signature = req.headers["x-razorpay-signature"];
+    if (!signature) {
+      res.status(400).json({ error: "Missing webhook signature" });
+      return;
+    }
+    const rawBody = req.body;
+    const crypto8 = await import("crypto");
+    const expectedSig = crypto8.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
+    if (Buffer.byteLength(expectedSig) !== Buffer.byteLength(signature)) {
+      console.warn("[webhook] Invalid signature length");
+      res.status(401).json({ error: "Invalid webhook signature" });
+      return;
+    }
+    if (!crypto8.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
+      console.warn("[webhook] Invalid signature");
+      res.status(401).json({ error: "Invalid webhook signature" });
+      return;
+    }
+    const eventId = req.headers["x-razorpay-event-id"];
+    if (!eventId) {
+      res.status(400).json({ error: "Missing event ID" });
+      return;
+    }
+    const admin = createAdminClient();
+    const { error: insertError } = await admin.from("payment_webhook_events").insert({
+      gateway: "razorpay",
+      event_id: eventId,
+      event_type: "unknown",
+      payload: null,
+      status: "pending"
+    });
+    if (insertError && insertError.code === "23505") {
+      const { data: existingEvent } = await admin.from("payment_webhook_events").select("status").eq("event_id", eventId).single();
+      const existingStatus = existingEvent?.status;
+      if (existingStatus === "processed") {
+        res.json({ status: "already_processed" });
+        return;
+      }
+      if (existingStatus === "pending") {
+        res.status(202).json({ status: "already_in_progress" });
+        return;
+      }
+      if (existingStatus === "failed") {
+        let parsedEvent = null;
+        try {
+          parsedEvent = JSON.parse(rawBody.toString());
+        } catch {
+        }
+        const { data: reclaimed, error: reclaimError } = await admin.from("payment_webhook_events").update({
+          status: "pending",
+          processed_at: null,
+          event_type: parsedEvent?.event || "unknown",
+          payload: parsedEvent?.payload || null
+        }).eq("event_id", eventId).eq("status", "failed").select("status").single();
+        if (reclaimError || !reclaimed) {
+          res.status(202).json({ status: "already_in_progress" });
+          return;
+        }
+      }
+    }
+    if (insertError && insertError.code !== "23505") {
+      console.error("[webhook] Failed to record event:", insertError.message);
+      res.status(500).json({ error: "Failed to record event" });
+      return;
+    }
+    let event;
+    try {
+      event = JSON.parse(rawBody.toString());
+    } catch {
+      await admin.from("payment_webhook_events").update({ status: "failed", processed_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("event_id", eventId);
+      res.status(400).json({ error: "Invalid JSON payload" });
+      return;
+    }
+    await admin.from("payment_webhook_events").update({
+      event_type: event.event,
+      payload: event.payload
+    }).eq("event_id", eventId);
+    switch (event.event) {
+      case "payment.captured": {
+        const paymentEntity = event.payload?.payment?.entity;
+        if (paymentEntity) {
+          const razorpayOrderId = paymentEntity.order_id;
+          const razorpayPaymentId = paymentEntity.id;
+          if (razorpayOrderId && razorpayPaymentId) {
+            const result = await markPaymentCaptureVerified(
+              razorpayOrderId,
+              razorpayPaymentId
+            );
+            console.log(
+              `[webhook] payment.captured processed: eventId=${eventId}, orderId=${razorpayOrderId}, transactionId=${result.transactionId}, finalized=${result.finalized}`
+            );
+          }
+        }
+        break;
+      }
+      case "payment.failed": {
+        const paymentEntity = event.payload?.payment?.entity;
+        if (paymentEntity) {
+          const razorpayOrderId = paymentEntity.order_id;
+          const failureReason = paymentEntity.error_description || "Payment failed";
+          if (razorpayOrderId) {
+            await admin.from("payment_transactions").update({
+              payment_status: "failed",
+              failure_reason: failureReason,
+              updated_at: (/* @__PURE__ */ new Date()).toISOString()
+            }).eq("gateway_order_id", razorpayOrderId).in("payment_status", ["created", "pending", "authorized"]);
+            console.log(
+              `[webhook] payment.failed processed: eventId=${eventId}, orderId=${razorpayOrderId}`
+            );
+          }
+        }
+        break;
+      }
+      case "refund.created":
+      case "refund.processed":
+      case "refund.failed": {
+        const refundEntity = event.payload?.refund?.entity;
+        if (refundEntity?.id) {
+          const resolved = await resolveLocalRefund(refundEntity);
+          if (!resolved.success) {
+            if (resolved.critical) {
+              await admin.from("payment_webhook_events").update({
+                status: "processed",
+                processed_at: (/* @__PURE__ */ new Date()).toISOString(),
+                payload: { ...event.payload, critical_error: resolved.error }
+              }).eq("event_id", eventId);
+              res.json({ status: "critical_conflict" });
+              return;
+            }
+            console.warn(
+              `[webhook] ${event.event}: resolve failed \u2014 ${resolved.error} (eventId=${eventId}, gatewayRefundId=${refundEntity.id})`
+            );
+            break;
+          }
+          switch (event.event) {
+            case "refund.created": {
+              const result = await handleRefundCreatedWebhook(resolved.refund, refundEntity);
+              console.log(
+                `[webhook] refund.created: gatewayRefundId=${refundEntity.id}, success=${result.success}, refundStatus=${result.refundStatus}`
+              );
+              break;
+            }
+            case "refund.processed": {
+              const result = await handleRefundProcessedWebhook(resolved.refund, refundEntity);
+              if (result.error === "reconciliation_required") {
+                console.warn(
+                  `[webhook] refund.processed: reconciliation_required, gatewayRefundId=${refundEntity.id}`
+                );
+              } else {
+                console.log(
+                  `[webhook] refund.processed: success=${result.success}, walletMoved=${result.walletMoved || false}, gatewayRefundId=${refundEntity.id}`
+                );
+              }
+              break;
+            }
+            case "refund.failed": {
+              const result = await handleRefundFailedWebhook(resolved.refund, refundEntity);
+              console.log(
+                `[webhook] refund.failed: success=${result.success}, gatewayRefundId=${refundEntity.id}`
+              );
+              break;
+            }
+          }
+        }
+        break;
+      }
+      default:
+        console.log(`[webhook] Unhandled event type: ${event.event} (eventId=${eventId})`);
+    }
+    await admin.from("payment_webhook_events").update({
+      status: "processed",
+      processed_at: (/* @__PURE__ */ new Date()).toISOString()
+    }).eq("event_id", eventId);
+    res.json({ status: "ok" });
+  } catch (err) {
+    console.error("[webhook] Error:", err.message);
+    try {
+      const admin = createAdminClient();
+      const eventId = req.headers["x-razorpay-event-id"];
+      if (eventId) {
+        await admin.from("payment_webhook_events").update({ status: "failed", processed_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("event_id", eventId);
+      }
+    } catch (markErr) {
+      console.error("[webhook] Failed to mark event as failed:", markErr.message);
+    }
+    res.status(500).json({ error: "Webhook processing failed" });
+  }
+});
+var webhooks_default = router47;
+
+// server/routes/reconciliation-cron.ts
+var import_express49 = require("express");
+var import_crypto5 = __toESM(require("crypto"));
+init_supabase();
+var router48 = (0, import_express49.Router)();
 function timingSafeEqualStr(a, b) {
   const ba = Buffer.from(a, "utf8");
   const bb = Buffer.from(b, "utf8");
@@ -8979,33 +9210,35 @@ async function handler(req, res) {
       res.status(401).json({ error: "unauthorized" });
       return;
     }
-    const { summary, alerts } = await runReconciliationWithAlerts({
+    const result = await executeGuardedRun({
       client: createAdminClient(),
       trigger: "cron"
     });
-    const { alertCandidates: _candidates, ...rest } = summary;
-    res.status(rest.status === "failed" ? 500 : 200).json({ ...rest, alerts });
+    if (result.retryAfterSeconds !== void 0) {
+      res.set("Retry-After", String(result.retryAfterSeconds));
+    }
+    res.status(result.status).json(result.body);
   } catch (e) {
     console.error("[reconciliation-cron] unexpected error:", e?.message ?? e);
     res.status(500).json({ error: String(e?.message ?? e) });
   }
 }
-router47.post("/reconciliation", handler);
-router47.get("/reconciliation", handler);
-var reconciliation_cron_default = router47;
+router48.post("/reconciliation", handler);
+router48.get("/reconciliation", handler);
+var reconciliation_cron_default = router48;
 
 // server/app.ts
-var import_express49 = __toESM(require("express"));
+var import_express50 = __toESM(require("express"));
 var import_cors = __toESM(require("cors"));
 var import_cookie_parser = __toESM(require("cookie-parser"));
-var app = (0, import_express49.default)();
+var app = (0, import_express50.default)();
 app.use((0, import_cors.default)({ origin: true, credentials: true }));
 app.use(
   "/api/webhooks",
-  import_express49.default.raw({ type: "application/json" }),
+  import_express50.default.raw({ type: "application/json" }),
   webhooks_default
 );
-app.use(import_express49.default.json());
+app.use(import_express50.default.json());
 app.use((0, import_cookie_parser.default)());
 app.use(authMiddleware);
 app.get("/api", (_req, res) => res.json({ message: "Laundry Home API" }));
@@ -9042,6 +9275,7 @@ app.use("/api/admin/config", admin_config_default);
 app.use("/api/admin/rbac", admin_rbac_default);
 app.use("/api/admin/commission", admin_commission_default);
 app.use("/api/admin/refunds", admin_refunds_default);
+app.use("/api/admin/reconciliation", admin_reconciliation_default);
 app.use("/api/order-stages", order_stages_default);
 app.use("/api/chat", chat_default);
 app.use("/api/favorites", favorites_default);

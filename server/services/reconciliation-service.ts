@@ -127,6 +127,12 @@ export interface RunSummary {
   // HTTP response (the route replaces it with dispatch stats).
   alertCandidates: AlertCandidate[];
   error?: string;
+  // Phase 3B-4 — internal classifier marker for a run-INSERT unique conflict
+  // (23505 on reconciliation_runs_one_active => another run is active). Set
+  // only at the run-insert site; never persisted, never serialized: the shared
+  // response builder strips it alongside alertCandidates. Controllers map it
+  // to 409 instead of matching free-form error text.
+  failureCode?: "active_run_conflict";
 }
 
 export interface RunReconciliationOptions {
@@ -1712,6 +1718,9 @@ export async function runReconciliation(opts: RunReconciliationOptions): Promise
   if (runErr || !runRow) {
     summary.status = "failed";
     summary.error = `failed to insert run: ${runErr?.message ?? "no row returned"}`;
+    // Stable PostgreSQL signal: 23505 here can only be the partial unique
+    // index reconciliation_runs_one_active (id is server-generated).
+    if (runErr?.code === "23505") summary.failureCode = "active_run_conflict";
     return summary;
   }
   summary.runId = runRow.id;

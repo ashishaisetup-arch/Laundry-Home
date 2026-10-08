@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
 import { createAdminClient } from "../supabase";
-import { runReconciliationWithAlerts } from "../services/reconciliation-alerts";
+import { executeGuardedRun } from "../services/reconciliation-run-controller";
 
 // ============================================================================
 // Reconciliation Cron Router — Phase 3B-1
@@ -47,17 +47,21 @@ async function handler(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Phase 3B-3: reusable orchestration keeps alert semantics identical for
-    // every trigger surface (3B-4's admin run endpoint will call this too).
-    // AlertCandidates are in-memory only and stripped from the response; the
-    // response carries dispatch stats instead. Dispatch failures can never
-    // change summary.status or this HTTP code.
-    const { summary, alerts } = await runReconciliationWithAlerts({
+    // Phase 3B-4: shared guarded orchestration with the admin manual-run
+    // endpoint (single implementation — see services/reconciliation-run-
+    // controller.ts). A fresh active run or a run-insert 23505 yields 409
+    // reconciliation_already_running instead of overlapping; stale crash rows
+    // are abandoned (+audit) first; alert semantics stay identical to 3B-3.
+    // AlertCandidates/failureCode are internal-only and stripped; dispatch
+    // failures can never change summary.status or this HTTP code.
+    const result = await executeGuardedRun({
       client: createAdminClient(),
       trigger: "cron",
     });
-    const { alertCandidates: _candidates, ...rest } = summary;
-    res.status(rest.status === "failed" ? 500 : 200).json({ ...rest, alerts });
+    if (result.retryAfterSeconds !== undefined) {
+      res.set("Retry-After", String(result.retryAfterSeconds));
+    }
+    res.status(result.status).json(result.body);
   } catch (e: any) {
     console.error("[reconciliation-cron] unexpected error:", e?.message ?? e);
     res.status(500).json({ error: String(e?.message ?? e) });
