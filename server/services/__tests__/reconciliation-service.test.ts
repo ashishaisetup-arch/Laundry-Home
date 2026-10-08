@@ -1667,4 +1667,48 @@ describe("C6 gateway-vs-DB reconciliation", () => {
     expect(razorpayErrorResult(500, null)).toBeNull();
     expect(razorpayErrorResult(401, { error: { code: "UNAUTHORIZED" } })).toBeNull();
   });
+
+  it("budget-clipped timeout => truncated (exhaustion), not failed", async () => {
+    const a = payment({ gateway_payment_id: "pay_a" });
+    const b = payment({ gateway_payment_id: "pay_b" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow({ gatewayTimeBudgetMs: 60 })],
+      payment_transactions: [a, b],
+    });
+    // every attempt's timeout = min(5000, remaining<=60) < 5000 -> clipped
+    const gw = fakeGateway({
+      payment: () => ({ kind: "failure" as const, timeout: true, error: "gateway lookup timed out after 60ms" }),
+    });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.checkResults.C6.status).toBe("truncated");
+    expect(summary.checkResults.C6.error).toContain("gateway time budget");
+    expect(summary.checkResults.C6.meta).toMatchObject({
+      attempted: 1,
+      budgetExhausted: true,
+    });
+    expect(summary.truncatedChecks).toContain("C6");
+    expect(summary.failedChecks).toEqual([]);
+    expect(gatewayFindings(db)).toHaveLength(0);
+  });
+
+  it("full-timeout failure (gateway never answered within its full timeout) => failed", async () => {
+    const a = payment({ gateway_payment_id: "pay_a" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [a],
+    });
+    // default budget: timeoutMs = min(5000, ~10000) == 5000 -> gateway's own stall
+    const gw = fakeGateway({
+      payment: () => ({ kind: "failure" as const, timeout: true, error: "gateway lookup timed out after 5000ms" }),
+    });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.checkResults.C6.status).toBe("failed");
+    expect(summary.checkResults.C6.error).toContain("timed out after 5000ms");
+    expect(summary.failedChecks).toContain("C6");
+    expect(gatewayFindings(db)).toHaveLength(0);
+  });
 });

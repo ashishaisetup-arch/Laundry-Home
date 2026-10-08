@@ -7843,6 +7843,10 @@ var RazorpayGatewayClient = class {
       if (classified) return classified;
       return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
     } catch (e) {
+      const aborted = e?.name === "AbortError" || /abort/i.test(String(e?.message ?? ""));
+      if (aborted) {
+        return { kind: "failure", timeout: true, error: `gateway lookup timed out after ${timeoutMs}ms` };
+      }
       return { kind: "failure", error: `gateway request failed: ${String(e?.message ?? e)}` };
     } finally {
       clearTimeout(timer);
@@ -8175,6 +8179,10 @@ async function checkC6(ctx, sourceOutcomes, gateway, gatewayError, sleep) {
     const gw = gateway;
     const res = item.kind === "payment" ? await gw.getPayment(item.gatewayId, timeoutMs) : await gw.getRefund(item.gatewayId, timeoutMs);
     if (res.kind === "failure") {
+      if (res.timeout && timeoutMs < baseTimeout) {
+        meta.budgetExhausted = true;
+        break;
+      }
       if (res.rateLimited) meta.rateLimited = true;
       out.completed = false;
       out.error = `gateway ${item.kind} lookup failed for ${item.gatewayId} after ${meta.attempted} attempt(s): ${res.error}${res.rateLimited ? " [rate limited]" : ""}`;

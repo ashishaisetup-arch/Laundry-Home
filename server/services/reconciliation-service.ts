@@ -145,6 +145,7 @@ export interface GatewayLookupResult {
   data?: any;
   error?: string;
   rateLimited?: boolean;
+  timeout?: boolean;
 }
 
 // Read-only gateway access. Implementations must never retry, never issue
@@ -589,7 +590,9 @@ async function checkC5(ctx: Ctx): Promise<CheckOutcome> {
 // gateway "id does not exist" answer is evidence (not a failure). Razorpay
 // encodes that answer asymmetrically: GET /v1/payments/{unknown} -> 400 +
 // BAD_REQUEST_ERROR "The id provided does not exist", while
-// GET /v1/refunds/{unknown} -> 404. Both classify as not_found.
+// GET /v1/refunds/{unknown} -> 404. Both classify as not_found. A wait
+// clipped by our remaining time budget is exhaustion (truncated), never a
+// failure — the gateway never got its full timeout.
 
 // Classifies a non-2xx Razorpay response into a lookup result.
 // Returns null for statuses that stay generic failures.
@@ -647,6 +650,10 @@ class RazorpayGatewayClient implements GatewayClient {
       if (classified) return classified;
       return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
     } catch (e: any) {
+      const aborted = e?.name === "AbortError" || /abort/i.test(String(e?.message ?? ""));
+      if (aborted) {
+        return { kind: "failure", timeout: true, error: `gateway lookup timed out after ${timeoutMs}ms` };
+      }
       return { kind: "failure", error: `gateway request failed: ${String(e?.message ?? e)}` };
     } finally {
       clearTimeout(timer);
@@ -1028,6 +1035,13 @@ async function checkC6(
         ? await gw.getPayment(item.gatewayId, timeoutMs)
         : await gw.getRefund(item.gatewayId, timeoutMs);
     if (res.kind === "failure") {
+      // A wait clipped by OUR remaining time budget is budget exhaustion
+      // (truncated, zero writes), not a gateway failure: the gateway never
+      // got its full timeout.
+      if (res.timeout && timeoutMs < baseTimeout) {
+        meta.budgetExhausted = true;
+        break;
+      }
       if (res.rateLimited) meta.rateLimited = true;
       out.completed = false;
       out.error = `gateway ${item.kind} lookup failed for ${item.gatewayId} after ${meta.attempted} attempt(s): ${res.error}${res.rateLimited ? " [rate limited]" : ""}`;
