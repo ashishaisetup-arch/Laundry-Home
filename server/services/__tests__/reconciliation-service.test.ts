@@ -1282,15 +1282,18 @@ describe("C6 gateway-vs-DB reconciliation", () => {
     expect(gw.calls).toHaveLength(0);
   });
 
-  it("time budget exhausted => truncated with budgetExhausted meta after one attempt", async () => {
+  it("time budget exhausted => truncated with budgetExhausted meta, ZERO C6 writes", async () => {
     const a = payment({ gateway_payment_id: "pay_a" });
     const b = payment({ gateway_payment_id: "pay_b" });
+    const seed = gwFinding("gateway_payment_status_mismatch", "payment", a.id);
     const { db, client } = createFakeDb({
       system_config: [systemConfigRow({ gatewayTimeBudgetMs: 50 })],
       payment_transactions: [a, b],
+      reconciliation_findings: [seed],
     });
     const gw = fakeGateway({ payment: () => gwOk() });
 
+    const before = JSON.stringify(gatewayFindings(db));
     const summary = await run(client, NOW, { gateway: gw });
 
     expect(summary.checkResults.C6.status).toBe("truncated");
@@ -1304,7 +1307,39 @@ describe("C6 gateway-vs-DB reconciliation", () => {
     expect(summary.truncatedChecks).toContain("C6");
     expect(summary.failedChecks).toEqual([]);
     expect(gw.calls).toHaveLength(1);
-    expect(gatewayFindings(db)).toHaveLength(0);
+    // all-or-nothing: no new gateway findings, seeded row byte-identical
+    expect(JSON.stringify(gatewayFindings(db))).toBe(before);
+    expect(gatewayFindings(db)).toHaveLength(1);
+    expect(seed.occurrence_count).toBe(3);
+  });
+
+  it("configured 20000ms budget: work finishes below it => C6 success and findings merge", async () => {
+    const p = payment({ gateway_payment_id: "pay_404b" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow({ gatewayTimeBudgetMs: 20000 })],
+      payment_transactions: [p],
+    });
+    const gw = fakeGateway({ payment: () => ({ kind: "not_found" as const, status: 404 }) });
+
+    const summary = await run(client, NOW, { gateway: gw });
+
+    expect(summary.status).toBe("success");
+    expect(summary.failedChecks).toEqual([]);
+    expect(summary.truncatedChecks).toEqual([]);
+    expect(summary.checkResults.C6.status).toBe("success");
+    expect(summary.checkResults.C6.meta).toMatchObject({
+      candidateCount: 1,
+      attempted: 1,
+      succeeded: 1,
+      skippedNoGatewayId: 0,
+      rateLimited: false,
+      budgetExhausted: false,
+    });
+    // merged, not merely fetched: the evidence finding is persisted
+    const rows = findingsOf(db, "gateway_payment_not_found");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ subject_id: p.id, status: "open", occurrence_count: 1 });
+    expect(summary.findingsNew).toBeGreaterThanOrEqual(1);
   });
 
   it("sleeps between lookups and never after the final one; timeouts bounded", async () => {
