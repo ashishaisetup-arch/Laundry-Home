@@ -55,6 +55,28 @@ export interface FindingCandidate {
   details: Record<string, unknown>;
 }
 
+export type AlertTransition = "new" | "reopened" | "escalated";
+
+// Phase 3B-3 — in-memory only, never persisted to reconciliation_runs and
+// stripped from the HTTP response by the route. Identity is deterministic
+// from the run: eventKey = findingId:transition:runId (mirrors the DB
+// unique (finding_id, transition, run_id) + unique (alert_event_key)).
+// Emitted ONLY for critical severity, only from persisted old→new state
+// transitions: new inserts, resolved→critical reopens, warning|info→critical
+// escalations. Repeat-open and acknowledged-critical re-detections never
+// emit; failed/truncated checks never reach merge and therefore never emit.
+export interface AlertCandidate {
+  findingId: string;
+  transition: AlertTransition;
+  runId: string;
+  checkCode: string;
+  severity: Severity;
+  subjectType: SubjectType;
+  subjectId: string;
+  summary: string;
+  eventKey: string;
+}
+
 export interface CheckOutcome {
   checkId: string;
   checkCode: string;
@@ -100,6 +122,10 @@ export interface RunSummary {
   // distinguish "run completed" from "every check succeeded" at a glance.
   failedChecks: string[];
   truncatedChecks: string[];
+  // Phase 3B-3 — critical alert transitions observed during the merge phase.
+  // In-memory only: not persisted to reconciliation_runs and omitted from the
+  // HTTP response (the route replaces it with dispatch stats).
+  alertCandidates: AlertCandidate[];
   error?: string;
 }
 
@@ -1437,6 +1463,27 @@ function findingKey(subjectType: string, subjectId: string): string {
   return `${subjectType}|${subjectId}`;
 }
 
+// Deterministic alert identity: findingId:transition:runId. Never a timestamp.
+function makeAlert(
+  findingId: string,
+  transition: AlertTransition,
+  runId: string,
+  checkCode: string,
+  cand: FindingCandidate
+): AlertCandidate {
+  return {
+    findingId,
+    transition,
+    runId,
+    checkCode,
+    severity: "critical",
+    subjectType: cand.subjectType,
+    subjectId: cand.subjectId,
+    summary: cand.summary,
+    eventKey: `${findingId}:${transition}:${runId}`,
+  };
+}
+
 function insertRow(checkCode: string, c: FindingCandidate, iso: string) {
   return {
     check_code: checkCode,
@@ -1457,12 +1504,18 @@ async function insertOrReopen(
   checkCode: string,
   cand: FindingCandidate,
   iso: string,
-  counts: MergeCounts
+  counts: MergeCounts,
+  runId: string,
+  alerts: AlertCandidate[]
 ): Promise<void> {
-  const { error } = await client.from("reconciliation_findings")
+  const { data: insertedData, error } = await client.from("reconciliation_findings")
     .insert(insertRow(checkCode, cand, iso)).select("id");
   if (!error) {
     counts.inserted++;
+    const insertedRow = Array.isArray(insertedData) ? insertedData[0] : insertedData;
+    if (cand.severity === "critical" && insertedRow?.id) {
+      alerts.push(makeAlert(insertedRow.id, "new", runId, checkCode, cand));
+    }
     return;
   }
   if ((error as any).code !== "23505") {
@@ -1477,6 +1530,10 @@ async function insertOrReopen(
   if (qErr || !data) {
     throw new Error(`finding conflict but lookup failed: ${qErr?.message}`);
   }
+  // Capture persisted prior state BEFORE the update so the alert transition
+  // is derived from old state → new state, never from the new row alone.
+  const prevStatus = (data as any).status as string;
+  const prevSeverity = (data as any).severity as Severity;
   const { error: upErr } = await client.from("reconciliation_findings").update({
     status: "open",
     severity: cand.severity,
@@ -1489,6 +1546,14 @@ async function insertOrReopen(
   }).eq("id", (data as any).id).select("id");
   if (upErr) throw new Error(`finding reopen failed: ${upErr.message}`);
   counts.reopened++;
+  if (cand.severity === "critical" && (data as any).id) {
+    if (prevStatus === "resolved") {
+      alerts.push(makeAlert((data as any).id, "reopened", runId, checkCode, cand));
+    } else if (prevSeverity === "warning" || prevSeverity === "info") {
+      alerts.push(makeAlert((data as any).id, "escalated", runId, checkCode, cand));
+    }
+    // prev critical while open/acknowledged → repeat detection: no alert
+  }
 }
 
 async function mergeCheck(
@@ -1496,7 +1561,9 @@ async function mergeCheck(
   checkCode: string,
   candidates: FindingCandidate[],
   existingForCheck: any[],
-  now: Date
+  now: Date,
+  runId: string,
+  alerts: AlertCandidate[]
 ): Promise<MergeCounts> {
   const counts: MergeCounts = { inserted: 0, resolved: 0, reopened: 0 };
   const iso = now.toISOString();
@@ -1528,8 +1595,14 @@ async function mergeCheck(
       }).eq("id", row.id).select("id");
       if (error) throw new Error(`finding reopen failed: ${error.message}`);
       counts.reopened++;
+      if (cand.severity === "critical") {
+        alerts.push(makeAlert(row.id, "reopened", runId, checkCode, cand));
+      }
     } else {
-      // open or acknowledged: condition persists; acknowledged stays acknowledged
+      // open or acknowledged: condition persists; acknowledged stays
+      // acknowledged. Capture persisted prior severity BEFORE the update so
+      // escalation is derived from old state → new state.
+      const prevSeverity = row.severity as Severity;
       const { error } = await client.from("reconciliation_findings").update({
         severity: cand.severity,
         summary: cand.summary,
@@ -1538,6 +1611,14 @@ async function mergeCheck(
         occurrence_count: (row.occurrence_count ?? 1) + 1,
       }).eq("id", row.id).select("id");
       if (error) throw new Error(`finding update failed: ${error.message}`);
+      if (
+        cand.severity === "critical" &&
+        (prevSeverity === "warning" || prevSeverity === "info")
+      ) {
+        // warning|info → critical while still open/acknowledged: one alert.
+        // critical remains critical → nothing; critical → warning → nothing.
+        alerts.push(makeAlert(row.id, "escalated", runId, checkCode, cand));
+      }
     }
   }
 
@@ -1554,11 +1635,18 @@ async function mergeCheck(
   const remaining = Array.from(candMap.values());
   if (remaining.length > 0) {
     const rows = remaining.map((c) => insertRow(checkCode, c, iso));
-    const { error } = await client.from("reconciliation_findings").insert(rows).select("id");
+    const { data: insertedRows, error } = await client.from("reconciliation_findings")
+      .insert(rows).select("id,subject_type,subject_id");
     if (!error) {
       counts.inserted += remaining.length;
+      for (const r of Array.isArray(insertedRows) ? insertedRows : []) {
+        const c = candMap.get(findingKey(r.subject_type, r.subject_id));
+        if (c && c.severity === "critical") {
+          alerts.push(makeAlert(r.id, "new", runId, checkCode, c));
+        }
+      }
     } else if ((error as any).code === "23505") {
-      for (const c of remaining) await insertOrReopen(client, checkCode, c, iso, counts);
+      for (const c of remaining) await insertOrReopen(client, checkCode, c, iso, counts, runId, alerts);
     } else {
       throw new Error(`finding insert failed: ${error.message}`);
     }
@@ -1572,10 +1660,14 @@ async function mergeCheck(
 // ---------------------------------------------------------------------------
 // Guarantees:
 //   - writes only reconciliation_runs + reconciliation_findings
+//     (alertCandidates is in-memory only; dispatch writes happen later in
+//      reconciliation-alerts.ts and are isolated from this guarantee)
 //   - a check that failed or was truncated produces NO finding writes at all
 //     (its pre-existing findings stay exactly as they were)
 //   - check_results records per-check success/failed/truncated so partial
 //     scans are observable
+//   - failed/truncated checks also emit NO alert candidates (merge never
+//     runs for them)
 
 const CHECK_IDS = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"];
 const FINDING_SCAN_LIMIT = 10000;
@@ -1603,6 +1695,7 @@ export async function runReconciliation(opts: RunReconciliationOptions): Promise
     findingsReopened: 0,
     failedChecks: [],
     truncatedChecks: [],
+    alertCandidates: [],
   };
 
   const thresholds = await loadThresholds(client);
@@ -1685,7 +1778,10 @@ export async function runReconciliation(opts: RunReconciliationOptions): Promise
 
       for (const code of codes) {
         const cands = candidatesByCode.get(code) ?? [];
-        const counts = await mergeCheck(client, code, cands, existingByCheck.get(code) ?? [], now);
+        const counts = await mergeCheck(
+          client, code, cands, existingByCheck.get(code) ?? [], now,
+          summary.runId ?? "", summary.alertCandidates
+        );
         summary.findingsNew += counts.inserted;
         summary.findingsResolved += counts.resolved;
         summary.findingsReopened += counts.reopened;

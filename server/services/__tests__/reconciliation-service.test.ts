@@ -6,6 +6,10 @@ import {
   compareGatewayRefund,
   razorpayErrorResult,
 } from "../reconciliation-service";
+import {
+  dispatchReconciliationAlerts,
+  runReconciliationWithAlerts,
+} from "../reconciliation-alerts";
 
 // ============================================================================
 // Fake Supabase client
@@ -136,6 +140,17 @@ class FakeQuery implements PromiseLike<any> {
             e.check_code === r.check_code &&
             e.subject_type === r.subject_type &&
             e.subject_id === r.subject_id);
+          if (dup) {
+            return {
+              data: null,
+              error: { code: "23505", message: "duplicate key value violates unique constraint" },
+            };
+          }
+        }
+      }
+      if (this.table === "reconciliation_alerts") {
+        for (const r of incoming) {
+          const dup = rows.some((e) => e.alert_event_key === r.alert_event_key);
           if (dup) {
             return {
               data: null,
@@ -1745,5 +1760,460 @@ describe("C6 gateway-vs-DB reconciliation", () => {
     expect(summary.checkResults.C6.error).toContain("timed out after 5000ms");
     expect(summary.failedChecks).toContain("C6");
     expect(gatewayFindings(db)).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// Reconciliation alerts (Phase 3B-3) — transition candidates + orchestration
+// ============================================================================
+// Invariants under test:
+//   - only new / reopened / warning|info→critical escalated emit candidates
+//   - repeat-open critical, acknowledged-critical re-detect, downgrades,
+//     failed checks and truncated checks emit NOTHING
+//   - escalation derives from PERSISTED prior severity captured pre-update
+//   - eventKey = findingId:transition:runId (never a timestamp)
+//   - candidates never persist to the run row (in-memory only)
+//   - dispatch: reserve-first (23505 ⇒ skip all downstream), admin+superadmin
+//     in-app batch, audit, delivery stats — and it can never change the
+//     reconciliation result
+
+function withAlertEnv<T>(fn: () => Promise<T>): Promise<T> {
+  const savedUrl = process.env.RECON_ALERT_WEBHOOK_URL;
+  const savedSecret = process.env.RECON_ALERT_WEBHOOK_SECRET;
+  delete process.env.RECON_ALERT_WEBHOOK_URL;
+  delete process.env.RECON_ALERT_WEBHOOK_SECRET;
+  return fn().finally(() => {
+    if (savedUrl === undefined) delete process.env.RECON_ALERT_WEBHOOK_URL;
+    else process.env.RECON_ALERT_WEBHOOK_URL = savedUrl;
+    if (savedSecret === undefined) delete process.env.RECON_ALERT_WEBHOOK_SECRET;
+    else process.env.RECON_ALERT_WEBHOOK_SECRET = savedSecret;
+  });
+}
+
+function stuckCritPayment(): Row {
+  return payment({ payment_status: "created", updated_at: minusHours(NOW, 25) });
+}
+
+function stuckWarnPayment(): Row {
+  return payment({ payment_status: "pending", updated_at: minusMin(NOW, 31) });
+}
+
+function seededFinding(p: Row, overrides: Row = {}): Row {
+  return {
+    id: randomUUID(),
+    check_code: "payment_stuck_uncertain",
+    subject_type: "payment",
+    subject_id: p.id,
+    severity: "critical",
+    status: "open",
+    summary: `Payment ${p.id} stuck in ${p.payment_status}`,
+    details: {},
+    first_detected_at: minusHours(NOW, 48),
+    last_detected_at: minusHours(NOW, 24),
+    occurrence_count: 1,
+    resolved_at: null,
+    resolution_note: null,
+    ...overrides,
+  };
+}
+
+describe("reconciliation alerts — transition candidates", () => {
+  it("new critical finding emits a 'new' candidate keyed by findingId:transition:runId", async () => {
+    const p = stuckCritPayment();
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+
+    const s = await run(client);
+
+    const cands = s.alertCandidates.filter((c) => c.checkCode === "payment_stuck_uncertain");
+    expect(cands).toHaveLength(1);
+    const c = cands[0];
+    expect(c).toMatchObject({
+      transition: "new",
+      severity: "critical",
+      subjectType: "payment",
+      subjectId: p.id,
+      runId: s.runId,
+      checkCode: "payment_stuck_uncertain",
+    });
+    expect(c.findingId).toBeTruthy();
+    expect(c.eventKey).toBe(`${c.findingId}:new:${s.runId}`);
+    expect(s.alertCandidates.every((x) => x.eventKey.includes(x.runId))).toBe(true);
+
+    // candidates are in-memory only: never written to the run row
+    const runRow = db.rows("reconciliation_runs")[0];
+    expect(runRow).toBeDefined();
+    expect(runRow.check_results).toBeDefined();
+    expect(runRow.check_results).not.toHaveProperty("alertCandidates");
+    expect(runRow.alertCandidates).toBeUndefined();
+  });
+
+  it("new warning finding inserts the row but emits no candidate", async () => {
+    const p = stuckWarnPayment();
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+
+    const s = await run(client);
+
+    expect(s.findingsNew).toBe(1);
+    expect(findingsOf(db, "payment_stuck_uncertain")).toHaveLength(1);
+    expect(s.alertCandidates).toEqual([]);
+  });
+
+  it("repeat detection of an open critical finding: occurrence bumps silently, no re-alert", async () => {
+    const p = stuckCritPayment();
+    const f = seededFinding(p, { status: "open", severity: "critical" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      reconciliation_findings: [f],
+    });
+
+    const s = await run(client);
+
+    expect(s.alertCandidates).toEqual([]);
+    expect(s.findingsNew).toBe(0);
+    expect(s.findingsReopened).toBe(0);
+    const row = findingsOf(db, "payment_stuck_uncertain")[0];
+    expect(row.occurrence_count).toBe(2);
+    expect(row.status).toBe("open");
+    expect(row.severity).toBe("critical");
+  });
+
+  it("resolved finding detected critical again emits a 'reopened' candidate", async () => {
+    const p = stuckCritPayment();
+    const f = seededFinding(p, {
+      status: "resolved",
+      severity: "critical",
+      resolved_at: minusHours(NOW, 2),
+      resolution_note: "auto-resolved earlier",
+    });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      reconciliation_findings: [f],
+    });
+
+    const s = await run(client);
+
+    expect(s.findingsReopened).toBe(1);
+    expect(s.alertCandidates).toHaveLength(1);
+    const c = s.alertCandidates[0];
+    expect(c.transition).toBe("reopened");
+    expect(c.eventKey).toBe(`${c.findingId}:reopened:${s.runId}`);
+    expect(c.findingId).toBe(f.id);
+    const row = findingsOf(db, "payment_stuck_uncertain")[0];
+    expect(row.status).toBe("open");
+    expect(row.resolved_at).toBeNull();
+  });
+
+  it("open warning finding detected critical escalates using persisted prior severity", async () => {
+    const p = stuckCritPayment();
+    const f = seededFinding(p, { status: "open", severity: "warning" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      reconciliation_findings: [f],
+    });
+
+    const s = await run(client);
+
+    expect(s.findingsNew).toBe(0);
+    expect(s.alertCandidates).toHaveLength(1);
+    const c = s.alertCandidates[0];
+    expect(c.transition).toBe("escalated");
+    expect(c.severity).toBe("critical");
+    expect(c.eventKey).toBe(`${c.findingId}:escalated:${s.runId}`);
+    expect(c.findingId).toBe(f.id);
+    const row = findingsOf(db, "payment_stuck_uncertain")[0];
+    expect(row.severity).toBe("critical"); // stored critical becomes next run's prior state
+    expect(row.status).toBe("open");
+  });
+
+  it("acknowledged warning finding detected critical also escalates", async () => {
+    const p = stuckCritPayment();
+    const f = seededFinding(p, { status: "acknowledged", severity: "warning" });
+    const { client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      reconciliation_findings: [f],
+    });
+
+    const s = await run(client);
+
+    expect(s.alertCandidates).toHaveLength(1);
+    expect(s.alertCandidates[0].transition).toBe("escalated");
+  });
+
+  it("acknowledged critical finding re-detected stays acknowledged and emits nothing", async () => {
+    const p = stuckCritPayment();
+    const f = seededFinding(p, { status: "acknowledged", severity: "critical" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      reconciliation_findings: [f],
+    });
+
+    const s = await run(client);
+
+    expect(s.alertCandidates).toEqual([]);
+    const row = findingsOf(db, "payment_stuck_uncertain")[0];
+    expect(row.status).toBe("acknowledged");
+    expect(row.occurrence_count).toBe(2);
+  });
+
+  it("critical → warning downgrade stores the warning and emits nothing", async () => {
+    const p = stuckWarnPayment();
+    const f = seededFinding(p, { status: "open", severity: "critical" });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+      reconciliation_findings: [f],
+    });
+
+    const s = await run(client);
+
+    expect(s.alertCandidates).toEqual([]);
+    expect(s.findingsNew).toBe(0);
+    const row = findingsOf(db, "payment_stuck_uncertain")[0];
+    expect(row.severity).toBe("warning");
+    expect(row.occurrence_count).toBe(2);
+  });
+
+  it("failed check emits no candidates and writes no findings", async () => {
+    const p = stuckCritPayment();
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow()],
+      payment_transactions: [p],
+    });
+    db.fail("payment_transactions");
+
+    const s = await run(client);
+
+    expect(s.checkResults.C4.status).toBe("failed");
+    expect(s.failedChecks).toContain("C4");
+    expect(s.alertCandidates).toEqual([]);
+    expect(findingsOf(db, "payment_stuck_uncertain")).toHaveLength(0);
+    expect(s.status).toBe("success"); // other checks succeeded
+  });
+
+  it("truncated check (cap reached mid-scan) emits no candidates", async () => {
+    const pCrit = payment({
+      payment_status: "created",
+      created_at: minusHours(NOW, 30),
+      updated_at: minusHours(NOW, 25),
+    });
+    const pWarn = payment({
+      payment_status: "pending",
+      created_at: minusMin(NOW, 90),
+      updated_at: minusMin(NOW, 31),
+    });
+    const { db, client } = createFakeDb({
+      system_config: [systemConfigRow({ maxFindingsPerCheck: 1 })],
+      payment_transactions: [pCrit, pWarn],
+    });
+
+    const s = await run(client);
+
+    expect(s.checkResults.C4.status).toBe("truncated");
+    expect(s.truncatedChecks).toContain("C4");
+    expect(s.alertCandidates).toEqual([]); // merge never runs for truncated
+    expect(findingsOf(db, "payment_stuck_uncertain")).toHaveLength(0);
+  });
+});
+
+describe("reconciliation alerts — dispatch orchestration", () => {
+  const admin = { id: randomUUID(), role: "admin" };
+  const superadmin = { id: randomUUID(), role: "superadmin" };
+  const customer = { id: randomUUID(), role: "customer" };
+  const vendor = { id: randomUUID(), role: "vendor" };
+
+  it("runReconciliationWithAlerts: end-to-end — ledger, admin-only in-app, audit, disabled webhook", async () => {
+    await withAlertEnv(async () => {
+      const p = stuckCritPayment();
+      const { db, client } = createFakeDb({
+        system_config: [systemConfigRow()],
+        payment_transactions: [p],
+        user_profiles: [admin, superadmin, customer, vendor],
+      });
+
+      const { summary, alerts } = await runReconciliationWithAlerts({
+        client,
+        trigger: "test",
+        now: NOW,
+        gateway: fakeGateway(),
+      });
+
+      expect(summary.status).toBe("success");
+      expect(alerts).toMatchObject({
+        candidates: 1,
+        recipients: 2,
+        inAppSent: 2,
+        inAppFailed: 0,
+        webhook: "disabled",
+        webhookFailed: 0,
+        skippedDuplicates: 0,
+      });
+      expect(alerts.dispatchErrors).toEqual([]);
+
+      const ledger = db.rows("reconciliation_alerts");
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]).toMatchObject({
+        transition: "new",
+        run_id: summary.runId,
+        check_code: "payment_stuck_uncertain",
+        severity: "critical",
+        subject_type: "payment",
+        subject_id: p.id,
+      });
+      expect(ledger[0].alert_event_key).toBe(`${ledger[0].finding_id}:new:${summary.runId}`);
+      expect(ledger[0].dispatched_at).toBeTruthy();
+      expect(ledger[0].delivery).toMatchObject({
+        recipients: 2,
+        inAppSent: 2,
+        inAppFailed: 0,
+        webhook: "disabled",
+        webhookFailed: 0,
+      });
+
+      const notes = db.rows("notifications");
+      expect(notes).toHaveLength(2);
+      expect(notes.map((n: Row) => n.user_id).sort()).toEqual([admin.id, superadmin.id].sort());
+      expect(notes[0]).toMatchObject({ type: "recon_alert", channel: "push" });
+      expect(notes[0].title).toBe("New critical reconciliation finding");
+      expect(notes[0].body).toContain("payment_stuck_uncertain");
+      expect(notes[0].body).toContain("payment");
+
+      const audits = db.rows("audit_logs").filter((a: Row) => a.action === "reconciliation.alert_dispatched");
+      expect(audits).toHaveLength(1);
+      expect(audits[0].user_id).toBeNull();
+      expect(audits[0].resource).toBe("reconciliation_alerts");
+      expect(audits[0].details).toMatchObject({
+        finding_id: ledger[0].finding_id,
+        alert_event_key: ledger[0].alert_event_key,
+        transition: "new",
+        run_id: summary.runId,
+        recipients: 2,
+        inAppSent: 2,
+        inAppFailed: 0,
+        webhook: "disabled",
+      });
+    });
+  });
+
+  it("zero candidates: nothing dispatched, stats all zero/disabled", async () => {
+    await withAlertEnv(async () => {
+      const { db, client } = createFakeDb({
+        system_config: [systemConfigRow()],
+        user_profiles: [admin],
+      });
+
+      const { summary, alerts } = await runReconciliationWithAlerts({
+        client,
+        trigger: "test",
+        now: NOW,
+        gateway: fakeGateway(),
+      });
+
+      expect(summary.alertCandidates).toEqual([]);
+      expect(alerts).toMatchObject({
+        candidates: 0,
+        recipients: 0,
+        inAppSent: 0,
+        inAppFailed: 0,
+        webhook: "disabled",
+        webhookFailed: 0,
+        skippedDuplicates: 0,
+      });
+      expect(db.rows("reconciliation_alerts")).toHaveLength(0);
+      expect(db.rows("notifications")).toHaveLength(0);
+      expect(db.rows("audit_logs").filter((a: Row) => a.action === "reconciliation.alert_dispatched")).toHaveLength(0);
+    });
+  });
+
+  it("duplicate ledger reservation (23505) skips every downstream channel", async () => {
+    await withAlertEnv(async () => {
+      const findingId = randomUUID();
+      const runId = randomUUID();
+      const ev = {
+        findingId,
+        transition: "new" as const,
+        runId,
+        checkCode: "payment_stuck_uncertain",
+        severity: "critical" as const,
+        subjectType: "payment" as const,
+        subjectId: randomUUID(),
+        summary: "Payment x stuck in created for 1500m",
+        eventKey: `${findingId}:new:${runId}`,
+      };
+      const { db, client } = createFakeDb({
+        user_profiles: [admin],
+        reconciliation_alerts: [{ id: randomUUID(), alert_event_key: ev.eventKey }],
+      });
+
+      const stats = await dispatchReconciliationAlerts({ client, candidates: [ev] });
+
+      expect(stats.skippedDuplicates).toBe(1);
+      expect(stats.dispatchErrors).toEqual([]);
+      expect(db.rows("notifications")).toHaveLength(0);
+      expect(db.rows("audit_logs")).toHaveLength(0);
+      expect(db.rows("reconciliation_alerts")).toHaveLength(1); // seed only
+    });
+  });
+
+  it("notifications insert failure is counted, not thrown — run result untouched", async () => {
+    await withAlertEnv(async () => {
+      const p = stuckCritPayment();
+      const { db, client } = createFakeDb({
+        system_config: [systemConfigRow()],
+        payment_transactions: [p],
+        user_profiles: [admin, superadmin],
+      });
+      db.fail("notifications");
+
+      const { summary, alerts } = await runReconciliationWithAlerts({
+        client,
+        trigger: "test",
+        now: NOW,
+        gateway: fakeGateway(),
+      });
+
+      expect(summary.status).toBe("success");
+      expect(summary.findingsNew).toBe(1);
+      expect(alerts.inAppFailed).toBe(2);
+      expect(alerts.inAppSent).toBe(0);
+      expect(alerts.candidates).toBe(1);
+      const ledger = db.rows("reconciliation_alerts");
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0].delivery).toMatchObject({ inAppFailed: 2, inAppSent: 0 });
+    });
+  });
+
+  it("ledger reservation failure blocks all downstream dispatch (reserve-first)", async () => {
+    await withAlertEnv(async () => {
+      const p = stuckCritPayment();
+      const { db, client } = createFakeDb({
+        system_config: [systemConfigRow()],
+        payment_transactions: [p],
+        user_profiles: [admin, superadmin],
+      });
+      db.fail("reconciliation_alerts");
+
+      const { summary, alerts } = await runReconciliationWithAlerts({
+        client,
+        trigger: "test",
+        now: NOW,
+        gateway: fakeGateway(),
+      });
+
+      expect(summary.status).toBe("success"); // dispatch failure never changes the run
+      expect(alerts.dispatchErrors.some((e) => e.includes("ledger reserve failed"))).toBe(true);
+      expect(db.rows("notifications")).toHaveLength(0);
+      expect(db.rows("audit_logs").filter((a: Row) => a.action.startsWith("reconciliation.alert"))).toHaveLength(0);
+    });
   });
 });

@@ -6043,9 +6043,9 @@ async function verifyTopupPayment(userId, razorpayOrderId, razorpayPaymentId, ra
   if (txn.gateway_order_id !== razorpayOrderId) {
     return { success: false, error: "Order ID mismatch" };
   }
-  const crypto7 = await import("crypto");
-  const expectedSig = crypto7.createHmac("sha256", RAZORPAY_KEY_SECRET2).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
-  if (!crypto7.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
+  const crypto8 = await import("crypto");
+  const expectedSig = crypto8.createHmac("sha256", RAZORPAY_KEY_SECRET2).update(`${razorpayOrderId}|${razorpayPaymentId}`).digest("hex");
+  if (!crypto8.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(razorpaySignature))) {
     return { success: false, error: "Invalid payment signature" };
   }
   try {
@@ -7257,14 +7257,14 @@ router46.post("/razorpay", async (req, res) => {
       return;
     }
     const rawBody = req.body;
-    const crypto7 = await import("crypto");
-    const expectedSig = crypto7.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
+    const crypto8 = await import("crypto");
+    const expectedSig = crypto8.createHmac("sha256", RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest("hex");
     if (Buffer.byteLength(expectedSig) !== Buffer.byteLength(signature)) {
       console.warn("[webhook] Invalid signature length");
       res.status(401).json({ error: "Invalid webhook signature" });
       return;
     }
-    if (!crypto7.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
+    if (!crypto8.timingSafeEqual(Buffer.from(expectedSig), Buffer.from(signature))) {
       console.warn("[webhook] Invalid signature");
       res.status(401).json({ error: "Invalid webhook signature" });
       return;
@@ -8454,6 +8454,19 @@ var RESOLVE_NOTE = "stale: condition cleared in automated scan";
 function findingKey(subjectType, subjectId) {
   return `${subjectType}|${subjectId}`;
 }
+function makeAlert(findingId, transition, runId, checkCode, cand) {
+  return {
+    findingId,
+    transition,
+    runId,
+    checkCode,
+    severity: "critical",
+    subjectType: cand.subjectType,
+    subjectId: cand.subjectId,
+    summary: cand.summary,
+    eventKey: `${findingId}:${transition}:${runId}`
+  };
+}
 function insertRow(checkCode, c, iso) {
   return {
     check_code: checkCode,
@@ -8468,10 +8481,14 @@ function insertRow(checkCode, c, iso) {
     occurrence_count: 1
   };
 }
-async function insertOrReopen(client, checkCode, cand, iso, counts) {
-  const { error } = await client.from("reconciliation_findings").insert(insertRow(checkCode, cand, iso)).select("id");
+async function insertOrReopen(client, checkCode, cand, iso, counts, runId, alerts) {
+  const { data: insertedData, error } = await client.from("reconciliation_findings").insert(insertRow(checkCode, cand, iso)).select("id");
   if (!error) {
     counts.inserted++;
+    const insertedRow = Array.isArray(insertedData) ? insertedData[0] : insertedData;
+    if (cand.severity === "critical" && insertedRow?.id) {
+      alerts.push(makeAlert(insertedRow.id, "new", runId, checkCode, cand));
+    }
     return;
   }
   if (error.code !== "23505") {
@@ -8481,6 +8498,8 @@ async function insertOrReopen(client, checkCode, cand, iso, counts) {
   if (qErr || !data) {
     throw new Error(`finding conflict but lookup failed: ${qErr?.message}`);
   }
+  const prevStatus = data.status;
+  const prevSeverity = data.severity;
   const { error: upErr } = await client.from("reconciliation_findings").update({
     status: "open",
     severity: cand.severity,
@@ -8493,8 +8512,15 @@ async function insertOrReopen(client, checkCode, cand, iso, counts) {
   }).eq("id", data.id).select("id");
   if (upErr) throw new Error(`finding reopen failed: ${upErr.message}`);
   counts.reopened++;
+  if (cand.severity === "critical" && data.id) {
+    if (prevStatus === "resolved") {
+      alerts.push(makeAlert(data.id, "reopened", runId, checkCode, cand));
+    } else if (prevSeverity === "warning" || prevSeverity === "info") {
+      alerts.push(makeAlert(data.id, "escalated", runId, checkCode, cand));
+    }
+  }
 }
-async function mergeCheck(client, checkCode, candidates, existingForCheck, now) {
+async function mergeCheck(client, checkCode, candidates, existingForCheck, now, runId, alerts) {
   const counts = { inserted: 0, resolved: 0, reopened: 0 };
   const iso = now.toISOString();
   const candMap = /* @__PURE__ */ new Map();
@@ -8521,7 +8547,11 @@ async function mergeCheck(client, checkCode, candidates, existingForCheck, now) 
       }).eq("id", row.id).select("id");
       if (error) throw new Error(`finding reopen failed: ${error.message}`);
       counts.reopened++;
+      if (cand.severity === "critical") {
+        alerts.push(makeAlert(row.id, "reopened", runId, checkCode, cand));
+      }
     } else {
+      const prevSeverity = row.severity;
       const { error } = await client.from("reconciliation_findings").update({
         severity: cand.severity,
         summary: cand.summary,
@@ -8530,6 +8560,9 @@ async function mergeCheck(client, checkCode, candidates, existingForCheck, now) 
         occurrence_count: (row.occurrence_count ?? 1) + 1
       }).eq("id", row.id).select("id");
       if (error) throw new Error(`finding update failed: ${error.message}`);
+      if (cand.severity === "critical" && (prevSeverity === "warning" || prevSeverity === "info")) {
+        alerts.push(makeAlert(row.id, "escalated", runId, checkCode, cand));
+      }
     }
   }
   if (staleIds.length > 0) {
@@ -8544,11 +8577,17 @@ async function mergeCheck(client, checkCode, candidates, existingForCheck, now) 
   const remaining = Array.from(candMap.values());
   if (remaining.length > 0) {
     const rows = remaining.map((c) => insertRow(checkCode, c, iso));
-    const { error } = await client.from("reconciliation_findings").insert(rows).select("id");
+    const { data: insertedRows, error } = await client.from("reconciliation_findings").insert(rows).select("id,subject_type,subject_id");
     if (!error) {
       counts.inserted += remaining.length;
+      for (const r of Array.isArray(insertedRows) ? insertedRows : []) {
+        const c = candMap.get(findingKey(r.subject_type, r.subject_id));
+        if (c && c.severity === "critical") {
+          alerts.push(makeAlert(r.id, "new", runId, checkCode, c));
+        }
+      }
     } else if (error.code === "23505") {
-      for (const c of remaining) await insertOrReopen(client, checkCode, c, iso, counts);
+      for (const c of remaining) await insertOrReopen(client, checkCode, c, iso, counts, runId, alerts);
     } else {
       throw new Error(`finding insert failed: ${error.message}`);
     }
@@ -8579,7 +8618,8 @@ async function runReconciliation(opts) {
     findingsResolved: 0,
     findingsReopened: 0,
     failedChecks: [],
-    truncatedChecks: []
+    truncatedChecks: [],
+    alertCandidates: []
   };
   const thresholds = await loadThresholds(client);
   const ctx = { client, thresholds, cap: thresholds.maxFindingsPerCheck, now };
@@ -8645,7 +8685,15 @@ async function runReconciliation(opts) {
       if (status !== "success") continue;
       for (const code of codes) {
         const cands = candidatesByCode.get(code) ?? [];
-        const counts = await mergeCheck(client, code, cands, existingByCheck.get(code) ?? [], now);
+        const counts = await mergeCheck(
+          client,
+          code,
+          cands,
+          existingByCheck.get(code) ?? [],
+          now,
+          summary.runId ?? "",
+          summary.alertCandidates
+        );
         summary.findingsNew += counts.inserted;
         summary.findingsResolved += counts.resolved;
         summary.findingsReopened += counts.reopened;
@@ -8683,19 +8731,240 @@ async function runReconciliation(opts) {
   return summary;
 }
 
+// server/services/reconciliation-alerts.ts
+var import_crypto4 = __toESM(require("crypto"));
+function emptyStats() {
+  return {
+    candidates: 0,
+    recipients: 0,
+    inAppSent: 0,
+    inAppFailed: 0,
+    webhook: "disabled",
+    webhookFailed: 0,
+    skippedDuplicates: 0,
+    dispatchErrors: []
+  };
+}
+var TITLES = {
+  new: "New critical reconciliation finding",
+  reopened: "Critical reconciliation finding reopened",
+  escalated: "Reconciliation finding escalated to critical"
+};
+function alertBody(ev) {
+  return `${ev.checkCode} \xB7 ${ev.subjectType}:${ev.subjectId} \u2014 ${ev.summary}`;
+}
+async function postWebhook(url, body, headers, fetchImpl) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5e3);
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: controller.signal
+    });
+    if (res.ok) return { state: "sent", httpStatus: res.status, errorClass: "http_4xx" };
+    return {
+      state: "failed",
+      httpStatus: res.status,
+      errorClass: res.status >= 500 ? "http_5xx" : "http_4xx"
+    };
+  } catch (e) {
+    const isAbort = e?.name === "AbortError" || e?.name === "TimeoutError";
+    return {
+      state: "failed",
+      httpStatus: null,
+      errorClass: isAbort ? "timeout" : "network"
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function dispatchReconciliationAlerts(opts) {
+  const { client, candidates } = opts;
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const stats = emptyStats();
+  stats.candidates = candidates.length;
+  if (candidates.length === 0) return stats;
+  const webhookUrl = process.env.RECON_ALERT_WEBHOOK_URL || "";
+  const webhookSecret = process.env.RECON_ALERT_WEBHOOK_SECRET || "";
+  let webhookAttempts = 0;
+  let recipientIds = [];
+  try {
+    const recRes = await client.from("user_profiles").select("id").in("role", ["admin", "superadmin"]);
+    if (recRes?.error) {
+      stats.dispatchErrors.push(`recipients query failed: ${recRes.error.message}`);
+    } else {
+      recipientIds = (recRes.data ?? []).map((r) => r.id).filter(Boolean);
+    }
+  } catch (e) {
+    stats.dispatchErrors.push(`recipients query failed: ${String(e?.message ?? e)}`);
+  }
+  stats.recipients = recipientIds.length;
+  for (const ev of candidates) {
+    try {
+      if (ev.severity !== "critical") continue;
+      const reserve = await client.from("reconciliation_alerts").insert({
+        finding_id: ev.findingId,
+        alert_event_key: ev.eventKey,
+        transition: ev.transition,
+        run_id: ev.runId,
+        check_code: ev.checkCode,
+        severity: ev.severity,
+        subject_type: ev.subjectType,
+        subject_id: ev.subjectId,
+        dispatched_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).select("id");
+      if (reserve?.error) {
+        if (reserve.error.code === "23505") {
+          stats.skippedDuplicates++;
+          continue;
+        }
+        stats.dispatchErrors.push(`ledger reserve failed: ${reserve.error.message}`);
+        continue;
+      }
+      let evInAppSent = 0;
+      let evInAppFailed = 0;
+      if (recipientIds.length > 0) {
+        const rows = recipientIds.map((uid) => ({
+          user_id: uid,
+          type: "recon_alert",
+          title: TITLES[ev.transition],
+          body: alertBody(ev),
+          channel: "push"
+        }));
+        const nRes = await client.from("notifications").insert(rows).select("id");
+        if (nRes?.error) {
+          evInAppFailed = rows.length;
+        } else {
+          evInAppSent = (nRes.data ?? []).length;
+          evInAppFailed = rows.length - evInAppSent;
+        }
+      }
+      stats.inAppSent += evInAppSent;
+      stats.inAppFailed += evInAppFailed;
+      let evWebhook = "disabled";
+      let wh = null;
+      if (webhookUrl) {
+        webhookAttempts++;
+        const body = JSON.stringify({
+          v: 1,
+          eventKey: ev.eventKey,
+          transition: ev.transition,
+          runId: ev.runId,
+          findingId: ev.findingId,
+          checkCode: ev.checkCode,
+          severity: ev.severity,
+          subjectType: ev.subjectType,
+          subjectId: ev.subjectId,
+          summary: ev.summary,
+          occurredAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        const headers = { "content-type": "application/json" };
+        if (webhookSecret) {
+          headers["x-recon-alert-signature"] = import_crypto4.default.createHmac("sha256", webhookSecret).update(body).digest("hex");
+        }
+        wh = await postWebhook(webhookUrl, body, headers, fetchImpl);
+        evWebhook = wh.state;
+        if (wh.state === "failed") {
+          stats.webhookFailed++;
+          try {
+            await client.from("audit_logs").insert({
+              user_id: null,
+              action: "reconciliation.alert_webhook_failed",
+              resource: "reconciliation_alerts",
+              details: {
+                finding_id: ev.findingId,
+                alert_event_key: ev.eventKey,
+                http_status: wh.httpStatus,
+                error_class: wh.errorClass,
+                attempted_at: (/* @__PURE__ */ new Date()).toISOString()
+              }
+            });
+          } catch (e) {
+            stats.dispatchErrors.push(`webhook-failure audit failed: ${String(e?.message ?? e)}`);
+          }
+        }
+      }
+      try {
+        const aRes = await client.from("audit_logs").insert({
+          user_id: null,
+          action: "reconciliation.alert_dispatched",
+          resource: "reconciliation_alerts",
+          details: {
+            finding_id: ev.findingId,
+            alert_event_key: ev.eventKey,
+            transition: ev.transition,
+            run_id: ev.runId,
+            check_code: ev.checkCode,
+            severity: ev.severity,
+            subject_type: ev.subjectType,
+            subject_id: ev.subjectId,
+            recipients: recipientIds.length,
+            inAppSent: evInAppSent,
+            inAppFailed: evInAppFailed,
+            webhook: evWebhook
+          }
+        });
+        if (aRes?.error) {
+          stats.dispatchErrors.push(`dispatch audit failed: ${aRes.error.message}`);
+        }
+      } catch (e) {
+        stats.dispatchErrors.push(`dispatch audit failed: ${String(e?.message ?? e)}`);
+      }
+      try {
+        const dRes = await client.from("reconciliation_alerts").update({
+          delivery: {
+            recipients: recipientIds.length,
+            inAppSent: evInAppSent,
+            inAppFailed: evInAppFailed,
+            webhook: evWebhook,
+            webhookFailed: wh?.state === "failed" ? 1 : 0
+          }
+        }).eq("alert_event_key", ev.eventKey).select("id");
+        if (dRes?.error) {
+          stats.dispatchErrors.push(`delivery update failed: ${dRes.error.message}`);
+        }
+      } catch (e) {
+        stats.dispatchErrors.push(`delivery update failed: ${String(e?.message ?? e)}`);
+      }
+    } catch (e) {
+      stats.dispatchErrors.push(`event dispatch failed: ${String(e?.message ?? e)}`);
+    }
+  }
+  if (!webhookUrl || webhookAttempts === 0) stats.webhook = "disabled";
+  else stats.webhook = stats.webhookFailed > 0 ? "failed" : "sent";
+  return stats;
+}
+async function runReconciliationWithAlerts(opts) {
+  const summary = await runReconciliation(opts);
+  let alerts;
+  try {
+    alerts = await dispatchReconciliationAlerts({
+      client: opts.client,
+      candidates: summary.alertCandidates
+    });
+  } catch (e) {
+    alerts = emptyStats();
+    alerts.candidates = summary.alertCandidates.length;
+    alerts.dispatchErrors.push(`dispatch failed: ${String(e?.message ?? e)}`);
+  }
+  return { summary, alerts };
+}
+
 // server/routes/reconciliation-cron.ts
 var import_express48 = require("express");
-var import_crypto4 = __toESM(require("crypto"));
+var import_crypto5 = __toESM(require("crypto"));
 init_supabase();
 var router47 = (0, import_express48.Router)();
 function timingSafeEqualStr(a, b) {
   const ba = Buffer.from(a, "utf8");
   const bb = Buffer.from(b, "utf8");
   if (ba.length !== bb.length) {
-    import_crypto4.default.timingSafeEqual(ba, ba);
+    import_crypto5.default.timingSafeEqual(ba, ba);
     return false;
   }
-  return import_crypto4.default.timingSafeEqual(ba, bb);
+  return import_crypto5.default.timingSafeEqual(ba, bb);
 }
 async function handler(req, res) {
   try {
@@ -8710,11 +8979,12 @@ async function handler(req, res) {
       res.status(401).json({ error: "unauthorized" });
       return;
     }
-    const summary = await runReconciliation({
+    const { summary, alerts } = await runReconciliationWithAlerts({
       client: createAdminClient(),
       trigger: "cron"
     });
-    res.status(summary.status === "failed" ? 500 : 200).json(summary);
+    const { alertCandidates: _candidates, ...rest } = summary;
+    res.status(rest.status === "failed" ? 500 : 200).json({ ...rest, alerts });
   } catch (e) {
     console.error("[reconciliation-cron] unexpected error:", e?.message ?? e);
     res.status(500).json({ error: String(e?.message ?? e) });
