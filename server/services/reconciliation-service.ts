@@ -586,7 +586,32 @@ async function checkC5(ctx: Ctx): Promise<CheckOutcome> {
 // Candidates are exactly this run's C1-C4 subjects. Every lookup is a single
 // GET with a remaining-budget timeout: any failure or 429 fails the whole
 // check (zero owned-code writes), cap/budget exhaustion truncates it, and a
-// 404 from an authenticated GET is evidence (not a failure).
+// gateway "id does not exist" answer is evidence (not a failure). Razorpay
+// encodes that answer asymmetrically: GET /v1/payments/{unknown} -> 400 +
+// BAD_REQUEST_ERROR "The id provided does not exist", while
+// GET /v1/refunds/{unknown} -> 404. Both classify as not_found.
+
+// Classifies a non-2xx Razorpay response into a lookup result.
+// Returns null for statuses that stay generic failures.
+export function razorpayErrorResult(status: number, body: unknown): GatewayLookupResult | null {
+  if (status === 404) return { kind: "not_found", status };
+  if (status === 400) {
+    const err: any = (body as any)?.error;
+    const desc = String(err?.description ?? err?.message ?? "");
+    if (err?.code === "BAD_REQUEST_ERROR" && /does not exist/i.test(desc)) {
+      return { kind: "not_found", status };
+    }
+    return {
+      kind: "failure",
+      status,
+      error: `gateway responded 400${desc ? `: ${desc.slice(0, 200)}` : ""}`,
+    };
+  }
+  if (status === 429) {
+    return { kind: "failure", status, rateLimited: true, error: "rate limited (429)" };
+  }
+  return null;
+}
 
 class RazorpayGatewayClient implements GatewayClient {
   constructor(private readonly keyId: string, private readonly keySecret: string) {}
@@ -603,16 +628,24 @@ class RazorpayGatewayClient implements GatewayClient {
         headers: { Authorization: this.authHeader() },
         signal: controller.signal,
       });
-      if (response.status === 404) return { kind: "not_found", status: 404 };
-      if (response.status === 429) return { kind: "failure", status: 429, rateLimited: true, error: "rate limited (429)" };
-      if (!response.ok) return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
-      let data: any;
-      try {
-        data = await response.json();
-      } catch {
-        return { kind: "failure", status: response.status, error: "gateway response was not valid JSON" };
+      if (response.ok) {
+        let data: any;
+        try {
+          data = await response.json();
+        } catch {
+          return { kind: "failure", status: response.status, error: "gateway response was not valid JSON" };
+        }
+        return { kind: "ok", status: response.status, data };
       }
-      return { kind: "ok", status: response.status, data };
+      let body: any = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      const classified = razorpayErrorResult(response.status, body);
+      if (classified) return classified;
+      return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
     } catch (e: any) {
       return { kind: "failure", error: `gateway request failed: ${String(e?.message ?? e)}` };
     } finally {

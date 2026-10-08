@@ -4,6 +4,7 @@ import {
   runReconciliation,
   compareGatewayPayment,
   compareGatewayRefund,
+  razorpayErrorResult,
 } from "../reconciliation-service";
 
 // ============================================================================
@@ -1630,5 +1631,40 @@ describe("C6 gateway-vs-DB reconciliation", () => {
     const rows = findingsOf(db, "gateway_refund_not_found");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ severity: "critical", subject_id: r.id });
+  });
+
+  it("Razorpay error classification: id-not-found is evidence, real errors stay failures", () => {
+    // live-verified shapes: payments answer 400+BAD_REQUEST, refunds answer 404
+    expect(
+      razorpayErrorResult(400, {
+        error: {
+          code: "BAD_REQUEST_ERROR",
+          description: "The id provided does not exist",
+          source: "internal",
+          step: "payment_initiation",
+          reason: "input_validation_failed",
+        },
+      })
+    ).toEqual({ kind: "not_found", status: 400 });
+
+    expect(razorpayErrorResult(404, { message: "no Route matched with those values" })).toEqual({
+      kind: "not_found",
+      status: 404,
+    });
+
+    // other 400s are real request failures, carrying the gateway description
+    const other400 = razorpayErrorResult(400, {
+      error: { code: "BAD_REQUEST_ERROR", description: "invalid parameter" },
+    });
+    expect(other400?.kind).toBe("failure");
+    expect(other400?.error).toContain("400");
+    expect(other400?.error).toContain("invalid parameter");
+
+    const rate = razorpayErrorResult(429, null);
+    expect(rate).toMatchObject({ kind: "failure", rateLimited: true });
+
+    // unrecognized statuses fall through to the generic failure path
+    expect(razorpayErrorResult(500, null)).toBeNull();
+    expect(razorpayErrorResult(401, { error: { code: "UNAUTHORIZED" } })).toBeNull();
   });
 });

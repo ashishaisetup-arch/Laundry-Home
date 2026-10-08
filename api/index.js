@@ -7789,6 +7789,25 @@ async function checkC5(ctx) {
   }
   return out;
 }
+function razorpayErrorResult(status, body) {
+  if (status === 404) return { kind: "not_found", status };
+  if (status === 400) {
+    const err = body?.error;
+    const desc = String(err?.description ?? err?.message ?? "");
+    if (err?.code === "BAD_REQUEST_ERROR" && /does not exist/i.test(desc)) {
+      return { kind: "not_found", status };
+    }
+    return {
+      kind: "failure",
+      status,
+      error: `gateway responded 400${desc ? `: ${desc.slice(0, 200)}` : ""}`
+    };
+  }
+  if (status === 429) {
+    return { kind: "failure", status, rateLimited: true, error: "rate limited (429)" };
+  }
+  return null;
+}
 var RazorpayGatewayClient = class {
   constructor(keyId, keySecret) {
     this.keyId = keyId;
@@ -7805,16 +7824,24 @@ var RazorpayGatewayClient = class {
         headers: { Authorization: this.authHeader() },
         signal: controller.signal
       });
-      if (response.status === 404) return { kind: "not_found", status: 404 };
-      if (response.status === 429) return { kind: "failure", status: 429, rateLimited: true, error: "rate limited (429)" };
-      if (!response.ok) return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
-      let data;
-      try {
-        data = await response.json();
-      } catch {
-        return { kind: "failure", status: response.status, error: "gateway response was not valid JSON" };
+      if (response.ok) {
+        let data;
+        try {
+          data = await response.json();
+        } catch {
+          return { kind: "failure", status: response.status, error: "gateway response was not valid JSON" };
+        }
+        return { kind: "ok", status: response.status, data };
       }
-      return { kind: "ok", status: response.status, data };
+      let body = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      const classified = razorpayErrorResult(response.status, body);
+      if (classified) return classified;
+      return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
     } catch (e) {
       return { kind: "failure", error: `gateway request failed: ${String(e?.message ?? e)}` };
     } finally {
