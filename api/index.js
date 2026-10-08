@@ -7451,6 +7451,30 @@ var CHECK_CODES = {
   C7: "webhook_processing_anomaly",
   C8: "wallet_ledger_inconsistency"
 };
+var C6_OWNED_CODES = [
+  "gateway_payment_status_mismatch",
+  "gateway_payment_amount_mismatch",
+  "gateway_payment_order_mismatch",
+  "gateway_payment_not_found",
+  "gateway_payment_unknown_status",
+  "gateway_refund_status_mismatch",
+  "gateway_refund_amount_mismatch",
+  "gateway_refund_payment_mismatch",
+  "gateway_refund_not_found",
+  "gateway_refund_unknown_status"
+];
+var GATEWAY_PAYMENT_STATUSES = ["created", "authorized", "captured", "refunded", "failed"];
+var GATEWAY_REFUND_STATUSES = ["pending", "processed", "failed"];
+function emptyC6Meta() {
+  return {
+    candidateCount: 0,
+    attempted: 0,
+    succeeded: 0,
+    skippedNoGatewayId: 0,
+    rateLimited: false,
+    budgetExhausted: false
+  };
+}
 var DEFAULT_THRESHOLDS = {
   refundSubmittingWarnMin: 15,
   refundSubmittingCritMin: 60,
@@ -7459,9 +7483,13 @@ var DEFAULT_THRESHOLDS = {
   paymentStuckWarnMin: 30,
   paymentStuckCritHours: 24,
   webhookPendingWarnMin: 5,
-  maxFindingsPerCheck: 500
+  maxFindingsPerCheck: 500,
+  gatewayMaxLookupsPerRun: 30,
+  gatewayLookupDelayMs: 100,
+  gatewayTimeBudgetMs: 1e4,
+  gatewayLookupTimeoutMs: 5e3
 };
-var CHECK_ORDER = ["C1", "C2", "C3", "C4", "C5", "C7", "C8"];
+var CHECK_ORDER = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"];
 var LEDGER_SCAN_LIMIT = 1e4;
 var CORRELATION_KEYS = ["gateway_order_id", "gateway_payment_id", "gateway_refund_id"];
 async function fetchAll(builder, cap) {
@@ -7496,7 +7524,7 @@ function failedOutcome(checkId, error) {
 function dedupeFindings(findings) {
   const map = /* @__PURE__ */ new Map();
   for (const f of findings) {
-    const key = `${f.subjectType}|${f.subjectId}`;
+    const key = `${f.checkCode}|${f.subjectType}|${f.subjectId}`;
     const prev = map.get(key);
     if (!prev) {
       map.set(key, { ...f, details: { ...f.details } });
@@ -7758,6 +7786,439 @@ async function checkC5(ctx) {
         updatedAt: p.updated_at || p.created_at
       }
     });
+  }
+  return out;
+}
+function razorpayErrorResult(status, body) {
+  if (status === 404) return { kind: "not_found", status };
+  if (status === 400) {
+    const err = body?.error;
+    const desc = String(err?.description ?? err?.message ?? "");
+    if (err?.code === "BAD_REQUEST_ERROR" && /does not exist/i.test(desc)) {
+      return { kind: "not_found", status };
+    }
+    return {
+      kind: "failure",
+      status,
+      error: `gateway responded 400${desc ? `: ${desc.slice(0, 200)}` : ""}`
+    };
+  }
+  if (status === 429) {
+    return { kind: "failure", status, rateLimited: true, error: "rate limited (429)" };
+  }
+  return null;
+}
+var RazorpayGatewayClient = class {
+  constructor(keyId, keySecret) {
+    this.keyId = keyId;
+    this.keySecret = keySecret;
+  }
+  authHeader() {
+    return `Basic ${Buffer.from(`${this.keyId}:${this.keySecret}`).toString("base64")}`;
+  }
+  async get(url, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: this.authHeader() },
+        signal: controller.signal
+      });
+      if (response.ok) {
+        let data;
+        try {
+          data = await response.json();
+        } catch {
+          return { kind: "failure", status: response.status, error: "gateway response was not valid JSON" };
+        }
+        return { kind: "ok", status: response.status, data };
+      }
+      let body = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      const classified = razorpayErrorResult(response.status, body);
+      if (classified) return classified;
+      return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
+    } catch (e) {
+      const aborted = e?.name === "AbortError" || /abort/i.test(String(e?.message ?? ""));
+      if (aborted) {
+        return { kind: "failure", timeout: true, error: `gateway lookup timed out after ${timeoutMs}ms` };
+      }
+      return { kind: "failure", error: `gateway request failed: ${String(e?.message ?? e)}` };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  getPayment(gatewayPaymentId, timeoutMs) {
+    return this.get(`https://api.razorpay.com/v1/payments/${encodeURIComponent(gatewayPaymentId)}`, timeoutMs);
+  }
+  getRefund(gatewayRefundId, timeoutMs) {
+    return this.get(`https://api.razorpay.com/v1/refunds/${encodeURIComponent(gatewayRefundId)}`, timeoutMs);
+  }
+};
+async function loadRowsIn(client, table, ids, chunkSize = 500) {
+  const rows = [];
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const slice = ids.slice(i, i + chunkSize);
+    const f = await fetchAll(client.from(table).select("*").in("id", slice), slice.length);
+    if (f.error) return { rows: [], error: f.error };
+    rows.push(...f.rows);
+  }
+  return { rows };
+}
+function paymentGatewayDetails(db, gw) {
+  return {
+    paymentStatus: db.payment_status,
+    dbAmount: db.amount,
+    dbAmountRefunded: db.amount_refunded ?? 0,
+    dbCurrency: db.currency ?? null,
+    db_gateway_order_id: db.gateway_order_id ?? null,
+    gateway_status: gw.status ?? null,
+    gateway_refund_status: gw.refund_status ?? null,
+    gateway_amount: gw.amount ?? null,
+    gateway_amount_refunded: gw.amount_refunded ?? 0,
+    gateway_currency: gw.currency ?? null,
+    gateway_payment_id: gw.id ?? db.gateway_payment_id ?? null,
+    gateway_order_id: gw.order_id ?? null,
+    updatedAt: db.updated_at || db.created_at
+  };
+}
+function compareGatewayPayment(db, gw) {
+  const findings = [];
+  const base = paymentGatewayDetails(db, gw);
+  const dbAmountRefunded = db.amount_refunded ?? 0;
+  const gwAmountRefunded = gw.amount_refunded ?? 0;
+  const gwRefundStatus = gw.refund_status ?? null;
+  const unknownStatus = typeof gw.status !== "string" || !GATEWAY_PAYMENT_STATUSES.includes(gw.status);
+  const unknownRefundStatus = gwRefundStatus !== null && !["partial", "full"].includes(String(gwRefundStatus));
+  if (unknownStatus || unknownRefundStatus) {
+    findings.push({
+      checkCode: "gateway_payment_unknown_status",
+      severity: "warning",
+      subjectType: "payment",
+      subjectId: db.id,
+      summary: `Payment ${db.id} has unclassifiable gateway state (status=${String(gw.status)}, refund_status=${String(gwRefundStatus)})`,
+      details: {
+        ...base,
+        unknownField: unknownStatus && unknownRefundStatus ? "status+refund_status" : unknownStatus ? "status" : "refund_status"
+      }
+    });
+  }
+  const amountFields = [];
+  if (gw.amount !== db.amount * 100) amountFields.push("amount");
+  if (gwAmountRefunded !== dbAmountRefunded * 100) amountFields.push("amount_refunded");
+  if (gw.currency !== db.currency) amountFields.push("currency");
+  if (amountFields.length > 0) {
+    findings.push({
+      checkCode: "gateway_payment_amount_mismatch",
+      severity: "critical",
+      subjectType: "payment",
+      subjectId: db.id,
+      summary: `Payment ${db.id} amount disagrees with gateway on: ${amountFields.join(", ")}`,
+      details: { ...base, fields: amountFields }
+    });
+  }
+  if (db.gateway_order_id && gw.order_id && gw.order_id !== db.gateway_order_id) {
+    findings.push({
+      checkCode: "gateway_payment_order_mismatch",
+      severity: "critical",
+      subjectType: "payment",
+      subjectId: db.id,
+      summary: `Payment ${db.id} sits on gateway order ${gw.order_id} but DB expects ${db.gateway_order_id}`,
+      details: base
+    });
+  }
+  const refundedAmountMismatch = gwAmountRefunded !== dbAmountRefunded * 100;
+  if (!unknownStatus && !unknownRefundStatus && !refundedAmountMismatch) {
+    const dbStatus = db.payment_status;
+    const gwStatus = gw.status;
+    const uncertain = ["creating", "created", "pending", "authorized"].includes(dbStatus);
+    let statusOk;
+    let note;
+    if (uncertain) {
+      statusOk = gwStatus === "created" || gwStatus === "authorized" || gwStatus === "failed";
+      note = `DB payment in ${dbStatus} but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "captured") {
+      statusOk = gwStatus === "captured" && gwRefundStatus === null;
+      note = `DB payment captured but gateway reports status=${gwStatus}, refund_status=${String(gwRefundStatus)}`;
+    } else if (dbStatus === "partially_refunded") {
+      statusOk = gwStatus === "captured";
+      note = `DB payment partially_refunded but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "refunded") {
+      statusOk = gwStatus === "refunded";
+      note = `DB payment refunded but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "failed") {
+      statusOk = gwStatus === "failed" || gwStatus === "created" || gwStatus === "authorized";
+      note = `DB payment failed but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "cancelled") {
+      statusOk = gwStatus !== "captured" && gwStatus !== "refunded";
+      note = `DB payment cancelled but gateway reports ${gwStatus}`;
+    } else {
+      statusOk = true;
+      note = "";
+    }
+    if (!statusOk) {
+      findings.push({
+        checkCode: "gateway_payment_status_mismatch",
+        severity: "critical",
+        subjectType: "payment",
+        subjectId: db.id,
+        summary: `Payment ${db.id}: ${note}`,
+        details: base
+      });
+    }
+  }
+  return findings;
+}
+function compareGatewayRefund(db, linkedTxn, gw) {
+  const findings = [];
+  const base = {
+    refundStatus: db.refund_status,
+    dbAmount: db.amount,
+    dbGatewayRefundAmount: db.gateway_refund_amount ?? null,
+    paymentTransactionId: db.payment_transaction_id ?? null,
+    db_gateway_refund_id: db.gateway_refund_id ?? null,
+    gateway_status: gw.status ?? null,
+    gateway_amount: gw.amount ?? null,
+    gateway_refund_id: gw.id ?? db.gateway_refund_id ?? null,
+    gateway_payment_id: gw.payment_id ?? null,
+    updatedAt: db.updated_at
+  };
+  const unknownStatus = typeof gw.status !== "string" || !GATEWAY_REFUND_STATUSES.includes(gw.status);
+  if (typeof db.gateway_refund_amount === "number" && gw.amount !== db.gateway_refund_amount * 100) {
+    findings.push({
+      checkCode: "gateway_refund_amount_mismatch",
+      severity: "critical",
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id} gateway amount ${String(gw.amount)} paise disagrees with DB gateway_refund_amount ${db.gateway_refund_amount}`,
+      details: { ...base, fields: ["amount"] }
+    });
+  }
+  if (gw.payment_id && linkedTxn?.gateway_payment_id && gw.payment_id !== linkedTxn.gateway_payment_id) {
+    findings.push({
+      checkCode: "gateway_refund_payment_mismatch",
+      severity: "critical",
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id} sits on gateway payment ${gw.payment_id} but DB links ${linkedTxn.gateway_payment_id}`,
+      details: base
+    });
+  }
+  if (unknownStatus) {
+    findings.push({
+      checkCode: "gateway_refund_unknown_status",
+      severity: "warning",
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id} has unclassifiable gateway status ${String(gw.status)}`,
+      details: { ...base, unknownField: "status" }
+    });
+    return findings;
+  }
+  const mismatchRules = {
+    "pending|processed": { severity: "critical", note: "gateway refund processed but DB refund still pending" },
+    "pending|failed": { severity: "warning", note: "gateway refund failed but DB refund still pending" },
+    "submitting|processed": { severity: "critical", note: "gateway refund processed but DB refund still submitting" },
+    "submitting|failed": { severity: "warning", note: "gateway refund failed but DB refund still submitting" },
+    "processing|processed": { severity: "critical", note: "gateway refund processed but DB refund still processing" },
+    "processing|failed": { severity: "warning", note: "gateway refund failed but DB refund still processing" },
+    "completed|pending": { severity: "critical", note: "DB refund completed but gateway refund still pending" },
+    "completed|failed": { severity: "critical", note: "DB refund completed but gateway refund failed" },
+    "failed|processed": { severity: "critical", note: "gateway refund processed but DB refund marked failed" },
+    "failed|pending": { severity: "warning", note: "DB refund failed but gateway refund still pending" },
+    "reconciliation_required|failed": { severity: "critical", note: "gateway refund failed but DB refund expects gateway success" },
+    "reconciliation_required|pending": { severity: "warning", note: "reconciliation-required DB refund still pending at gateway" }
+  };
+  const rule = mismatchRules[`${db.refund_status}|${gw.status}`];
+  if (rule) {
+    findings.push({
+      checkCode: "gateway_refund_status_mismatch",
+      severity: rule.severity,
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id}: ${rule.note} (gateway status ${gw.status})`,
+      details: base
+    });
+  }
+  return findings;
+}
+function paymentNotFoundFinding(db) {
+  return {
+    checkCode: "gateway_payment_not_found",
+    severity: "critical",
+    subjectType: "payment",
+    subjectId: db.id,
+    summary: `Gateway payment ${db.gateway_payment_id} not found at Razorpay for payment ${db.id}`,
+    details: {
+      paymentStatus: db.payment_status,
+      dbAmount: db.amount,
+      dbAmountRefunded: db.amount_refunded ?? 0,
+      gateway_payment_id: db.gateway_payment_id,
+      gateway_order_id: db.gateway_order_id ?? null,
+      updatedAt: db.updated_at || db.created_at
+    }
+  };
+}
+function refundNotFoundFinding(db) {
+  return {
+    checkCode: "gateway_refund_not_found",
+    severity: "critical",
+    subjectType: "refund",
+    subjectId: db.id,
+    summary: `Gateway refund ${db.gateway_refund_id} not found at Razorpay for refund ${db.id}`,
+    details: {
+      refundStatus: db.refund_status,
+      dbAmount: db.amount,
+      dbGatewayRefundAmount: db.gateway_refund_amount ?? null,
+      gateway_refund_id: db.gateway_refund_id,
+      paymentTransactionId: db.payment_transaction_id ?? null,
+      updatedAt: db.updated_at
+    }
+  };
+}
+async function checkC6(ctx, sourceOutcomes, gateway, gatewayError, sleep) {
+  const meta = emptyC6Meta();
+  const out = {
+    checkId: "C6",
+    checkCode: C6_OWNED_CODES[0],
+    completed: true,
+    truncated: false,
+    findings: [],
+    meta
+  };
+  const failedSource = sourceOutcomes.find((o) => !o.completed);
+  if (failedSource) {
+    out.completed = false;
+    out.error = `source check ${failedSource.checkId} failed - gateway comparison input incomplete`;
+    return out;
+  }
+  const truncatedSource = sourceOutcomes.find((o) => o.truncated);
+  if (truncatedSource) {
+    out.truncated = true;
+    out.error = `source check ${truncatedSource.checkId} truncated - gateway comparison input incomplete`;
+    return out;
+  }
+  const paymentIds = /* @__PURE__ */ new Set();
+  const refundIds = /* @__PURE__ */ new Set();
+  for (const o of sourceOutcomes) {
+    for (const c of dedupeFindings(o.findings)) {
+      if (c.subjectType === "payment") paymentIds.add(c.subjectId);
+      else if (c.subjectType === "refund") refundIds.add(c.subjectId);
+    }
+  }
+  meta.candidateCount = paymentIds.size + refundIds.size;
+  if (meta.candidateCount === 0) return out;
+  const paymentRes = await loadRowsIn(ctx.client, "payment_transactions", [...paymentIds]);
+  if (paymentRes.error) {
+    out.completed = false;
+    out.error = `failed to reload payment candidates: ${paymentRes.error}`;
+    return out;
+  }
+  const refundRes = await loadRowsIn(ctx.client, "payment_refunds", [...refundIds]);
+  if (refundRes.error) {
+    out.completed = false;
+    out.error = `failed to reload refund candidates: ${refundRes.error}`;
+    return out;
+  }
+  const paymentRows = new Map(paymentRes.rows.map((r) => [r.id, r]));
+  const refundRows = new Map(refundRes.rows.map((r) => [r.id, r]));
+  if (paymentRows.size + refundRows.size < meta.candidateCount) {
+    out.completed = false;
+    out.error = `candidate rows missing after reload: ${paymentRows.size + refundRows.size}/${meta.candidateCount}`;
+    return out;
+  }
+  const work = [];
+  for (const row of paymentRows.values()) {
+    if (!row.gateway_payment_id) meta.skippedNoGatewayId++;
+    else work.push({ kind: "payment", row, gatewayId: row.gateway_payment_id });
+  }
+  for (const row of refundRows.values()) {
+    if (!row.gateway_refund_id) meta.skippedNoGatewayId++;
+    else work.push({ kind: "refund", row, gatewayId: row.gateway_refund_id });
+  }
+  if (work.length > 0 && (gatewayError || !gateway)) {
+    out.completed = false;
+    out.error = gatewayError ?? "gateway not configured";
+    return out;
+  }
+  if (work.length > ctx.thresholds.gatewayMaxLookupsPerRun) {
+    out.truncated = true;
+    out.error = `gateway lookup cap exceeded: ${work.length} lookups > cap ${ctx.thresholds.gatewayMaxLookupsPerRun}`;
+    return out;
+  }
+  const linkedPayments = new Map(paymentRows);
+  const needLinked = [...new Set(
+    [...refundRows.values()].map((r) => r.payment_transaction_id).filter(Boolean)
+  )].filter((id) => !linkedPayments.has(id));
+  if (needLinked.length > 0) {
+    const linked = await loadRowsIn(ctx.client, "payment_transactions", needLinked);
+    if (linked.error) {
+      out.completed = false;
+      out.error = `failed to reload linked payment rows: ${linked.error}`;
+      return out;
+    }
+    for (const r of linked.rows) linkedPayments.set(r.id, r);
+  }
+  const budgetMs = ctx.thresholds.gatewayTimeBudgetMs;
+  const delayMs = ctx.thresholds.gatewayLookupDelayMs;
+  const baseTimeout = ctx.thresholds.gatewayLookupTimeoutMs;
+  const started = Date.now();
+  for (let i = 0; i < work.length; i++) {
+    const item = work[i];
+    const remaining = budgetMs - (Date.now() - started);
+    if (remaining <= 0) {
+      meta.budgetExhausted = true;
+      break;
+    }
+    const timeoutMs = Math.min(baseTimeout, remaining);
+    meta.attempted++;
+    const gw = gateway;
+    const res = item.kind === "payment" ? await gw.getPayment(item.gatewayId, timeoutMs) : await gw.getRefund(item.gatewayId, timeoutMs);
+    if (res.kind === "failure") {
+      if (res.timeout && timeoutMs < baseTimeout) {
+        meta.budgetExhausted = true;
+        break;
+      }
+      if (res.rateLimited) meta.rateLimited = true;
+      out.completed = false;
+      out.error = `gateway ${item.kind} lookup failed for ${item.gatewayId} after ${meta.attempted} attempt(s): ${res.error}${res.rateLimited ? " [rate limited]" : ""}`;
+      return out;
+    }
+    meta.succeeded++;
+    if (res.kind === "not_found") {
+      out.findings.push(
+        item.kind === "payment" ? paymentNotFoundFinding(item.row) : refundNotFoundFinding(item.row)
+      );
+    } else if (item.kind === "payment") {
+      out.findings.push(...compareGatewayPayment(item.row, res.data));
+    } else {
+      out.findings.push(
+        ...compareGatewayRefund(item.row, linkedPayments.get(item.row.payment_transaction_id) ?? null, res.data)
+      );
+    }
+    const isLast = i === work.length - 1;
+    if (!isLast) {
+      const afterRemaining = budgetMs - (Date.now() - started);
+      if (afterRemaining <= delayMs + Math.min(baseTimeout, 1)) {
+        meta.budgetExhausted = true;
+        break;
+      }
+      await sleep(delayMs);
+    }
+  }
+  if (meta.budgetExhausted) {
+    out.truncated = true;
+    out.error = `gateway time budget ${budgetMs}ms exhausted after ${meta.attempted} of ${work.length} lookup(s)`;
+    return out;
+  }
+  if (meta.candidateCount > 0 && meta.attempted === 0 && meta.skippedNoGatewayId < meta.candidateCount) {
+    out.completed = false;
+    out.error = `zero gateway attempts without explanation (candidateCount=${meta.candidateCount}, skippedNoGatewayId=${meta.skippedNoGatewayId})`;
+    return out;
   }
   return out;
 }
@@ -8094,11 +8555,20 @@ async function mergeCheck(client, checkCode, candidates, existingForCheck, now) 
   }
   return counts;
 }
-var CHECK_IDS = ["C1", "C2", "C3", "C4", "C5", "C7", "C8"];
+var CHECK_IDS = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"];
 var FINDING_SCAN_LIMIT = 1e4;
 async function runReconciliation(opts) {
   const client = opts.client;
   const now = opts.now ?? /* @__PURE__ */ new Date();
+  const sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  let gateway = opts.gateway ?? null;
+  let gatewayError = null;
+  if (!gateway) {
+    const keyId = process.env.RAZORPAY_KEY_ID || "";
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || "";
+    if (keyId && keySecret) gateway = new RazorpayGatewayClient(keyId, keySecret);
+    else gatewayError = "gateway not configured (RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET missing)";
+  }
   const summary = {
     runId: null,
     status: "success",
@@ -8131,6 +8601,9 @@ async function runReconciliation(opts) {
     outcomes.push(await checkC3(ctx));
     outcomes.push(await checkC4(ctx));
     outcomes.push(await checkC5(ctx));
+    outcomes.push(
+      await checkC6(ctx, [outcomes[0], outcomes[1], outcomes[2], outcomes[3]], gateway, gatewayError, sleep)
+    );
     const c4c5 = [
       ...dedupeFindings(outcomes[3].findings),
       ...dedupeFindings(outcomes[4].findings)
@@ -8140,10 +8613,16 @@ async function runReconciliation(opts) {
     applyCorrelation(c7Outcome.findings, criticalKeys);
     outcomes.push(c7Outcome);
     outcomes.push(await checkC8(ctx));
-    const candidatesByCheck = /* @__PURE__ */ new Map();
-    for (const o of outcomes) candidatesByCheck.set(o.checkCode, dedupeFindings(o.findings));
+    const candidatesByCode = /* @__PURE__ */ new Map();
+    for (const o of outcomes) {
+      for (const c of dedupeFindings(o.findings)) {
+        const arr = candidatesByCode.get(c.checkCode) ?? [];
+        arr.push(c);
+        candidatesByCode.set(c.checkCode, arr);
+      }
+    }
     const existingRes = await fetchAll(
-      client.from("reconciliation_findings").select("*").in("check_code", CHECK_IDS.map((id) => CHECK_CODES[id])).limit(FINDING_SCAN_LIMIT + 1),
+      client.from("reconciliation_findings").select("*").in("check_code", [...Object.values(CHECK_CODES), ...C6_OWNED_CODES]).limit(FINDING_SCAN_LIMIT + 1),
       FINDING_SCAN_LIMIT
     );
     if (existingRes.error) throw new Error(`failed to load existing findings: ${existingRes.error}`);
@@ -8153,18 +8632,24 @@ async function runReconciliation(opts) {
       existingByCheck.get(row.check_code).push(row);
     }
     for (const o of outcomes) {
-      const cands = candidatesByCheck.get(o.checkCode) ?? [];
+      const codes = o.checkId === "C6" ? [...C6_OWNED_CODES] : [o.checkCode];
       const status = !o.completed ? "failed" : o.truncated ? "truncated" : "success";
+      let findingCount = 0;
+      for (const code of codes) findingCount += (candidatesByCode.get(code) ?? []).length;
       summary.checkResults[o.checkId] = {
         status,
-        findings: cands.length,
-        ...o.error ? { error: o.error } : {}
+        findings: findingCount,
+        ...o.error ? { error: o.error } : {},
+        ...o.meta ? { meta: o.meta } : {}
       };
       if (status !== "success") continue;
-      const counts = await mergeCheck(client, o.checkCode, cands, existingByCheck.get(o.checkCode) ?? [], now);
-      summary.findingsNew += counts.inserted;
-      summary.findingsResolved += counts.resolved;
-      summary.findingsReopened += counts.reopened;
+      for (const code of codes) {
+        const cands = candidatesByCode.get(code) ?? [];
+        const counts = await mergeCheck(client, code, cands, existingByCheck.get(code) ?? [], now);
+        summary.findingsNew += counts.inserted;
+        summary.findingsResolved += counts.resolved;
+        summary.findingsReopened += counts.reopened;
+      }
     }
     const openRes = await client.from("reconciliation_findings").select("id", { count: "exact", head: true }).eq("status", "open");
     if (openRes && !openRes.error && typeof openRes.count === "number") {

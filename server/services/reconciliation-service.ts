@@ -15,14 +15,26 @@ import crypto from "crypto";
 //     completed successfully AND was not truncated. A failed or truncated
 //     scan leaves every existing finding untouched.
 //
-// Check registry (C6 gateway-vs-DB comparison lands in 3B-2):
+// Check registry (3B-2 adds C6 gateway-vs-DB comparison):
 //   C1 refund_reconciliation_required
 //   C2 refund_stuck_submitting
 //   C3 refund_stuck_other
 //   C4 payment_stuck_uncertain
 //   C5 ledger_payment_mismatch
+//   C6 gateway-vs-DB — execution check owning C6_OWNED_CODES below
 //   C7 webhook_processing_anomaly
 //   C8 wallet_ledger_inconsistency
+//
+// C6 invariants (3B-2):
+//   - Gateway access is GET-only, one attempt per lookup, no retries,
+//     no refunds, no state transitions.
+//   - Any gateway failure or 429 fails the whole C6 execution check:
+//     zero finding writes across ALL C6_OWNED_CODES for that run.
+//   - Cap or time-budget exhaustion truncates C6: same zero-writes rule.
+//   - A C6 success may stale-resolve only its owned codes.
+//   - A zero-attempt success is only legal when every candidate was
+//     skipped for a missing gateway id (meta explains it); anything
+//     else becomes failed via the tripwire in checkC6.
 // ============================================================================
 
 // ---------------------------------------------------------------------------
@@ -50,6 +62,7 @@ export interface CheckOutcome {
   truncated: boolean;
   findings: FindingCandidate[];
   error?: string;
+  meta?: C6Meta;
 }
 
 export interface Thresholds {
@@ -61,12 +74,17 @@ export interface Thresholds {
   paymentStuckCritHours: number;
   webhookPendingWarnMin: number;
   maxFindingsPerCheck: number;
+  gatewayMaxLookupsPerRun: number;
+  gatewayLookupDelayMs: number;
+  gatewayTimeBudgetMs: number;
+  gatewayLookupTimeoutMs: number;
 }
 
 export interface RunCheckResult {
   status: CheckStatus;
   findings: number;
   error?: string;
+  meta?: C6Meta;
 }
 
 export interface RunSummary {
@@ -89,6 +107,8 @@ export interface RunReconciliationOptions {
   client: any;
   trigger: RunTrigger;
   now?: Date;
+  gateway?: GatewayClient;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export const CHECK_CODES: Record<string, string> = {
@@ -101,6 +121,60 @@ export const CHECK_CODES: Record<string, string> = {
   C8: "wallet_ledger_inconsistency",
 };
 
+// C6 is one execution check with several semantic finding codes. All of them
+// must be gated, loaded and stale-resolved together under the C6 status.
+export const C6_OWNED_CODES = [
+  "gateway_payment_status_mismatch",
+  "gateway_payment_amount_mismatch",
+  "gateway_payment_order_mismatch",
+  "gateway_payment_not_found",
+  "gateway_payment_unknown_status",
+  "gateway_refund_status_mismatch",
+  "gateway_refund_amount_mismatch",
+  "gateway_refund_payment_mismatch",
+  "gateway_refund_not_found",
+  "gateway_refund_unknown_status",
+];
+
+const GATEWAY_PAYMENT_STATUSES = ["created", "authorized", "captured", "refunded", "failed"];
+const GATEWAY_REFUND_STATUSES = ["pending", "processed", "failed"];
+
+export interface GatewayLookupResult {
+  kind: "ok" | "not_found" | "failure";
+  status?: number;
+  data?: any;
+  error?: string;
+  rateLimited?: boolean;
+  timeout?: boolean;
+}
+
+// Read-only gateway access. Implementations must never retry, never issue
+// non-GET verbs and never mutate gateway or financial state.
+export interface GatewayClient {
+  getPayment(gatewayPaymentId: string, timeoutMs: number): Promise<GatewayLookupResult>;
+  getRefund(gatewayRefundId: string, timeoutMs: number): Promise<GatewayLookupResult>;
+}
+
+export interface C6Meta {
+  candidateCount: number;
+  attempted: number;
+  succeeded: number;
+  skippedNoGatewayId: number;
+  rateLimited: boolean;
+  budgetExhausted: boolean;
+}
+
+function emptyC6Meta(): C6Meta {
+  return {
+    candidateCount: 0,
+    attempted: 0,
+    succeeded: 0,
+    skippedNoGatewayId: 0,
+    rateLimited: false,
+    budgetExhausted: false,
+  };
+}
+
 export const DEFAULT_THRESHOLDS: Thresholds = {
   refundSubmittingWarnMin: 15,
   refundSubmittingCritMin: 60,
@@ -110,9 +184,13 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
   paymentStuckCritHours: 24,
   webhookPendingWarnMin: 5,
   maxFindingsPerCheck: 500,
+  gatewayMaxLookupsPerRun: 30,
+  gatewayLookupDelayMs: 100,
+  gatewayTimeBudgetMs: 10000,
+  gatewayLookupTimeoutMs: 5000,
 };
 
-const CHECK_ORDER = ["C1", "C2", "C3", "C4", "C5", "C7", "C8"];
+const CHECK_ORDER = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"];
 
 // Full-history ledger scan cap. Beyond it the C8 scan is truncated and NO
 // stale resolution is allowed (missing rows must never read as "cleared").
@@ -174,11 +252,11 @@ function failedOutcome(checkId: string, error: string): CheckOutcome {
 }
 
 // Collapse duplicate candidates for the same subject inside one check
-// (identity is check_code + subject_type + subject_id).
+// (identity is check_code + subject_type + subject_id — mirrors uq_recon_finding).
 function dedupeFindings(findings: FindingCandidate[]): FindingCandidate[] {
   const map = new Map<string, FindingCandidate>();
   for (const f of findings) {
-    const key = `${f.subjectType}|${f.subjectId}`;
+    const key = `${f.checkCode}|${f.subjectType}|${f.subjectId}`;
     const prev = map.get(key);
     if (!prev) {
       map.set(key, { ...f, details: { ...f.details } });
@@ -499,6 +577,511 @@ async function checkC5(ctx: Ctx): Promise<CheckOutcome> {
         updatedAt: p.updated_at || p.created_at,
       },
     });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// C6 — gateway-vs-DB reconciliation (read-only Razorpay GETs)
+// ---------------------------------------------------------------------------
+// Candidates are exactly this run's C1-C4 subjects. Every lookup is a single
+// GET with a remaining-budget timeout: any failure or 429 fails the whole
+// check (zero owned-code writes), cap/budget exhaustion truncates it, and a
+// gateway "id does not exist" answer is evidence (not a failure). Razorpay
+// encodes that answer asymmetrically: GET /v1/payments/{unknown} -> 400 +
+// BAD_REQUEST_ERROR "The id provided does not exist", while
+// GET /v1/refunds/{unknown} -> 404. Both classify as not_found. A wait
+// clipped by our remaining time budget is exhaustion (truncated), never a
+// failure — the gateway never got its full timeout.
+
+// Classifies a non-2xx Razorpay response into a lookup result.
+// Returns null for statuses that stay generic failures.
+export function razorpayErrorResult(status: number, body: unknown): GatewayLookupResult | null {
+  if (status === 404) return { kind: "not_found", status };
+  if (status === 400) {
+    const err: any = (body as any)?.error;
+    const desc = String(err?.description ?? err?.message ?? "");
+    if (err?.code === "BAD_REQUEST_ERROR" && /does not exist/i.test(desc)) {
+      return { kind: "not_found", status };
+    }
+    return {
+      kind: "failure",
+      status,
+      error: `gateway responded 400${desc ? `: ${desc.slice(0, 200)}` : ""}`,
+    };
+  }
+  if (status === 429) {
+    return { kind: "failure", status, rateLimited: true, error: "rate limited (429)" };
+  }
+  return null;
+}
+
+class RazorpayGatewayClient implements GatewayClient {
+  constructor(private readonly keyId: string, private readonly keySecret: string) {}
+
+  private authHeader(): string {
+    return `Basic ${Buffer.from(`${this.keyId}:${this.keySecret}`).toString("base64")}`;
+  }
+
+  private async get(url: string, timeoutMs: number): Promise<GatewayLookupResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: this.authHeader() },
+        signal: controller.signal,
+      });
+      if (response.ok) {
+        let data: any;
+        try {
+          data = await response.json();
+        } catch {
+          return { kind: "failure", status: response.status, error: "gateway response was not valid JSON" };
+        }
+        return { kind: "ok", status: response.status, data };
+      }
+      let body: any = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      const classified = razorpayErrorResult(response.status, body);
+      if (classified) return classified;
+      return { kind: "failure", status: response.status, error: `gateway responded ${response.status}` };
+    } catch (e: any) {
+      const aborted = e?.name === "AbortError" || /abort/i.test(String(e?.message ?? ""));
+      if (aborted) {
+        return { kind: "failure", timeout: true, error: `gateway lookup timed out after ${timeoutMs}ms` };
+      }
+      return { kind: "failure", error: `gateway request failed: ${String(e?.message ?? e)}` };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  getPayment(gatewayPaymentId: string, timeoutMs: number): Promise<GatewayLookupResult> {
+    return this.get(`https://api.razorpay.com/v1/payments/${encodeURIComponent(gatewayPaymentId)}`, timeoutMs);
+  }
+
+  getRefund(gatewayRefundId: string, timeoutMs: number): Promise<GatewayLookupResult> {
+    return this.get(`https://api.razorpay.com/v1/refunds/${encodeURIComponent(gatewayRefundId)}`, timeoutMs);
+  }
+}
+
+async function loadRowsIn(client: any, table: string, ids: string[], chunkSize = 500): Promise<{ rows: any[]; error?: string }> {
+  const rows: any[] = [];
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const slice = ids.slice(i, i + chunkSize);
+    const f = await fetchAll(client.from(table).select("*").in("id", slice), slice.length);
+    if (f.error) return { rows: [], error: f.error };
+    rows.push(...f.rows);
+  }
+  return { rows };
+}
+
+function paymentGatewayDetails(db: any, gw: any): Record<string, unknown> {
+  return {
+    paymentStatus: db.payment_status,
+    dbAmount: db.amount,
+    dbAmountRefunded: db.amount_refunded ?? 0,
+    dbCurrency: db.currency ?? null,
+    db_gateway_order_id: db.gateway_order_id ?? null,
+    gateway_status: gw.status ?? null,
+    gateway_refund_status: gw.refund_status ?? null,
+    gateway_amount: gw.amount ?? null,
+    gateway_amount_refunded: gw.amount_refunded ?? 0,
+    gateway_currency: gw.currency ?? null,
+    gateway_payment_id: gw.id ?? db.gateway_payment_id ?? null,
+    gateway_order_id: gw.order_id ?? null,
+    updatedAt: db.updated_at || db.created_at,
+  };
+}
+
+export function compareGatewayPayment(db: any, gw: any): FindingCandidate[] {
+  const findings: FindingCandidate[] = [];
+  const base = paymentGatewayDetails(db, gw);
+  const dbAmountRefunded = db.amount_refunded ?? 0;
+  const gwAmountRefunded = gw.amount_refunded ?? 0;
+  const gwRefundStatus = gw.refund_status ?? null;
+
+  const unknownStatus = typeof gw.status !== "string" || !GATEWAY_PAYMENT_STATUSES.includes(gw.status);
+  const unknownRefundStatus = gwRefundStatus !== null && !["partial", "full"].includes(String(gwRefundStatus));
+
+  if (unknownStatus || unknownRefundStatus) {
+    findings.push({
+      checkCode: "gateway_payment_unknown_status",
+      severity: "warning",
+      subjectType: "payment",
+      subjectId: db.id,
+      summary: `Payment ${db.id} has unclassifiable gateway state (status=${String(gw.status)}, refund_status=${String(gwRefundStatus)})`,
+      details: {
+        ...base,
+        unknownField: unknownStatus && unknownRefundStatus ? "status+refund_status" : unknownStatus ? "status" : "refund_status",
+      },
+    });
+  }
+
+  const amountFields: string[] = [];
+  if (gw.amount !== db.amount * 100) amountFields.push("amount");
+  if (gwAmountRefunded !== dbAmountRefunded * 100) amountFields.push("amount_refunded");
+  if (gw.currency !== db.currency) amountFields.push("currency");
+  if (amountFields.length > 0) {
+    findings.push({
+      checkCode: "gateway_payment_amount_mismatch",
+      severity: "critical",
+      subjectType: "payment",
+      subjectId: db.id,
+      summary: `Payment ${db.id} amount disagrees with gateway on: ${amountFields.join(", ")}`,
+      details: { ...base, fields: amountFields },
+    });
+  }
+
+  if (db.gateway_order_id && gw.order_id && gw.order_id !== db.gateway_order_id) {
+    findings.push({
+      checkCode: "gateway_payment_order_mismatch",
+      severity: "critical",
+      subjectType: "payment",
+      subjectId: db.id,
+      summary: `Payment ${db.id} sits on gateway order ${gw.order_id} but DB expects ${db.gateway_order_id}`,
+      details: base,
+    });
+  }
+
+  // Status matrix only when the gateway state is classifiable and the
+  // refunded-amount comparison did not already explain the divergence.
+  const refundedAmountMismatch = gwAmountRefunded !== dbAmountRefunded * 100;
+  if (!unknownStatus && !unknownRefundStatus && !refundedAmountMismatch) {
+    const dbStatus = db.payment_status;
+    const gwStatus = gw.status as string;
+    const uncertain = ["creating", "created", "pending", "authorized"].includes(dbStatus);
+    let statusOk: boolean;
+    let note: string;
+    if (uncertain) {
+      statusOk = gwStatus === "created" || gwStatus === "authorized" || gwStatus === "failed";
+      note = `DB payment in ${dbStatus} but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "captured") {
+      statusOk = gwStatus === "captured" && gwRefundStatus === null;
+      note = `DB payment captured but gateway reports status=${gwStatus}, refund_status=${String(gwRefundStatus)}`;
+    } else if (dbStatus === "partially_refunded") {
+      statusOk = gwStatus === "captured";
+      note = `DB payment partially_refunded but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "refunded") {
+      statusOk = gwStatus === "refunded";
+      note = `DB payment refunded but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "failed") {
+      statusOk = gwStatus === "failed" || gwStatus === "created" || gwStatus === "authorized";
+      note = `DB payment failed but gateway reports ${gwStatus}`;
+    } else if (dbStatus === "cancelled") {
+      statusOk = gwStatus !== "captured" && gwStatus !== "refunded";
+      note = `DB payment cancelled but gateway reports ${gwStatus}`;
+    } else {
+      statusOk = true;
+      note = "";
+    }
+    if (!statusOk) {
+      findings.push({
+        checkCode: "gateway_payment_status_mismatch",
+        severity: "critical",
+        subjectType: "payment",
+        subjectId: db.id,
+        summary: `Payment ${db.id}: ${note}`,
+        details: base,
+      });
+    }
+  }
+  return findings;
+}
+
+export function compareGatewayRefund(db: any, linkedTxn: any | null, gw: any): FindingCandidate[] {
+  const findings: FindingCandidate[] = [];
+  const base = {
+    refundStatus: db.refund_status,
+    dbAmount: db.amount,
+    dbGatewayRefundAmount: db.gateway_refund_amount ?? null,
+    paymentTransactionId: db.payment_transaction_id ?? null,
+    db_gateway_refund_id: db.gateway_refund_id ?? null,
+    gateway_status: gw.status ?? null,
+    gateway_amount: gw.amount ?? null,
+    gateway_refund_id: gw.id ?? db.gateway_refund_id ?? null,
+    gateway_payment_id: gw.payment_id ?? null,
+    updatedAt: db.updated_at,
+  };
+
+  const unknownStatus = typeof gw.status !== "string" || !GATEWAY_REFUND_STATUSES.includes(gw.status);
+
+  if (typeof db.gateway_refund_amount === "number" && gw.amount !== db.gateway_refund_amount * 100) {
+    findings.push({
+      checkCode: "gateway_refund_amount_mismatch",
+      severity: "critical",
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id} gateway amount ${String(gw.amount)} paise disagrees with DB gateway_refund_amount ${db.gateway_refund_amount}`,
+      details: { ...base, fields: ["amount"] },
+    });
+  }
+
+  if (gw.payment_id && linkedTxn?.gateway_payment_id && gw.payment_id !== linkedTxn.gateway_payment_id) {
+    findings.push({
+      checkCode: "gateway_refund_payment_mismatch",
+      severity: "critical",
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id} sits on gateway payment ${gw.payment_id} but DB links ${linkedTxn.gateway_payment_id}`,
+      details: base,
+    });
+  }
+
+  if (unknownStatus) {
+    findings.push({
+      checkCode: "gateway_refund_unknown_status",
+      severity: "warning",
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id} has unclassifiable gateway status ${String(gw.status)}`,
+      details: { ...base, unknownField: "status" },
+    });
+    return findings;
+  }
+
+  const mismatchRules: Record<string, { severity: Severity; note: string }> = {
+    "pending|processed": { severity: "critical", note: "gateway refund processed but DB refund still pending" },
+    "pending|failed": { severity: "warning", note: "gateway refund failed but DB refund still pending" },
+    "submitting|processed": { severity: "critical", note: "gateway refund processed but DB refund still submitting" },
+    "submitting|failed": { severity: "warning", note: "gateway refund failed but DB refund still submitting" },
+    "processing|processed": { severity: "critical", note: "gateway refund processed but DB refund still processing" },
+    "processing|failed": { severity: "warning", note: "gateway refund failed but DB refund still processing" },
+    "completed|pending": { severity: "critical", note: "DB refund completed but gateway refund still pending" },
+    "completed|failed": { severity: "critical", note: "DB refund completed but gateway refund failed" },
+    "failed|processed": { severity: "critical", note: "gateway refund processed but DB refund marked failed" },
+    "failed|pending": { severity: "warning", note: "DB refund failed but gateway refund still pending" },
+    "reconciliation_required|failed": { severity: "critical", note: "gateway refund failed but DB refund expects gateway success" },
+    "reconciliation_required|pending": { severity: "warning", note: "reconciliation-required DB refund still pending at gateway" },
+  };
+  const rule = mismatchRules[`${db.refund_status}|${gw.status}`];
+  if (rule) {
+    findings.push({
+      checkCode: "gateway_refund_status_mismatch",
+      severity: rule.severity,
+      subjectType: "refund",
+      subjectId: db.id,
+      summary: `Refund ${db.id}: ${rule.note} (gateway status ${gw.status})`,
+      details: base,
+    });
+  }
+  return findings;
+}
+
+function paymentNotFoundFinding(db: any): FindingCandidate {
+  return {
+    checkCode: "gateway_payment_not_found",
+    severity: "critical",
+    subjectType: "payment",
+    subjectId: db.id,
+    summary: `Gateway payment ${db.gateway_payment_id} not found at Razorpay for payment ${db.id}`,
+    details: {
+      paymentStatus: db.payment_status,
+      dbAmount: db.amount,
+      dbAmountRefunded: db.amount_refunded ?? 0,
+      gateway_payment_id: db.gateway_payment_id,
+      gateway_order_id: db.gateway_order_id ?? null,
+      updatedAt: db.updated_at || db.created_at,
+    },
+  };
+}
+
+function refundNotFoundFinding(db: any): FindingCandidate {
+  return {
+    checkCode: "gateway_refund_not_found",
+    severity: "critical",
+    subjectType: "refund",
+    subjectId: db.id,
+    summary: `Gateway refund ${db.gateway_refund_id} not found at Razorpay for refund ${db.id}`,
+    details: {
+      refundStatus: db.refund_status,
+      dbAmount: db.amount,
+      dbGatewayRefundAmount: db.gateway_refund_amount ?? null,
+      gateway_refund_id: db.gateway_refund_id,
+      paymentTransactionId: db.payment_transaction_id ?? null,
+      updatedAt: db.updated_at,
+    },
+  };
+}
+
+async function checkC6(
+  ctx: Ctx,
+  sourceOutcomes: CheckOutcome[],
+  gateway: GatewayClient | null,
+  gatewayError: string | null,
+  sleep: (ms: number) => Promise<void>
+): Promise<CheckOutcome> {
+  const meta = emptyC6Meta();
+  const out: CheckOutcome = {
+    checkId: "C6",
+    checkCode: C6_OWNED_CODES[0],
+    completed: true,
+    truncated: false,
+    findings: [],
+    meta,
+  };
+
+  const failedSource = sourceOutcomes.find((o) => !o.completed);
+  if (failedSource) {
+    out.completed = false;
+    out.error = `source check ${failedSource.checkId} failed - gateway comparison input incomplete`;
+    return out;
+  }
+  const truncatedSource = sourceOutcomes.find((o) => o.truncated);
+  if (truncatedSource) {
+    out.truncated = true;
+    out.error = `source check ${truncatedSource.checkId} truncated - gateway comparison input incomplete`;
+    return out;
+  }
+
+  const paymentIds = new Set<string>();
+  const refundIds = new Set<string>();
+  for (const o of sourceOutcomes) {
+    for (const c of dedupeFindings(o.findings)) {
+      if (c.subjectType === "payment") paymentIds.add(c.subjectId);
+      else if (c.subjectType === "refund") refundIds.add(c.subjectId);
+    }
+  }
+  meta.candidateCount = paymentIds.size + refundIds.size;
+  if (meta.candidateCount === 0) return out;
+
+  const paymentRes = await loadRowsIn(ctx.client, "payment_transactions", [...paymentIds]);
+  if (paymentRes.error) {
+    out.completed = false;
+    out.error = `failed to reload payment candidates: ${paymentRes.error}`;
+    return out;
+  }
+  const refundRes = await loadRowsIn(ctx.client, "payment_refunds", [...refundIds]);
+  if (refundRes.error) {
+    out.completed = false;
+    out.error = `failed to reload refund candidates: ${refundRes.error}`;
+    return out;
+  }
+  const paymentRows = new Map<string, any>(paymentRes.rows.map((r) => [r.id, r]));
+  const refundRows = new Map<string, any>(refundRes.rows.map((r) => [r.id, r]));
+  if (paymentRows.size + refundRows.size < meta.candidateCount) {
+    out.completed = false;
+    out.error = `candidate rows missing after reload: ${paymentRows.size + refundRows.size}/${meta.candidateCount}`;
+    return out;
+  }
+
+  interface C6Work {
+    kind: "payment" | "refund";
+    row: any;
+    gatewayId: string;
+  }
+  const work: C6Work[] = [];
+  for (const row of paymentRows.values()) {
+    if (!row.gateway_payment_id) meta.skippedNoGatewayId++;
+    else work.push({ kind: "payment", row, gatewayId: row.gateway_payment_id });
+  }
+  for (const row of refundRows.values()) {
+    if (!row.gateway_refund_id) meta.skippedNoGatewayId++;
+    else work.push({ kind: "refund", row, gatewayId: row.gateway_refund_id });
+  }
+
+  // Credentials only matter when there is something to look up: an all-skip
+  // run is fully explained by meta and must not fail for a missing gateway.
+  if (work.length > 0 && (gatewayError || !gateway)) {
+    out.completed = false;
+    out.error = gatewayError ?? "gateway not configured";
+    return out;
+  }
+
+  if (work.length > ctx.thresholds.gatewayMaxLookupsPerRun) {
+    out.truncated = true;
+    out.error = `gateway lookup cap exceeded: ${work.length} lookups > cap ${ctx.thresholds.gatewayMaxLookupsPerRun}`;
+    return out;
+  }
+
+  // Refund -> payment linkage for gateway refund payment_id comparison.
+  const linkedPayments = new Map<string, any>(paymentRows);
+  const needLinked = [...new Set(
+    [...refundRows.values()].map((r) => r.payment_transaction_id).filter(Boolean)
+  )].filter((id) => !linkedPayments.has(id));
+  if (needLinked.length > 0) {
+    const linked = await loadRowsIn(ctx.client, "payment_transactions", needLinked);
+    if (linked.error) {
+      out.completed = false;
+      out.error = `failed to reload linked payment rows: ${linked.error}`;
+      return out;
+    }
+    for (const r of linked.rows) linkedPayments.set(r.id, r);
+  }
+
+  const budgetMs = ctx.thresholds.gatewayTimeBudgetMs;
+  const delayMs = ctx.thresholds.gatewayLookupDelayMs;
+  const baseTimeout = ctx.thresholds.gatewayLookupTimeoutMs;
+  const started = Date.now();
+
+  for (let i = 0; i < work.length; i++) {
+    const item = work[i];
+    const remaining = budgetMs - (Date.now() - started);
+    if (remaining <= 0) {
+      meta.budgetExhausted = true;
+      break;
+    }
+    const timeoutMs = Math.min(baseTimeout, remaining);
+    meta.attempted++;
+    // The guard above proves the client exists whenever work is non-empty,
+    // and this loop only runs while work items remain.
+    const gw = gateway as GatewayClient;
+    const res =
+      item.kind === "payment"
+        ? await gw.getPayment(item.gatewayId, timeoutMs)
+        : await gw.getRefund(item.gatewayId, timeoutMs);
+    if (res.kind === "failure") {
+      // A wait clipped by OUR remaining time budget is budget exhaustion
+      // (truncated, zero writes), not a gateway failure: the gateway never
+      // got its full timeout.
+      if (res.timeout && timeoutMs < baseTimeout) {
+        meta.budgetExhausted = true;
+        break;
+      }
+      if (res.rateLimited) meta.rateLimited = true;
+      out.completed = false;
+      out.error = `gateway ${item.kind} lookup failed for ${item.gatewayId} after ${meta.attempted} attempt(s): ${res.error}${res.rateLimited ? " [rate limited]" : ""}`;
+      return out;
+    }
+    meta.succeeded++;
+    if (res.kind === "not_found") {
+      out.findings.push(
+        item.kind === "payment" ? paymentNotFoundFinding(item.row) : refundNotFoundFinding(item.row)
+      );
+    } else if (item.kind === "payment") {
+      out.findings.push(...compareGatewayPayment(item.row, res.data));
+    } else {
+      out.findings.push(
+        ...compareGatewayRefund(item.row, linkedPayments.get(item.row.payment_transaction_id) ?? null, res.data)
+      );
+    }
+    const isLast = i === work.length - 1;
+    if (!isLast) {
+      const afterRemaining = budgetMs - (Date.now() - started);
+      if (afterRemaining <= delayMs + Math.min(baseTimeout, 1)) {
+        meta.budgetExhausted = true;
+        break;
+      }
+      await sleep(delayMs);
+    }
+  }
+
+  if (meta.budgetExhausted) {
+    out.truncated = true;
+    out.error = `gateway time budget ${budgetMs}ms exhausted after ${meta.attempted} of ${work.length} lookup(s)`;
+    return out;
+  }
+
+  // Tripwire: a zero-attempt success is only legal when every candidate was
+  // skipped for a missing gateway id. Anything else fails with zero writes.
+  if (meta.candidateCount > 0 && meta.attempted === 0 && meta.skippedNoGatewayId < meta.candidateCount) {
+    out.completed = false;
+    out.error = `zero gateway attempts without explanation (candidateCount=${meta.candidateCount}, skippedNoGatewayId=${meta.skippedNoGatewayId})`;
+    return out;
   }
   return out;
 }
@@ -994,12 +1577,21 @@ async function mergeCheck(
 //   - check_results records per-check success/failed/truncated so partial
 //     scans are observable
 
-const CHECK_IDS = ["C1", "C2", "C3", "C4", "C5", "C7", "C8"];
+const CHECK_IDS = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"];
 const FINDING_SCAN_LIMIT = 10000;
 
 export async function runReconciliation(opts: RunReconciliationOptions): Promise<RunSummary> {
   const client = opts.client;
   const now = opts.now ?? new Date();
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let gateway: GatewayClient | null = opts.gateway ?? null;
+  let gatewayError: string | null = null;
+  if (!gateway) {
+    const keyId = process.env.RAZORPAY_KEY_ID || "";
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || "";
+    if (keyId && keySecret) gateway = new RazorpayGatewayClient(keyId, keySecret);
+    else gatewayError = "gateway not configured (RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET missing)";
+  }
   const summary: RunSummary = {
     runId: null,
     status: "success",
@@ -1039,6 +1631,11 @@ export async function runReconciliation(opts: RunReconciliationOptions): Promise
     outcomes.push(await checkC4(ctx));
     outcomes.push(await checkC5(ctx));
 
+    // C6 subjects are this run's C1-C4 candidates.
+    outcomes.push(
+      await checkC6(ctx, [outcomes[0], outcomes[1], outcomes[2], outcomes[3]], gateway, gatewayError, sleep)
+    );
+
     // Correlation keys come from critical C4/C5 candidates (post-dedupe).
     const c4c5 = [
       ...dedupeFindings(outcomes[3].findings),
@@ -1051,12 +1648,18 @@ export async function runReconciliation(opts: RunReconciliationOptions): Promise
 
     outcomes.push(await checkC8(ctx));
 
-    const candidatesByCheck = new Map<string, FindingCandidate[]>();
-    for (const o of outcomes) candidatesByCheck.set(o.checkCode, dedupeFindings(o.findings));
+    const candidatesByCode = new Map<string, FindingCandidate[]>();
+    for (const o of outcomes) {
+      for (const c of dedupeFindings(o.findings)) {
+        const arr = candidatesByCode.get(c.checkCode) ?? [];
+        arr.push(c);
+        candidatesByCode.set(c.checkCode, arr);
+      }
+    }
 
     const existingRes = await fetchAll(
       client.from("reconciliation_findings").select("*")
-        .in("check_code", CHECK_IDS.map((id) => CHECK_CODES[id]))
+        .in("check_code", [...Object.values(CHECK_CODES), ...C6_OWNED_CODES])
         .limit(FINDING_SCAN_LIMIT + 1),
       FINDING_SCAN_LIMIT
     );
@@ -1068,19 +1671,25 @@ export async function runReconciliation(opts: RunReconciliationOptions): Promise
     }
 
     for (const o of outcomes) {
-      const cands = candidatesByCheck.get(o.checkCode) ?? [];
+      const codes = o.checkId === "C6" ? [...C6_OWNED_CODES] : [o.checkCode];
       const status: CheckStatus = !o.completed ? "failed" : o.truncated ? "truncated" : "success";
+      let findingCount = 0;
+      for (const code of codes) findingCount += (candidatesByCode.get(code) ?? []).length;
       summary.checkResults[o.checkId] = {
         status,
-        findings: cands.length,
+        findings: findingCount,
         ...(o.error ? { error: o.error } : {}),
+        ...(o.meta ? { meta: o.meta } : {}),
       };
-      if (status !== "success") continue; // failed/truncated: zero writes for this check
+      if (status !== "success") continue; // failed/truncated: zero writes across all owned codes
 
-      const counts = await mergeCheck(client, o.checkCode, cands, existingByCheck.get(o.checkCode) ?? [], now);
-      summary.findingsNew += counts.inserted;
-      summary.findingsResolved += counts.resolved;
-      summary.findingsReopened += counts.reopened;
+      for (const code of codes) {
+        const cands = candidatesByCode.get(code) ?? [];
+        const counts = await mergeCheck(client, code, cands, existingByCheck.get(code) ?? [], now);
+        summary.findingsNew += counts.inserted;
+        summary.findingsResolved += counts.resolved;
+        summary.findingsReopened += counts.reopened;
+      }
     }
 
     const openRes: any = await client.from("reconciliation_findings")
