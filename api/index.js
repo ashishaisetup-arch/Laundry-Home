@@ -6232,7 +6232,10 @@ async function insertOrReopen(client, checkCode, cand, iso, counts, runId, alert
     last_detected_at: iso,
     occurrence_count: (data.occurrence_count ?? 1) + 1,
     resolved_at: null,
-    resolution_note: null
+    resolution_note: null,
+    resolved_by: null,
+    acknowledged_at: null,
+    acknowledged_by: null
   }).eq("id", data.id).select("id");
   if (upErr) throw new Error(`finding reopen failed: ${upErr.message}`);
   counts.reopened++;
@@ -6267,7 +6270,10 @@ async function mergeCheck(client, checkCode, candidates, existingForCheck, now, 
         last_detected_at: iso,
         occurrence_count: (row.occurrence_count ?? 1) + 1,
         resolved_at: null,
-        resolution_note: null
+        resolution_note: null,
+        resolved_by: null,
+        acknowledged_at: null,
+        acknowledged_by: null
       }).eq("id", row.id).select("id");
       if (error) throw new Error(`finding reopen failed: ${error.message}`);
       counts.reopened++;
@@ -6876,6 +6882,306 @@ async function executeManualRun(opts) {
   return executeGuardedRun({ ...opts, trigger: "manual" });
 }
 
+// server/services/reconciliation-findings.ts
+var FINDING_STATUSES = ["open", "acknowledged", "resolved"];
+var FINDING_SEVERITIES = ["info", "warning", "critical"];
+var FINDING_SUBJECT_TYPES = [
+  "payment",
+  "refund",
+  "order",
+  "webhook_event",
+  "wallet_user"
+];
+var MAX_NOTE_LEN = 500;
+var MAX_Q_LEN = 200;
+var MAX_FINDINGS_LIMIT = 100;
+var DEFAULT_FINDINGS_LIMIT = 50;
+var DEFAULT_RUNS_LIMIT = 10;
+var MAX_RUNS_LIMIT = 50;
+var FINDING_AUDIT_ACTIONS = {
+  acknowledge: "reconciliation.finding_acknowledged",
+  resolve: "reconciliation.finding_resolved",
+  reopen: "reconciliation.finding_reopened"
+};
+var Q_ALLOWED = /^[A-Za-z0-9 _./:@#-]+$/;
+var CHECK_CODE_ALLOWED = /^[A-Za-z0-9_]{1,64}$/;
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var FindingsError = class extends Error {
+  constructor(code, status, extra) {
+    super(code);
+    this.name = "FindingsError";
+    this.code = code;
+    this.status = status;
+    this.extra = extra;
+  }
+};
+function fail2(code, status, extra) {
+  throw new FindingsError(code, status, extra);
+}
+function escapeLike(value) {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+function parseBoundedInt(raw, dflt, min, max) {
+  if (raw === void 0 || raw === null || String(raw).trim() === "") return dflt;
+  const n = parseInt(String(raw), 10);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.min(max, Math.max(min, n));
+}
+function validateListParams(params) {
+  const out = {
+    limit: parseBoundedInt(params.limit, DEFAULT_FINDINGS_LIMIT, 1, MAX_FINDINGS_LIMIT),
+    offset: parseBoundedInt(params.offset, 0, 0, Number.MAX_SAFE_INTEGER)
+  };
+  const status = params.status === void 0 || params.status === null ? void 0 : String(params.status);
+  if (status !== void 0 && status !== "" && !FINDING_STATUSES.includes(status)) {
+    fail2("invalid_filter", 400);
+  }
+  if (status) out.status = status;
+  const severity = params.severity === void 0 || params.severity === null ? void 0 : String(params.severity);
+  if (severity !== void 0 && severity !== "" && !FINDING_SEVERITIES.includes(severity)) {
+    fail2("invalid_filter", 400);
+  }
+  if (severity) out.severity = severity;
+  const subjectType = params.subjectType === void 0 || params.subjectType === null ? void 0 : String(params.subjectType);
+  if (subjectType !== void 0 && subjectType !== "" && !FINDING_SUBJECT_TYPES.includes(subjectType)) {
+    fail2("invalid_filter", 400);
+  }
+  if (subjectType) out.subjectType = subjectType;
+  const checkCode = params.checkCode === void 0 || params.checkCode === null ? void 0 : String(params.checkCode).trim();
+  if (checkCode) {
+    if (!CHECK_CODE_ALLOWED.test(checkCode)) fail2("invalid_filter", 400);
+    out.checkCode = checkCode;
+  }
+  const q = params.q === void 0 || params.q === null ? "" : String(params.q).trim();
+  if (q) {
+    if (q.length > MAX_Q_LEN || !Q_ALLOWED.test(q)) fail2("invalid_filter", 400);
+    out.q = q;
+  }
+  return out;
+}
+function mapFinding(row) {
+  return {
+    id: row.id,
+    checkCode: row.check_code,
+    severity: row.severity,
+    subjectType: row.subject_type,
+    subjectId: row.subject_id,
+    summary: row.summary,
+    details: row.details ?? {},
+    status: row.status,
+    firstDetectedAt: row.first_detected_at,
+    lastDetectedAt: row.last_detected_at,
+    occurrenceCount: row.occurrence_count,
+    resolvedAt: row.resolved_at ?? null,
+    resolutionNote: row.resolution_note ?? null,
+    acknowledgedAt: row.acknowledged_at ?? null,
+    acknowledgedBy: row.acknowledged_by ?? null,
+    resolvedBy: row.resolved_by ?? null,
+    createdAt: row.created_at
+  };
+}
+function mapRun(row) {
+  const checkResults = row.check_results ?? {};
+  const failedChecks = [];
+  const truncatedChecks = [];
+  for (const key of Object.keys(checkResults).sort()) {
+    const st = checkResults[key]?.status;
+    if (st === "failed") failedChecks.push(key);
+    else if (st === "truncated") truncatedChecks.push(key);
+  }
+  return {
+    id: row.id,
+    trigger: row.trigger_source,
+    status: row.status,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at ?? null,
+    failedChecks,
+    truncatedChecks,
+    findingsOpen: row.findings_open,
+    findingsNew: row.findings_new,
+    findingsResolved: row.findings_resolved,
+    error: row.error ?? null
+  };
+}
+async function listFindings(client, params) {
+  const f = validateListParams(params);
+  let query = client.from("reconciliation_findings").select("*");
+  if (f.status) query = query.eq("status", f.status);
+  if (f.severity) query = query.eq("severity", f.severity);
+  if (f.checkCode) query = query.eq("check_code", f.checkCode);
+  if (f.subjectType) query = query.eq("subject_type", f.subjectType);
+  if (f.q) {
+    const pattern = `*${escapeLike(f.q)}*`;
+    query = query.or(`summary.ilike.${pattern},subject_id.ilike.${pattern}`);
+  }
+  query = query.order("last_detected_at", { ascending: false }).order("id", { ascending: false }).range(f.offset, f.offset + f.limit - 1);
+  const { data, error } = await query;
+  if (error) throw new Error(`findings list failed: ${error.message}`);
+  let total = null;
+  let counts = null;
+  try {
+    const { data: countRows, error: countErr } = await client.rpc("get_reconciliation_finding_counts", {
+      p_status: f.status ?? null,
+      p_severity: f.severity ?? null,
+      p_check_code: f.checkCode ?? null,
+      p_subject_type: f.subjectType ?? null,
+      p_q: f.q ?? null
+    });
+    if (!countErr && countRows) {
+      const c = Array.isArray(countRows) ? countRows[0] : countRows;
+      if (c && c.total !== void 0 && c.total !== null) {
+        total = Number(c.total);
+        counts = {
+          byStatus: {
+            open: Number(c.open ?? 0),
+            acknowledged: Number(c.acknowledged ?? 0),
+            resolved: Number(c.resolved ?? 0)
+          },
+          bySeverity: {
+            info: Number(c.info ?? 0),
+            warning: Number(c.warning ?? 0),
+            critical: Number(c.critical ?? 0)
+          }
+        };
+      }
+    }
+  } catch {
+    total = null;
+    counts = null;
+  }
+  return { items: (data ?? []).map(mapFinding), total, counts };
+}
+async function listRuns(client, limitRaw) {
+  const limit = parseBoundedInt(limitRaw, DEFAULT_RUNS_LIMIT, 1, MAX_RUNS_LIMIT);
+  const { data, error } = await client.from("reconciliation_runs").select(
+    "id, trigger_source, status, started_at, finished_at, check_results, findings_open, findings_new, findings_resolved, error"
+  ).order("started_at", { ascending: false }).limit(limit);
+  if (error) throw new Error(`runs list failed: ${error.message}`);
+  return { items: (data ?? []).map(mapRun) };
+}
+function normalizeNote(note, required) {
+  if (note === void 0 || note === null) {
+    if (required) fail2("invalid_note", 400);
+    return null;
+  }
+  if (typeof note !== "string") fail2("invalid_note", 400);
+  const trimmed = note.trim();
+  if (trimmed.length === 0) {
+    if (required) fail2("invalid_note", 400);
+    return null;
+  }
+  if (trimmed.length > MAX_NOTE_LEN) fail2("invalid_note", 400);
+  return trimmed;
+}
+async function fetchFinding(client, id) {
+  const { data, error } = await client.from("reconciliation_findings").select("*").eq("id", id).single();
+  if (error || !data) fail2("finding_not_found", 404);
+  return data;
+}
+function conflictWith(current) {
+  fail2("finding_state_conflict", 409, {
+    currentStatus: current.status,
+    finding: mapFinding(current)
+  });
+}
+function pickUpdated(data) {
+  if (Array.isArray(data)) return data[0] ?? null;
+  return data ?? null;
+}
+async function auditTransition(client, action, fromStatus, row, initiatorId, note) {
+  try {
+    const res = await client.from("audit_logs").insert({
+      user_id: initiatorId ?? null,
+      action: FINDING_AUDIT_ACTIONS[action],
+      resource: "reconciliation_findings",
+      details: {
+        finding_id: row.id,
+        from_status: fromStatus,
+        to_status: row.status,
+        check_code: row.check_code,
+        subject_type: row.subject_type,
+        subject_id: row.subject_id,
+        ...note ? { note } : {}
+      }
+    });
+    if (res?.error) {
+      console.error(
+        `[reconciliation-findings] ${action} audit failed:`,
+        res.error.message
+      );
+    }
+  } catch (e) {
+    console.error(
+      `[reconciliation-findings] ${action} audit failed:`,
+      String(e?.message ?? e)
+    );
+  }
+}
+async function transitionFinding(client, opts) {
+  if (!UUID_RE.test(String(opts.findingId))) fail2("invalid_id", 400);
+  const id = String(opts.findingId);
+  const note = normalizeNote(opts.note, opts.action === "resolve");
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const current = await fetchFinding(client, id);
+  if (opts.action === "acknowledge") {
+    if (current.status === "acknowledged") {
+      return { finding: mapFinding(current), changed: false, fromStatus: null };
+    }
+    if (current.status !== "open") conflictWith(current);
+    const { data: data2, error: error2 } = await client.from("reconciliation_findings").update({
+      status: "acknowledged",
+      acknowledged_at: nowIso,
+      acknowledged_by: opts.initiatorId ?? null
+    }).eq("id", id).eq("status", "open").select("*");
+    if (error2) throw new Error(`acknowledge failed: ${error2.message}`);
+    const updated2 = pickUpdated(data2);
+    if (!updated2) {
+      const latest = await fetchFinding(client, id);
+      if (latest.status === "acknowledged") {
+        return { finding: mapFinding(latest), changed: false, fromStatus: null };
+      }
+      conflictWith(latest);
+    }
+    await auditTransition(client, "acknowledge", "open", updated2, opts.initiatorId, note);
+    return { finding: mapFinding(updated2), changed: true, fromStatus: "open" };
+  }
+  if (opts.action === "resolve") {
+    if (current.status === "resolved") conflictWith(current);
+    const fromStatus = current.status;
+    const { data: data2, error: error2 } = await client.from("reconciliation_findings").update({
+      status: "resolved",
+      resolved_at: nowIso,
+      resolution_note: note,
+      resolved_by: opts.initiatorId ?? null
+    }).eq("id", id).in("status", ["open", "acknowledged"]).select("*");
+    if (error2) throw new Error(`resolve failed: ${error2.message}`);
+    const updated2 = pickUpdated(data2);
+    if (!updated2) {
+      const latest = await fetchFinding(client, id);
+      conflictWith(latest);
+    }
+    await auditTransition(client, "resolve", fromStatus, updated2, opts.initiatorId, note);
+    return { finding: mapFinding(updated2), changed: true, fromStatus };
+  }
+  if (current.status !== "resolved") conflictWith(current);
+  const { data, error } = await client.from("reconciliation_findings").update({
+    status: "open",
+    resolved_at: null,
+    resolution_note: null,
+    resolved_by: null,
+    acknowledged_at: null,
+    acknowledged_by: null
+  }).eq("id", id).eq("status", "resolved").select("*");
+  if (error) throw new Error(`reopen failed: ${error.message}`);
+  const updated = pickUpdated(data);
+  if (!updated) {
+    const latest = await fetchFinding(client, id);
+    conflictWith(latest);
+  }
+  await auditTransition(client, "reopen", "resolved", updated, opts.initiatorId, note);
+  return { finding: mapFinding(updated), changed: true, fromStatus: "resolved" };
+}
+
 // server/routes/admin-reconciliation.ts
 var import_express35 = require("express");
 init_supabase();
@@ -6889,6 +7195,22 @@ function requireAdmin2(req, res, next) {
   next();
 }
 router34.use(requireAdmin2);
+function firstQuery(v) {
+  if (v === void 0 || v === null) return void 0;
+  return Array.isArray(v) ? String(v[0]) : String(v);
+}
+function sendKnownError(res, e) {
+  if (e instanceof FindingsError) {
+    const body = { error: e.code };
+    if (e.code === "finding_state_conflict") {
+      body.currentStatus = e.extra?.currentStatus;
+      body.finding = e.extra?.finding;
+    }
+    res.status(e.status).json(body);
+    return true;
+  }
+  return false;
+}
 router34.post("/run", async (req, res) => {
   try {
     const initiatorId = req.user?.id ?? null;
@@ -6904,6 +7226,63 @@ router34.post("/run", async (req, res) => {
     console.error("[admin-reconciliation] unexpected error:", e?.message ?? e);
     res.status(500).json({ error: String(e?.message ?? e) });
   }
+});
+router34.get("/findings", async (req, res) => {
+  try {
+    const result = await listFindings(createAdminClient(), {
+      status: firstQuery(req.query.status),
+      severity: firstQuery(req.query.severity),
+      checkCode: firstQuery(req.query.check_code),
+      subjectType: firstQuery(req.query.subject_type),
+      q: firstQuery(req.query.q),
+      limit: firstQuery(req.query.limit),
+      offset: firstQuery(req.query.offset)
+    });
+    res.status(200).json(result);
+  } catch (e) {
+    if (sendKnownError(res, e)) return;
+    console.error("[admin-reconciliation] findings list error:", e?.message ?? e);
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+router34.get("/runs", async (req, res) => {
+  try {
+    const result = await listRuns(createAdminClient(), firstQuery(req.query.limit));
+    res.status(200).json(result);
+  } catch (e) {
+    if (sendKnownError(res, e)) return;
+    console.error("[admin-reconciliation] runs list error:", e?.message ?? e);
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+});
+async function handleTransition(req, res, action) {
+  try {
+    const initiatorId = req.user?.id ?? null;
+    const noteRaw = req.body?.note;
+    const result = await transitionFinding(createAdminClient(), {
+      findingId: String(req.params.id),
+      action,
+      initiatorId,
+      note: noteRaw === void 0 ? void 0 : noteRaw
+    });
+    res.status(200).json(result.finding);
+  } catch (e) {
+    if (sendKnownError(res, e)) return;
+    console.error(
+      `[admin-reconciliation] ${action} transition error:`,
+      e?.message ?? e
+    );
+    res.status(500).json({ error: String(e?.message ?? e) });
+  }
+}
+router34.post("/findings/:id/acknowledge", (req, res) => {
+  void handleTransition(req, res, "acknowledge");
+});
+router34.post("/findings/:id/resolve", (req, res) => {
+  void handleTransition(req, res, "resolve");
+});
+router34.post("/findings/:id/reopen", (req, res) => {
+  void handleTransition(req, res, "reopen");
 });
 var admin_reconciliation_default = router34;
 
