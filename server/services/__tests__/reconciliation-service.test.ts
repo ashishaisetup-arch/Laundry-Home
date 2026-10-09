@@ -2217,3 +2217,28 @@ describe("reconciliation alerts — dispatch orchestration", () => {
     });
   });
 });
+
+describe("run insert conflict - failureCode marker (3B-4)", () => {
+  it("23505 on the run insert sets failureCode=active_run_conflict", async () => {
+    const { db, client } = createFakeDb();
+    db.fail(
+      "reconciliation_runs",
+      'duplicate key value violates unique constraint "reconciliation_runs_one_active"',
+      "23505"
+    );
+    const summary = await runReconciliation({ client, trigger: "test", now: NOW });
+    expect(summary.status).toBe("failed");
+    expect(summary.error).toContain("failed to insert run");
+    expect(summary.failureCode).toBe("active_run_conflict");
+    expect(summary.runId).toBeNull();
+  });
+
+  it("non-23505 run-insert failure sets no failureCode (normal failed semantics)", async () => {
+    const { db, client } = createFakeDb();
+    db.fail("reconciliation_runs", "connection unexpectedly closed", "XX000");
+    const summary = await runReconciliation({ client, trigger: "test", now: NOW });
+    expect(summary.status).toBe("failed");
+    expect(summary.error).toContain("failed to insert run");
+    expect(summary.failureCode).toBeUndefined();
+  });
+});
