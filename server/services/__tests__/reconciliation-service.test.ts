@@ -687,10 +687,13 @@ describe("dedupe, occurrence counting, reopen and stale resolution", () => {
 
     await run(client, NOW);
     const f = findingsOf(db, "refund_reconciliation_required")[0];
-    // simulate an earlier resolution
+    // simulate an earlier operator lifecycle: acknowledged then resolved
     f.status = "resolved";
     f.resolved_at = RUN2_NOW.toISOString();
     f.resolution_note = "manual";
+    f.resolved_by = randomUUID();
+    f.acknowledged_at = minusMin(NOW, 500);
+    f.acknowledged_by = randomUUID();
 
     const summary = await run(client, RUN2_NOW);
 
@@ -699,6 +702,12 @@ describe("dedupe, occurrence counting, reopen and stale resolution", () => {
     expect(f.occurrence_count).toBe(2);
     expect(f.resolved_at).toBeNull();
     expect(f.resolution_note).toBeNull();
+    // auto-reopen clears ALL operator attribution (3B-5a)
+    expect(f.resolved_by).toBeNull();
+    expect(f.acknowledged_at).toBeNull();
+    expect(f.acknowledged_by).toBeNull();
+    // detection history preserved
+    expect(f.first_detected_at).toBe(NOW.toISOString());
     expect(f.last_detected_at).toBe(RUN2_NOW.toISOString());
   });
 
@@ -969,6 +978,9 @@ describe("run recording", () => {
       occurrence_count: 5,
       resolved_at: minusMin(NOW, 800),
       resolution_note: "was resolved",
+      resolved_by: randomUUID(),
+      acknowledged_at: minusMin(NOW, 850),
+      acknowledged_by: randomUUID(),
       created_at: minusMin(NOW, 900),
     };
     // Fill the preloaded scan (limit 10000) so the hidden row is NOT loaded:
@@ -1007,6 +1019,10 @@ describe("run recording", () => {
     expect(hiddenExisting.occurrence_count).toBe(6);
     expect(hiddenExisting.resolved_at).toBeNull();
     expect(hiddenExisting.resolution_note).toBeNull();
+    expect(hiddenExisting.resolved_by).toBeNull();
+    expect(hiddenExisting.acknowledged_at).toBeNull();
+    expect(hiddenExisting.acknowledged_by).toBeNull();
+    expect(hiddenExisting.first_detected_at).toBe(minusMin(NOW, 900));
     expect(hiddenExisting.last_detected_at).toBe(NOW.toISOString());
     // fillers untouched
     expect(fillers[0].status).toBe("resolved");
@@ -1891,6 +1907,9 @@ describe("reconciliation alerts — transition candidates", () => {
       severity: "critical",
       resolved_at: minusHours(NOW, 2),
       resolution_note: "auto-resolved earlier",
+      resolved_by: randomUUID(),
+      acknowledged_at: minusHours(NOW, 3),
+      acknowledged_by: randomUUID(),
     });
     const { db, client } = createFakeDb({
       system_config: [systemConfigRow()],
@@ -1909,6 +1928,11 @@ describe("reconciliation alerts — transition candidates", () => {
     const row = findingsOf(db, "payment_stuck_uncertain")[0];
     expect(row.status).toBe("open");
     expect(row.resolved_at).toBeNull();
+    // 3B-5a: reopen starts a clean lifecycle — all attribution cleared
+    expect(row.resolution_note).toBeNull();
+    expect(row.resolved_by).toBeNull();
+    expect(row.acknowledged_at).toBeNull();
+    expect(row.acknowledged_by).toBeNull();
   });
 
   it("open warning finding detected critical escalates using persisted prior severity", async () => {

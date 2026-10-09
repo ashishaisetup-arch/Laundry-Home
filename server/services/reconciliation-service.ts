@@ -1451,10 +1451,18 @@ function applyCorrelation(c7Candidates: FindingCandidate[], keys: Set<string>): 
 //   new candidate, no row            -> insert (status open, occurrence 1)
 //   candidate matches open row       -> occurrence++, refresh severity/summary/details
 //   candidate matches acknowledged   -> occurrence++, keep acknowledged status
+//                                       (+ acknowledged_at/by attribution intact)
 //   candidate matches resolved row   -> REOPEN (status open, occurrence++,
-//                                       resolved_at/note cleared)
+//                                       resolved_at/resolution_note/resolved_by
+//                                       AND acknowledged_at/acknowledged_by all
+//                                       cleared so the new lifecycle starts
+//                                       clean; detection history preserved:
+//                                       first_detected_at untouched,
+//                                       occurrence_count keeps incrementing)
 //   open/ack row without candidate   -> stale resolve (only reachable when the
-//                                       owning check completed untruncated)
+//                                       owning check completed untruncated;
+//                                       resolved_by is NEVER set here — NULL
+//                                       remains the automatic-resolve marker)
 // Failure anywhere throws; the run is then recorded as failed.
 
 const RESOLVE_NOTE = "stale: condition cleared in automated scan";
@@ -1549,6 +1557,9 @@ async function insertOrReopen(
     occurrence_count: ((data as any).occurrence_count ?? 1) + 1,
     resolved_at: null,
     resolution_note: null,
+    resolved_by: null,
+    acknowledged_at: null,
+    acknowledged_by: null,
   }).eq("id", (data as any).id).select("id");
   if (upErr) throw new Error(`finding reopen failed: ${upErr.message}`);
   counts.reopened++;
@@ -1589,6 +1600,10 @@ async function mergeCheck(
     candMap.delete(key);
 
     if (row.status === "resolved") {
+      // Auto-reopen on re-detection: clear ALL operator attribution so the
+      // new lifecycle starts clean (resolved_by + acknowledged_at/by join
+      // resolved_at/resolution_note). first_detected_at is never rewritten;
+      // occurrence_count increments as before.
       const { error } = await client.from("reconciliation_findings").update({
         status: "open",
         severity: cand.severity,
@@ -1598,6 +1613,9 @@ async function mergeCheck(
         occurrence_count: (row.occurrence_count ?? 1) + 1,
         resolved_at: null,
         resolution_note: null,
+        resolved_by: null,
+        acknowledged_at: null,
+        acknowledged_by: null,
       }).eq("id", row.id).select("id");
       if (error) throw new Error(`finding reopen failed: ${error.message}`);
       counts.reopened++;
