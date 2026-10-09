@@ -12,6 +12,7 @@ describe("pageTitle", () => {
     expect(pageTitle("reports")).toBe("Reports & Analytics");
     expect(pageTitle("livemap")).toBe("Live Map");
     expect(pageTitle("ai")).toBe("AI Features");
+    expect(pageTitle("reconciliation")).toBe("Reconciliation");
     expect(pageTitle("profile")).toBe("My Profile");
     expect(pageTitle("settings")).toBe("Settings");
   });
@@ -26,6 +27,7 @@ describe("pageSubtitle", () => {
     expect(pageSubtitle("dashboard")).toMatch(/Centralised/);
     expect(pageSubtitle("vendors")).toMatch(/Onboard/);
     expect(pageSubtitle("orders")).toMatch(/Monitor/);
+    expect(pageSubtitle("reconciliation")).toMatch(/Findings triage/);
   });
 
   it("returns undefined for unknown views", () => {
@@ -37,7 +39,7 @@ describe("NAV_GROUPS", () => {
   it("has the control center group with all items", () => {
     expect(NAV_GROUPS).toHaveLength(1);
     expect(NAV_GROUPS[0].label).toBe("Control Center");
-    expect(NAV_GROUPS[0].items).toHaveLength(9);
+    expect(NAV_GROUPS[0].items).toHaveLength(10);
   });
 
   it("includes all required nav items", () => {
@@ -51,6 +53,7 @@ describe("NAV_GROUPS", () => {
     expect(ids).toContain("reports");
     expect(ids).toContain("livemap");
     expect(ids).toContain("ai");
+    expect(ids).toContain("reconciliation");
   });
 });
 

@@ -5,6 +5,7 @@ import { AppShell } from "@/components/shared/app-shell";
 import { useRouterView } from "@/lib/hooks/use-router-view";
 import { ProfilePage } from "@/components/shared/profile-page";
 import { SettingsPage } from "@/components/shared/settings-page";
+import { ReconciliationPage } from "@/components/shared/reconciliation/reconciliation-page";
 import { toast } from "sonner";
 import { pageTitle, pageSubtitle, NAV_GROUPS } from "./admin-helpers";
 import { AdminDashboard } from "./admin-dashboard";
@@ -52,6 +53,7 @@ export function AdminApp() {
         {view === "reports" && <AdminReports key="r" />}
         {view === "livemap" && <AdminLiveMap key="lm" />}
         {view === "ai" && <AdminAI key="a" />}
+        {view === "reconciliation" && <ReconciliationPage key="recon" />}
         {view === "profile" && <ProfilePage key="profile" />}
         {view === "settings" && <SettingsPage key="settings" />}
       </AnimatePresence>

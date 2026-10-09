@@ -13,6 +13,7 @@ export function pageTitle(view: string) {
     reports: "Reports & Analytics",
     livemap: "Live Map",
     ai: "AI Features",
+    reconciliation: "Reconciliation",
     profile: "My Profile",
     settings: "Settings",
   }[view] || "Dashboard";
@@ -31,6 +32,7 @@ export function pageSubtitle(view: string) {
     reports: "Generate and export business reports",
     livemap: "Real-time tracking of vendors, orders and delivery partners",
     ai: "AI-powered automation and insights",
+    reconciliation: "Findings triage, lifecycle actions, and manual runs",
   }[view];
 }
 
@@ -47,6 +49,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "reports", label: "Reports", icon: "FileText" },
       { id: "livemap", label: "Live Map", icon: "MapPin" },
       { id: "ai", label: "AI Features", icon: "Sparkles", badge: "AI" },
+      { id: "reconciliation", label: "Reconciliation", icon: "ClipboardList" },
     ],
   },
 ];

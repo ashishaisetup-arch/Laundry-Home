@@ -91,6 +91,10 @@ vi.mock("../vendor-onboarding", () => ({
   VendorOnboarding: ({ open }: any) => open ? <div data-testid="vendor-onboarding" /> : null,
 }));
 
+vi.mock("@/components/shared/reconciliation/reconciliation-page", () => ({
+  ReconciliationPage: () => <div data-testid="reconciliation-page" />,
+}));
+
 describe("SuperAdminApp", () => {
   it("renders dashboard view by default", () => {
     render(<SuperAdminApp />);
@@ -118,5 +122,11 @@ describe("SuperAdminApp", () => {
     mockPathname = "/superadmin/areas";
     render(<SuperAdminApp />);
     expect(screen.getByTestId("superadmin-locations")).toBeInTheDocument();
+  });
+
+  it("renders reconciliation view when active", () => {
+    mockPathname = "/superadmin/reconciliation";
+    render(<SuperAdminApp />);
+    expect(screen.getByTestId("reconciliation-page")).toBeInTheDocument();
   });
 });

@@ -78,6 +78,10 @@ vi.mock("../admin-ai", () => ({
   AdminAI: () => <div data-testid="admin-ai" />,
 }));
 
+vi.mock("@/components/shared/reconciliation/reconciliation-page", () => ({
+  ReconciliationPage: () => <div data-testid="reconciliation-page" />,
+}));
+
 describe("AdminApp", () => {
   it("renders dashboard view by default", () => {
     render(<AdminApp />);
@@ -99,5 +103,11 @@ describe("AdminApp", () => {
     mockPathname = "/admin/livemap";
     render(<AdminApp />);
     expect(screen.getByTestId("admin-livemap")).toBeInTheDocument();
+  });
+
+  it("renders reconciliation view when active", () => {
+    mockPathname = "/admin/reconciliation";
+    render(<AdminApp />);
+    expect(screen.getByTestId("reconciliation-page")).toBeInTheDocument();
   });
 });

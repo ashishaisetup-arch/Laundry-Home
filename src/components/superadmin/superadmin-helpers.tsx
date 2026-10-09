@@ -15,6 +15,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "catalog", label: "Service Catalog", icon: "Package" },
       { id: "integrations", label: "API & Webhooks", icon: "Plug" },
       { id: "system", label: "System Config", icon: "Settings" },
+      { id: "reconciliation", label: "Reconciliation", icon: "ClipboardList" },
     ],
   },
 ];
@@ -31,6 +32,7 @@ export function pageTitle(view: string) {
     catalog: "Service Catalog",
     integrations: "API & Webhooks",
     system: "System Configuration",
+    reconciliation: "Reconciliation",
     profile: "My Profile",
     settings: "Settings",
   }[view] || "Super Admin";
@@ -50,6 +52,7 @@ export function pageSubtitle(view: string) {
     catalog: "Manage service categories, services and item pricing",
     integrations: "API keys, third-party integrations and webhooks",
     system: "Global platform settings and configuration",
+    reconciliation: "Findings triage, lifecycle actions, and manual runs",
   }[view];
 }
 

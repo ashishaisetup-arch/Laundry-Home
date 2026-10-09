@@ -9,6 +9,7 @@ import { useUsers, useVendors } from "@/lib/hooks";
 import { useRouterView } from "@/lib/hooks/use-router-view";
 import { ProfilePage } from "@/components/shared/profile-page";
 import { SettingsPage } from "@/components/shared/settings-page";
+import { ReconciliationPage } from "@/components/shared/reconciliation/reconciliation-page";
 import { NAV_GROUPS, pageTitle, pageSubtitle } from "./superadmin-helpers";
 import { SuperAdminOverview } from "./superadmin-overview";
 import { SuperAdminVendors } from "./superadmin-vendors";
@@ -67,6 +68,7 @@ export function SuperAdminApp() {
         {view === "catalog" && <ServiceCatalogManager key="catalog" />}
         {view === "integrations" && <Integrations key="integrations" />}
         {view === "system" && <SystemConfig key="system" />}
+        {view === "reconciliation" && <ReconciliationPage key="recon" />}
         {view === "profile" && <ProfilePage key="profile" />}
         {view === "settings" && <SettingsPage key="settings" />}
       </AnimatePresence>

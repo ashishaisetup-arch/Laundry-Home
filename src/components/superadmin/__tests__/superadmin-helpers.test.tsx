@@ -14,6 +14,7 @@ describe("pageTitle", () => {
     expect(pageTitle("catalog")).toBe("Service Catalog");
     expect(pageTitle("integrations")).toBe("API & Webhooks");
     expect(pageTitle("system")).toBe("System Configuration");
+    expect(pageTitle("reconciliation")).toBe("Reconciliation");
     expect(pageTitle("profile")).toBe("My Profile");
     expect(pageTitle("settings")).toBe("Settings");
   });
@@ -28,6 +29,7 @@ describe("pageSubtitle", () => {
     expect(pageSubtitle("dashboard")).toMatch(/Super Admin/);
     expect(pageSubtitle("vendors")).toMatch(/KYC/);
     expect(pageSubtitle("users")).toMatch(/staff/);
+    expect(pageSubtitle("reconciliation")).toMatch(/Findings triage/);
   });
 
   it("returns undefined for unknown views", () => {
@@ -39,7 +41,7 @@ describe("NAV_GROUPS", () => {
   it("has the super admin group with all items", () => {
     expect(NAV_GROUPS).toHaveLength(1);
     expect(NAV_GROUPS[0].label).toBe("Super Admin");
-    expect(NAV_GROUPS[0].items).toHaveLength(11);
+    expect(NAV_GROUPS[0].items).toHaveLength(12);
   });
 
   it("includes all required nav items", () => {
@@ -55,6 +57,7 @@ describe("NAV_GROUPS", () => {
     expect(ids).toContain("catalog");
     expect(ids).toContain("integrations");
     expect(ids).toContain("system");
+    expect(ids).toContain("reconciliation");
   });
 });
 

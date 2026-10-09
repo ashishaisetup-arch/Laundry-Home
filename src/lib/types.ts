@@ -317,3 +317,91 @@ export interface VendorServicePrice {
   service?: { name: string; unit: string };
   item?: { itemName: string; unit: string };
 }
+
+// ---------------------------------------------------------------------------
+// Reconciliation operations (Phases 3B-4 / 3B-5a / 3B-5b)
+// ---------------------------------------------------------------------------
+
+export type ReconciliationFindingStatus = "open" | "acknowledged" | "resolved";
+export type ReconciliationSeverity = "info" | "warning" | "critical";
+export type ReconciliationSubjectType =
+  | "payment"
+  | "refund"
+  | "order"
+  | "webhook_event"
+  | "wallet_user";
+
+export interface ReconciliationFinding {
+  id: string;
+  checkCode: string;
+  severity: ReconciliationSeverity;
+  subjectType: ReconciliationSubjectType;
+  subjectId: string;
+  summary: string;
+  details: Record<string, unknown>;
+  status: ReconciliationFindingStatus;
+  firstDetectedAt: string;
+  lastDetectedAt: string;
+  occurrenceCount: number;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+  acknowledgedAt: string | null;
+  acknowledgedBy: string | null;
+  resolvedBy: string | null;
+  createdAt: string;
+}
+
+export interface ReconciliationFindingCounts {
+  byStatus: { open: number; acknowledged: number; resolved: number };
+  bySeverity: { info: number; warning: number; critical: number };
+}
+
+export interface ReconciliationFindingsResponse {
+  items: ReconciliationFinding[];
+  total: number | null;
+  counts: ReconciliationFindingCounts | null;
+}
+
+export interface ReconciliationRun {
+  id: string;
+  trigger: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  failedChecks: string[];
+  truncatedChecks: string[];
+  findingsOpen: number;
+  findingsNew: number;
+  findingsResolved: number;
+  error: string | null;
+}
+
+export interface ReconciliationRunsResponse {
+  items: ReconciliationRun[];
+}
+
+export interface ReconciliationAlertStats {
+  candidates?: number;
+  recipients?: number;
+  inAppSent?: number;
+  inAppFailed?: number;
+  webhook?: number;
+  webhookFailed?: number;
+  skippedDuplicates?: number;
+  dispatchErrors?: number;
+}
+
+export interface ReconciliationManualRunResponse {
+  runId: string | null;
+  status: "success" | "failed";
+  trigger: string;
+  checkResults: Record<string, unknown>;
+  findingsOpen: number;
+  findingsNew: number;
+  findingsResolved: number;
+  findingsReopened: number;
+  failedChecks: string[];
+  truncatedChecks: string[];
+  error?: string;
+  alerts: ReconciliationAlertStats;
+}
